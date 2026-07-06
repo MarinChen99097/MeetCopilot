@@ -1,0 +1,22 @@
+# deps
+node_modules/
+# builds
+dist/
+.next/
+out/
+build/
+# env & secrets
+.env
+.env.*
+!.env.example
+# db (local SQLite)
+*.db
+*.db-journal
+*.sqlite
+# logs / os
+*.log
+.DS_Store
+Thumbs.db
+# scratch
+/tmp/
+*.tmp
