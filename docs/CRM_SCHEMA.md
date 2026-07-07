@@ -36,7 +36,9 @@ orgs ─┬─ users ─ memberships
       ├─ companies (對方公司, 可爬) ─┬─ company_locations
       │      │                        ├─ company_news
       │      │                        ├─ company_funding_rounds
-      │      │                        └─ company_tech
+      │      │                        ├─ company_tech
+      │      │                        ├─ company_products ─ company_product_people
+      │      │                        └─ company_departments
       │      │
       │      ├─ contacts (主管, 可爬) ── (self-ref reports_to)
       │      │
@@ -197,11 +199,115 @@ CREATE INDEX IF NOT EXISTS idx_companies_org_owner  ON companies(org_id, owner_u
 - **`company_funding_rounds`** — C：`id, org_id, company_id, round_type, amount, currency, announced_at, lead_investor, investors_json, source_url`。
 - **`company_tech`** — C（BuiltWith/Wappalyzer 風）：`id, org_id, company_id, category, vendor, product, detected_from, confidence REAL, first_seen_at, last_seen_at`。撐起「他們已用 X → 整合/替換切角」。
 
+### 對方產品深檔（`company_products` ＋ 關聯）
+
+對方公司「賣什麼、由誰做、怎麼組織」的深檔。爬蟲從**官網 + docs + release notes** 先填大半（產品名、功能、規格、定價頁、整合、公開路線圖/公告），人再驗證/細填；**產品↔人**與**部門**的關聯多為公開資訊拼湊（team page / 公開演講 / 新聞），**信心低、需人驗**。這撐起副駕「聊到他們某產品時浮出規格/定價/負責人」與研究引擎的對方組織圖。
+
+#### `company_products` — 對方的產品（crawler-heavy）
+
+```sql
+CREATE TABLE IF NOT EXISTS company_products (
+  id                 TEXT PRIMARY KEY,
+  org_id             TEXT NOT NULL,                    -- S   FK orgs
+  company_id         TEXT NOT NULL,                    -- C+H FK companies
+  -- ── 身分/分類 (C, 官網爬) ──
+  name               TEXT NOT NULL,                    -- C+H 產品名
+  category           TEXT,                             -- C+H 類別/產品線
+  one_liner          TEXT,                             -- C   一句話定位
+  description        TEXT,                             -- C+H 長描述(官網/docs 匯總)
+  status             TEXT,                             -- C+H active/beta/deprecated/rumored
+  launched_year      INTEGER,                          -- C   推出年
+  product_url        TEXT,                             -- C   產品頁
+  docs_url           TEXT,                             -- C   文件/開發者站
+  -- ── 定價 (C, 定價頁) ──
+  pricing_model      TEXT,                             -- C+H seat/usage/flat/tiered/quote
+  price_from         REAL,                             -- C   最低起價(揭露才有)
+  currency           TEXT,                             -- C
+  pricing_notes      TEXT,                             -- C+H 方案/級距/隱藏條件
+  -- ── 產品細節 (C, crawler-heavy) ──
+  key_features_json  TEXT,                             -- C   [{name,detail}]
+  specs_json         TEXT,                             -- C   規格 key-value 細節
+  tech_stack_json    TEXT,                             -- C   實作技術(公開/推斷)
+  integrations_json  TEXT,                             -- C   可整合的第三方
+  target_market      TEXT,                             -- C+H 目標市場(SMB/enterprise/垂直)
+  target_personas_json TEXT,                           -- C+H 目標使用者角色
+  differentiators_json TEXT,                           -- C+H 賣點/差異化
+  competitors_json   TEXT,                             -- C   對打的競品
+  known_issues_json  TEXT,                             -- H (弱C) 公開抱怨/評測缺點
+  roadmap_json       TEXT,                             -- C   公開路線圖/公告
+  media_urls_json    TEXT,                             -- C   截圖/影片
+  notes              TEXT,                             -- H   rep 自由補充
+  -- ── 爬蟲簿記 (S) + 驗證 (H) ──
+  source             TEXT,                             -- C+H crawler/import/manual
+  crawl_confidence   REAL,                             -- S   粗略 rollup 0-1
+  last_crawled_at    INTEGER,                          -- S
+  verified_status    TEXT DEFAULT 'none',              -- H   none/partial/verified
+  verified_by        TEXT,                             -- H   FK users
+  verified_at        INTEGER,                          -- H
+  raw_crawl_json     TEXT,                             -- S   最近一次原始爬蟲 payload(可重處理)
+  custom_fields_json TEXT,                             -- H   租戶自訂
+  created_at         INTEGER NOT NULL,                 -- S
+  updated_at         INTEGER NOT NULL,                 -- S
+  CHECK (status IN ('active','beta','deprecated','rumored') OR status IS NULL),
+  CHECK (verified_status IN ('none','partial','verified'))
+);
+CREATE INDEX IF NOT EXISTS idx_company_products_org         ON company_products(org_id);
+CREATE INDEX IF NOT EXISTS idx_company_products_org_company ON company_products(org_id, company_id);
+```
+
+#### `company_product_people` — 產品 ↔ 人（開發人 / PM / 負責人）
+
+爬蟲從**團隊頁 / 公開演講 / 新聞**弱填（關聯多為推測），人驗證。一個人（`contacts` 一筆）可掛多個產品、多種角色；`is_current=0` 保留離任者的歷史關聯。
+
+```sql
+CREATE TABLE IF NOT EXISTS company_product_people (
+  id               TEXT PRIMARY KEY,
+  org_id           TEXT NOT NULL,                      -- S   FK orgs
+  company_id       TEXT NOT NULL,                      -- C+H FK companies
+  product_id       TEXT NOT NULL,                      -- C+H FK company_products
+  contact_id       TEXT NOT NULL,                      -- C+H FK contacts (該人的檔)
+  role             TEXT NOT NULL,                      -- C(弱)+H 見 CHECK
+  title_on_product TEXT,                               -- C   在此產品上的頭銜(e.g. "Lead PM")
+  is_current       INTEGER DEFAULT 1,                  -- C+H 0/1 是否現任
+  source           TEXT,                               -- C+H team_page/talk/news/manual
+  confidence       REAL,                               -- S   0-1 (關聯多為推測)
+  notes            TEXT,                               -- H
+  created_at       INTEGER NOT NULL,                   -- S
+  CHECK (role IN ('developer','engineer','pm','product_owner','designer','architect','sales','support','exec_sponsor','other'))
+);
+CREATE INDEX IF NOT EXISTS idx_product_people_org_product ON company_product_people(org_id, product_id);
+CREATE INDEX IF NOT EXISTS idx_product_people_org_contact ON company_product_people(org_id, contact_id);
+```
+
+#### `company_departments` — 部門 / 組織結構
+
+爬蟲從團隊頁/新聞/LinkedIn 弱填部門與主管，人驗證；`parent_department_id` 自參照撐起組織樹。
+
+```sql
+CREATE TABLE IF NOT EXISTS company_departments (
+  id                   TEXT PRIMARY KEY,
+  org_id               TEXT NOT NULL,                  -- S   FK orgs
+  company_id           TEXT NOT NULL,                  -- C+H FK companies
+  name                 TEXT NOT NULL,                  -- C+H 部門名(e.g. "Platform Engineering")
+  parent_department_id TEXT,                           -- C+H self-ref FK (nullable, 組織樹)
+  head_contact_id      TEXT,                           -- C+H FK contacts (部門主管, nullable)
+  headcount_estimate   INTEGER,                        -- C   估計人數
+  focus                TEXT,                           -- C+H 該部門負責什麼
+  notes                TEXT,                           -- H
+  source               TEXT,                           -- C+H crawler/import/manual
+  confidence           REAL,                           -- S   0-1
+  created_at           INTEGER NOT NULL,               -- S
+  updated_at           INTEGER NOT NULL                -- S
+);
+CREATE INDEX IF NOT EXISTS idx_company_departments_org_company ON company_departments(org_id, company_id);
+```
+
 ---
 
 ## 5. 對方側 — `contacts`（主管；可爬身分 ＋ 人填 persona）
 
 副駕與模擬訓練最豐富的輸入。概念上分**公開/專業（可爬）** 與 **persona/關係（人填＋會議衍生）**。
+人與產品的關聯走 `company_product_people` join（見 §4 產品深檔），不在本表建欄；人與部門用 `contacts.department` 文字欄＋`company_departments` 對照（`head_contact_id`/`parent_department_id` 撐組織圖）。
 
 ```sql
 CREATE TABLE IF NOT EXISTS contacts (
@@ -365,6 +471,7 @@ CREATE INDEX IF NOT EXISTS idx_provenance_field ON field_provenance(org_id, enti
 | Card / chunk | 由什麼組成 | 何時重生 |
 |---|---|---|
 | **company_card** | companies 核心 + 匯總 news/tech/funding | company 或其子表變動 |
+| **company_product_card** | company_products 一筆 + 其 people links（company_product_people） | product 或其 people links 變動 |
 | **contact_card** | contacts 身分 + persona（已驗欄位加權） | contact 變動 |
 | **deal_card** | deal + committee + criteria | deal 變動 |
 | **product_card** | products（自家） | product 變動 |
@@ -381,7 +488,7 @@ CREATE INDEX IF NOT EXISTS idx_provenance_field ON field_provenance(org_id, enti
 CREATE TABLE IF NOT EXISTS embeddings (
   id           TEXT PRIMARY KEY,
   org_id       TEXT NOT NULL,                          -- S (scope filter 強制)
-  entity_type  TEXT NOT NULL,                          -- S company_card/contact_card/deal_card/product_card/company_news/meeting_summary/transcript_chunk/note
+  entity_type  TEXT NOT NULL,                          -- S company_card/company_product_card/contact_card/deal_card/product_card/company_news/meeting_summary/transcript_chunk/note
   entity_id    TEXT NOT NULL,                          -- S 來源 row id
   chunk_index  INTEGER NOT NULL DEFAULT 0,             -- S
   content      TEXT NOT NULL,                          -- S 嵌入的確切文字
@@ -399,7 +506,7 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_scope ON embeddings(org_id, entity_typ
 ### **會中副駕**怎麼查
 1. 會中上下文 = 本場 `company_id`、其 `contact_ids`(出席者)、`deal_id`，加上滾動 ASR 訊號（興趣話題/異議/對手提及）。
 2. 由當前訊號組 query string → `embedText(query)`。
-3. JS 暴力 cosine，過濾到 **`org_id` 且白名單**：`entity_id IN (本公司 card + 其 contacts cards + 其 news + 本 deal card) UNION (本 org 所有 product_card + competitor cards)`。租戶＋實體白名單就是讓它「只講對方公司」而非整個 CRM 的關鍵。
+3. JS 暴力 cosine，過濾到 **`org_id` 且白名單**：`entity_id IN (本公司 card + 其 contacts cards + 其 product cards + 其 news + 本 deal card) UNION (本 org 所有 product_card + competitor cards)`。租戶＋實體白名單就是讓它「只講對方公司」而非整個 CRM 的關鍵。
 4. Top-k chunks → LLM 組出浮到 HUD 的卡（遵守信任規則 + I3：只在 HUD、絕不上被分享畫面）。
 
 ### **模擬訓練**怎麼查
@@ -477,6 +584,7 @@ export interface CompanyRepository {
 **能，從公司網站 + 公開搜尋（LinkedIn/Crunchbase/新聞/徵才板）：**
 - *公司*：名稱、法定名、網域、描述、tagline、產業（推斷）、HQ+據點、成立年、logo、社群連結、員工**級距**（僅揭露才有精確值）、產品/服務、官網客戶 logo、認證、獎項、新聞提及+日期、部落格關鍵字、**技術棧**（站台 headers/scripts）、**在徵職缺**（careers → 意向訊號）、募資輪+投資人（公開/新聞）、所有權類型、股票代號。
 - *主管*：姓名、現職稱、部門/資歷（由職稱推斷）、LinkedIn URL、公開 bio、前公司、學歷、技能、公開演講/引述/文章、Twitter/GitHub、城市/時區、任期起、**email 格式猜測**（`first.last@domain` — 未驗證）。
+- *產品*（`company_products`）：產品名、描述、功能清單、規格、定價頁、文件、整合、公開路線圖/公告（官網＋docs＋release notes）；**產品負責人**（團隊頁/LinkedIn 公開資訊/技術部落格署名/研討會講者 → `company_product_people`，**低信心**）。
 
 **不能可靠（故預設 human / 會議衍生、低或無信心）：**
 - **已驗證**的直接 email / 手機（可猜、不可確認 → `email_verified=0`）。
@@ -484,6 +592,7 @@ export interface CompanyRepository {
 - **communication_style / personality / hot_buttons / known_priorities / pain_points / objections**——副駕**最高價值**的 persona 欄位。只能由公開寫作弱推斷，壓倒性地**會後人填**或從逐字稿萃取（`meeting_signals` → 批准回寫）。
 - 內部事實：現有供應商合約 + **續約日**、真實預算、組織圖內情、私有策略。
 - **私有**公司的即時營收（只有估計 + 級距）。
+- **產品內情**：內部 roadmap、未公開定價、實際團隊編制/組織；**產品↔人的關聯**多為推測（team page 常對不上實際負責人）→ 需人驗（`company_product_people.confidence` 低、`is_current` 待確認）。
 
 **設計後果（為何整個 schema 長這樣）**：爬蟲**便宜**能填的（firmographics）是**最沒差異化**的情報；真正贏單的欄位（persona、優先事項、異議、決策權）恰恰是爬蟲**不可信**的。這正是為何每個值都帶 `field_provenance`、副駕把 `filled_by='human' | verified=1` 權重壓過爬蟲信心、UI 的全部工作就是靠**確認/細填**把便宜的爬蟲猜測變成已驗真相。
 
@@ -501,7 +610,7 @@ runner 邏輯：啟動時掃 `/migrations/NNN_*.sql` → 比對已套用的 vers
 
 ## 12. 實作順序（給實作這份的弱模型）
 
-1. Migration runner + `schema_migrations`；§2 租戶 DDL（沿用 v1）→ **§3 賣方側（`seller_companies`、`products`、`competitors`）** → `companies`、`contacts`（§4–5）→ 其子表。（§3 必須先做：`deal_products.product_id` 與 `product_card` embedding 都依賴它，漏掉會卡步驟 4/5）
+1. Migration runner + `schema_migrations`；§2 租戶 DDL（沿用 v1）→ **§3 賣方側（`seller_companies`、`products`、`competitors`）** → `companies`、`contacts`（§4–5）→ 其子表 → **`company_products`＋關聯表（`company_product_people`、`company_departments`）**。（§3 必須先做：`deal_products.product_id` 與 `product_card` embedding 都依賴它，漏掉會卡步驟 4/5）
 2. `field_provenance` + `DbPort` + base repository（org-scoping + row/domain 映射 + `tx`）。
 3. `CompanyRepository`/`ContactRepository` 含 `upsertFromCrawl`（一個 tx 寫值+provenance）與 `findByDomain` dedupe。
 4. Deals/meetings/signals/notes/activities（§6–8）。

@@ -1,0 +1,792 @@
+<title>MeetCopilot 音訊擷取相容性測試工具</title>
+<style>
+  :root{
+    --bg:#0e1320; --card:#161d2e; --card2:#1c2439; --border:#2a3450;
+    --text:#e7ecf6; --muted:#94a2c1; --accent:#4c8dff; --accent2:#3a6fd8;
+    --pass:#25c26e; --fail:#ff5757; --pending:#5b6788; --warn:#ffb020;
+    --mono:ui-monospace,"Cascadia Code","Consolas","Menlo",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI","Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;
+    line-height:1.6; font-size:15px;
+  }
+  .wrap{max-width:960px; margin:0 auto; padding:20px 16px 60px}
+  header h1{font-size:22px; margin:0 0 4px}
+  header p.sub{color:var(--muted); margin:0 0 18px; font-size:14px}
+  .card{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:18px 18px 16px; margin:0 0 18px;
+  }
+  .card h2{font-size:17px; margin:0 0 10px; display:flex; align-items:center; gap:8px}
+  .card h3{font-size:14px; margin:14px 0 6px; color:var(--muted)}
+  .tag-num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:26px; height:26px; border-radius:7px; background:var(--accent);
+    color:#fff; font-size:14px; font-weight:700;
+  }
+  p{margin:6px 0}
+  ol,ul{margin:6px 0 6px; padding-left:22px}
+  li{margin:3px 0}
+  .muted{color:var(--muted)}
+  .small{font-size:13px}
+  .mono{font-family:var(--mono)}
+  code,kbd{background:var(--card2); border:1px solid var(--border); border-radius:5px; padding:1px 6px; font-family:var(--mono); font-size:12.5px}
+  button{
+    background:var(--accent); color:#fff; border:0; border-radius:9px;
+    padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer;
+    margin:4px 6px 4px 0;
+  }
+  button:hover{background:var(--accent2)}
+  button.sec{background:var(--card2); color:var(--text); border:1px solid var(--border)}
+  button.sec:hover{background:#26304a}
+  button:disabled{opacity:.45; cursor:not-allowed}
+  select,input[type=text],textarea{
+    background:var(--card2); color:var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:8px 10px; font-size:14px; font-family:inherit;
+  }
+  input[type=text]{width:100%}
+  label{display:block; font-size:13px; color:var(--muted); margin:8px 0 3px}
+  .row{display:flex; flex-wrap:wrap; gap:12px}
+  .row > div{flex:1 1 260px; min-width:220px}
+  .chip{
+    display:inline-block; min-width:56px; text-align:center;
+    padding:4px 12px; border-radius:999px; font-size:13px; font-weight:700;
+    color:#fff; letter-spacing:.5px;
+  }
+  .chip.pass{background:var(--pass)}
+  .chip.fail{background:var(--fail)}
+  .chip.pending{background:var(--pending)}
+  .status{
+    margin:8px 0 4px; padding:8px 12px; border-radius:8px;
+    background:var(--card2); border:1px solid var(--border); font-size:13.5px;
+    min-height:20px;
+  }
+  canvas.meter{
+    width:100%; height:44px; display:block; border-radius:8px;
+    border:1px solid var(--border); background:#0b1020; margin-top:8px;
+  }
+  .readout{font-family:var(--mono); font-size:13px; color:var(--muted); margin-top:4px}
+  audio{width:100%; margin-top:10px; display:block}
+  .warn-box{
+    display:none; margin:10px 0; padding:12px 14px; border-radius:10px;
+    background:#3a1414; border:1px solid var(--fail); color:#ffd9d9;
+  }
+  .warn-box b{color:#ff8a8a}
+  .note{
+    background:#122; border-left:4px solid var(--accent); padding:8px 12px;
+    border-radius:6px; font-size:13px; margin:10px 0; color:#bcd;
+  }
+  .file-note{display:none; background:#2a220e; border-left-color:var(--warn); color:#ffe1a8}
+  table{width:100%; border-collapse:collapse; margin-top:6px; font-size:14px}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{color:var(--muted); font-weight:600; font-size:13px}
+  td.mono{font-family:var(--mono); font-size:12.5px; color:var(--muted); word-break:break-all}
+  .kv{font-family:var(--mono); font-size:12.5px}
+  .kv b{color:var(--text); font-weight:600}
+  pre#log{
+    background:#080c16; border:1px solid var(--border); border-radius:10px;
+    padding:12px; font-family:var(--mono); font-size:12.5px; color:#c7d2ea;
+    max-height:280px; overflow:auto; white-space:pre-wrap; word-break:break-word; margin:0;
+  }
+  .env-grid{display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:13.5px; margin-top:6px}
+  .env-grid .k{color:var(--muted)}
+  .env-grid .v{font-family:var(--mono); word-break:break-all}
+  hr{border:0; border-top:1px solid var(--border); margin:14px 0}
+  .flex-between{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap}
+  textarea#copy-fallback{width:100%; height:120px; display:none; margin-top:10px; font-family:var(--mono); font-size:12px}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>MeetCopilot 音訊擷取相容性測試工具</h1>
+    <p class="sub">測試「監聽帳號」瀏覽器分頁能否擷取會議分頁音訊（getDisplayMedia）＋ 麥克風路徑 ＋ 環境能力。此頁不上傳任何資料，全部在本機執行。</p>
+  </header>
+
+  <!-- 說明卡 -->
+  <section class="card">
+    <h2><span class="tag-num">i</span> 使用說明：雙帳號測試步驟</h2>
+    <p class="small muted">MeetCopilot v2 用兩個帳號：一個「監聽」瀏覽器 profile 加入會議、我們的網頁擷取「會議分頁」的音訊。此工具就是拿來驗證這條擷取路徑在你的裝置 × 開會軟體上能不能成功。</p>
+    <ol>
+      <li>在<strong>同一個瀏覽器 profile</strong>裡，開兩個分頁：一個是「會議分頁」（Google Meet／Zoom 網頁版／Teams 網頁版），另一個是<strong>本測試頁</strong>。</li>
+      <li>會議接通後，回到本頁按下方<strong>「測試 A — 開始擷取測試」</strong>。</li>
+      <li>在瀏覽器彈出的來源選擇器中選<strong>「Chrome／Edge 分頁」</strong>，挑那個會議分頁，並務必勾選左下角<strong>「同時分享分頁音訊 / Share tab audio」</strong>核取方塊。</li>
+      <li>想測備援：改選<strong>「視窗」</strong>surface，看該作業系統是否提供視窗音訊（Windows 較常有、macOS 常常沒有）。</li>
+      <li><strong>提醒：一定要讓會議裡有人講話、或在會議分頁播一段有聲音的影片</strong>，否則音量表會是靜音、也聽不出錄音內容。</li>
+    </ol>
+    <div class="note file-note" id="file-note">
+      偵測到你用 <code>file://</code> 直接開啟。若 getDisplayMedia 被瀏覽器封鎖（按鈕沒反應或報 NotAllowedError），請改用靜態伺服器：在 <code>tools/</code> 上層資料夾執行 <code>npx serve MeetCopilot_v2/tools</code>（或任何靜態伺服器），再用 <code>http://localhost:...</code> 開啟本頁。
+    </div>
+    <div class="note">分頁音訊擷取是 <b>Chromium 桌面版（Chrome／Edge）限定</b>。Firefox／Safari／行動瀏覽器預期取不到分頁音訊——這正是本工具要幫你逐機型確認的事。</div>
+  </section>
+
+  <!-- 測試 A -->
+  <section class="card">
+    <h2><span class="tag-num">A</span> 畫面／分頁音訊擷取</h2>
+    <p class="small muted">呼叫 getDisplayMedia（video+audio，關閉 echoCancellation／noiseSuppression／autoGainControl）。取得後立即停用視訊軌、只保留音訊，量測音量並錄 10 秒供你回聽。</p>
+    <div>
+      <button id="btn-a-start">開始擷取測試</button>
+      <button id="btn-a-stop" class="sec">停止測試</button>
+      <button id="btn-a-play" class="sec" disabled>▶ 回放這段擷取音訊</button>
+    </div>
+    <div class="status" id="a-status">未開始。</div>
+
+    <div class="warn-box" id="a-zerowarn">
+      <b>⚠ 沒有取得任何音訊軌（0 audio tracks）。</b><br>
+      最可能原因：來源選擇器裡<strong>沒有勾「同時分享分頁音訊」</strong>，或你選了不含音訊的來源（多數作業系統的「整個螢幕／視窗」不含音訊）。<br>
+      請按「停止測試」→ 重新「開始擷取測試」→ 選<strong>分頁</strong>並<strong>勾選分享分頁音訊</strong>後再試。
+    </div>
+
+    <div class="env-grid">
+      <span class="k">displaySurface</span><span class="v" id="a-surface">-</span>
+      <span class="k">音訊軌數量</span><span class="v" id="a-audiocount">-</span>
+      <span class="k">音訊軌設定</span><span class="v" id="a-audioset">-</span>
+    </div>
+
+    <h3>即時音量表（需要有聲音才會動）</h3>
+    <canvas class="meter" id="a-meter" width="900" height="44"></canvas>
+    <div class="readout" id="a-readout">RMS - dB · Peak - dB</div>
+
+    <audio id="a-audio" controls></audio>
+  </section>
+
+  <!-- 測試 B -->
+  <section class="card">
+    <h2><span class="tag-num">B</span> 麥克風</h2>
+    <p class="small muted">驗證報告者麥克風路徑與裝置選擇（getUserMedia + enumerateDevices）。同款音量表，錄 5 秒供回聽。</p>
+    <label for="b-device">麥克風裝置（授權後才會顯示名稱）</label>
+    <select id="b-device"><option value="">（系統預設麥克風）</option></select>
+    <div style="margin-top:10px">
+      <button id="btn-b-start">開始麥克風測試</button>
+      <button id="btn-b-stop" class="sec">停止測試</button>
+      <button id="btn-b-play" class="sec" disabled>▶ 回放這段麥克風錄音</button>
+    </div>
+    <div class="status" id="b-status">未開始。</div>
+    <div class="env-grid">
+      <span class="k">音訊軌設定</span><span class="v" id="b-audioset">-</span>
+    </div>
+    <h3>即時音量表（請對麥克風說話）</h3>
+    <canvas class="meter" id="b-meter" width="900" height="44"></canvas>
+    <div class="readout" id="b-readout">RMS - dB · Peak - dB</div>
+    <audio id="b-audio" controls></audio>
+  </section>
+
+  <!-- 測試 C -->
+  <section class="card">
+    <h2><span class="tag-num">C</span> 環境檢查（開頁自動執行）</h2>
+    <div class="env-grid">
+      <span class="k">userAgent</span><span class="v" id="env-ua">-</span>
+      <span class="k">瀏覽器 / OS 推測</span><span class="v" id="env-guess">-</span>
+      <span class="k">isSecureContext</span><span class="v" id="env-secure">-</span>
+      <span class="k">AudioWorklet</span><span class="v" id="env-worklet">-</span>
+      <span class="k">AudioContext@16kHz</span><span class="v" id="env-ctx">-</span>
+      <span class="k">MediaRecorder mimeType</span><span class="v" id="env-recorder">-</span>
+    </div>
+  </section>
+
+  <!-- 結果摘要 -->
+  <section class="card">
+    <h2><span class="tag-num">✓</span> 結果摘要</h2>
+    <div class="row">
+      <div>
+        <label for="in-device">裝置名稱（自行填寫）</label>
+        <input type="text" id="in-device" placeholder="例：MacBook Air M2 / Dell XPS 13 (Win11)">
+      </div>
+      <div>
+        <label for="in-soft">開會軟體 + 情境</label>
+        <input type="text" id="in-soft" placeholder="例：Meet 網頁版-對方講話中 / Zoom 網頁版-播放共享影片">
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>檢查項目</th><th style="width:90px">結果</th><th>細節</th></tr></thead>
+      <tbody id="summary-tbody"></tbody>
+    </table>
+    <div class="flex-between" style="margin-top:12px">
+      <button id="btn-copy">複製結果（文字 + JSON）</button>
+      <span class="small muted" id="copy-status"></span>
+    </div>
+    <textarea id="copy-fallback" readonly></textarea>
+  </section>
+
+  <!-- 事件日誌 -->
+  <section class="card">
+    <h2><span class="tag-num">≡</span> 事件日誌</h2>
+    <pre id="log"></pre>
+  </section>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ---------- 小工具 ----------
+  function $(id){ return document.getElementById(id); }
+  function clamp01(x){ return x < 0 ? 0 : x > 1 ? 1 : x; }
+  function log10(x){ return Math.log(x) / Math.LN10; }
+  function fmtDb(db){ return isFinite(db) ? db.toFixed(1) : '-∞'; }
+  function esc(s){
+    s = String(s == null ? '' : s);
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function nowStr(){
+    var d = new Date();
+    var hh = String(d.getHours()).padStart(2,'0');
+    var mm = String(d.getMinutes()).padStart(2,'0');
+    var ss = String(d.getSeconds()).padStart(2,'0');
+    return hh + ':' + mm + ':' + ss + '.' + String(d.getMilliseconds()).padStart(3,'0');
+  }
+
+  var logBox = null;
+  function logEvent(msg, tag){
+    if(!logBox){ return; }
+    var line = '[' + nowStr() + ']' + (tag ? ' (' + tag + ')' : '') + ' ' + msg;
+    logBox.textContent += (logBox.textContent ? '\n' : '') + line;
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  // ---------- 結果收集 ----------
+  var CHECKS = [
+    { key:'env.secure',   label:'環境：安全內容 isSecureContext' },
+    { key:'env.worklet',  label:'環境：AudioWorklet 可用' },
+    { key:'env.ctx16k',   label:'環境：AudioContext @16kHz' },
+    { key:'env.recorder', label:'環境：MediaRecorder 有支援格式' },
+    { key:'A.stream',     label:'測試A：取得畫面/分頁串流' },
+    { key:'A.audio',      label:'測試A：含分頁音訊音軌' },
+    { key:'A.record',     label:'測試A：錄音可回放' },
+    { key:'B.stream',     label:'測試B：取得麥克風串流' },
+    { key:'B.record',     label:'測試B：錄音可回放' }
+  ];
+  var resultState = {};
+  var resultDetail = {};
+  var capture = {};
+
+  function setResult(key, state, detail){
+    resultState[key] = state;
+    if(detail != null){ resultDetail[key] = detail; }
+    renderSummary();
+  }
+  function renderSummary(){
+    var tb = $('summary-tbody');
+    if(!tb){ return; }
+    var html = '';
+    for(var i = 0; i < CHECKS.length; i++){
+      var c = CHECKS[i];
+      var st = resultState[c.key] || 'pending';
+      var text = st === 'pass' ? 'PASS' : st === 'fail' ? 'FAIL' : '未測';
+      var cls = st === 'pass' ? 'pass' : st === 'fail' ? 'fail' : 'pending';
+      html += '<tr><td>' + esc(c.label) + '</td>' +
+              '<td><span class="chip ' + cls + '">' + text + '</span></td>' +
+              '<td class="mono">' + esc(resultDetail[c.key] || '') + '</td></tr>';
+    }
+    tb.innerHTML = html;
+  }
+
+  function setStatus(which, msg){
+    var e = $(which + '-status');
+    if(e){ e.textContent = msg; }
+  }
+  function renderAudioSettings(which, s){
+    var e = $(which + '-audioset');
+    if(!e){ return; }
+    function g(v){ return v != null ? v : '?'; }
+    e.textContent = 'sampleRate=' + g(s.sampleRate) +
+      ' · channelCount=' + g(s.channelCount) +
+      ' · echoCancellation=' + g(s.echoCancellation) +
+      ' · noiseSuppression=' + g(s.noiseSuppression) +
+      ' · autoGainControl=' + g(s.autoGainControl);
+  }
+
+  // ---------- 音量表 ----------
+  function createMeter(canvas, readout){
+    var ctx = canvas.getContext('2d');
+    var audioCtx = null, analyser = null, src = null;
+    var raf = 0, buf = null, running = false, peakHold = 0;
+
+    function start(stream){
+      stop();
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC){ logEvent('此瀏覽器無 AudioContext，音量表停用', 'meter'); return; }
+      audioCtx = new AC();
+      try{
+        src = audioCtx.createMediaStreamSource(stream);
+      }catch(e){
+        logEvent('createMediaStreamSource 失敗：' + e, 'meter');
+        return;
+      }
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      buf = new Float32Array(analyser.fftSize);
+      src.connect(analyser);
+      running = true;
+      peakHold = 0;
+      loop();
+    }
+    function loop(){
+      if(!running){ return; }
+      analyser.getFloatTimeDomainData(buf);
+      var sum = 0, peak = 0;
+      for(var i = 0; i < buf.length; i++){
+        var v = buf[i];
+        sum += v * v;
+        var av = v < 0 ? -v : v;
+        if(av > peak){ peak = av; }
+      }
+      var rms = Math.sqrt(sum / buf.length);
+      var db = rms > 0 ? 20 * log10(rms) : -Infinity;
+      var peakDb = peak > 0 ? 20 * log10(peak) : -Infinity;
+      if(peak > peakHold){ peakHold = peak; } else { peakHold = peakHold * 0.96; }
+      draw(db, peakHold);
+      readout.textContent = 'RMS ' + fmtDb(db) + ' dB · Peak ' + fmtDb(peakDb) + ' dB';
+      raf = requestAnimationFrame(loop);
+    }
+    function draw(db, ph){
+      var w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#0b1020';
+      ctx.fillRect(0, 0, w, h);
+      var level = clamp01((db + 60) / 60);
+      var bw = level * w;
+      var col = level > 0.85 ? '#ff5757' : level > 0.6 ? '#ffb020' : '#25c26e';
+      ctx.fillStyle = col;
+      ctx.fillRect(0, 0, bw, h);
+      var phDb = ph > 0 ? 20 * log10(ph) : -Infinity;
+      var pl = clamp01((phDb + 60) / 60);
+      ctx.fillStyle = '#e7ecf6';
+      ctx.fillRect(Math.max(0, pl * w - 2), 0, 2, h);
+      ctx.fillStyle = 'rgba(255,255,255,0.14)';
+      var marks = [-40, -20, -6];
+      for(var i = 0; i < marks.length; i++){
+        var x = clamp01((marks[i] + 60) / 60) * w;
+        ctx.fillRect(x, 0, 1, h);
+      }
+    }
+    function stop(){
+      running = false;
+      if(raf){ cancelAnimationFrame(raf); raf = 0; }
+      if(src){ try{ src.disconnect(); }catch(e){} src = null; }
+      if(audioCtx){ try{ audioCtx.close(); }catch(e){} audioCtx = null; }
+      if(ctx){ ctx.clearRect(0, 0, canvas.width, canvas.height); }
+    }
+    return { start:start, stop:stop };
+  }
+
+  // ---------- 錄音 ----------
+  var MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  function pickMime(){
+    if(typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported){ return ''; }
+    for(var i = 0; i < MIME_CANDIDATES.length; i++){
+      if(MediaRecorder.isTypeSupported(MIME_CANDIDATES[i])){ return MIME_CANDIDATES[i]; }
+    }
+    return '';
+  }
+  function recordAudio(stream, seconds, onTick){
+    return new Promise(function(resolve, reject){
+      if(typeof MediaRecorder === 'undefined'){
+        reject(new Error('此瀏覽器不支援 MediaRecorder'));
+        return;
+      }
+      var mime = pickMime();
+      var rec;
+      try{
+        rec = mime ? new MediaRecorder(stream, { mimeType:mime }) : new MediaRecorder(stream);
+      }catch(e){ reject(e); return; }
+      var chunks = [];
+      rec.ondataavailable = function(e){ if(e.data && e.data.size > 0){ chunks.push(e.data); } };
+      rec.onstop = function(){ resolve(new Blob(chunks, { type: rec.mimeType || 'audio/webm' })); };
+      rec.onerror = function(e){ reject((e && e.error) || new Error('MediaRecorder 發生錯誤')); };
+      var left = seconds;
+      if(onTick){ onTick(left); }
+      var iv = setInterval(function(){
+        left--;
+        if(left >= 0 && onTick){ onTick(left); }
+        if(left <= 0){ clearInterval(iv); }
+      }, 1000);
+      try{
+        rec.start();
+      }catch(e){ clearInterval(iv); reject(e); return; }
+      setTimeout(function(){
+        clearInterval(iv);
+        if(rec.state !== 'inactive'){ try{ rec.stop(); }catch(e){} }
+      }, seconds * 1000);
+    });
+  }
+
+  // ---------- 錯誤處理 ----------
+  function handleGetError(which, err){
+    var name = (err && err.name) ? err.name : String(err);
+    var detail = (err && err.message) ? err.message : '';
+    var friendly;
+    if(name === 'NotAllowedError'){ friendly = '使用者取消或未授權（NotAllowedError）。請重試並允許分享。'; }
+    else if(name === 'NotFoundError'){ friendly = '找不到可用來源／裝置（NotFoundError）。'; }
+    else if(name === 'NotSupportedError'){ friendly = '此瀏覽器不支援（NotSupportedError）。桌面版 Chrome／Edge 才支援分頁音訊擷取。'; }
+    else if(name === 'NotReadableError'){ friendly = '來源／裝置被占用或無法讀取（NotReadableError）。'; }
+    else if(name === 'AbortError'){ friendly = '擷取被中止（AbortError）。'; }
+    else { friendly = name + '：' + detail; }
+    setStatus(which, '失敗：' + friendly);
+    logEvent((which === 'a' ? '測試A' : '測試B') + ' 失敗：' + name + ' ' + detail, which);
+    if(location.protocol === 'file:' && which === 'a'){
+      logEvent('提示：若在 file:// 被封鎖，改用靜態伺服器（例如 npx serve）後以 http://localhost 開啟本頁', 'a');
+    }
+  }
+
+  // ---------- 測試 A ----------
+  var aStream = null, aAudioStream = null, aMeter = null;
+  function resetA(){
+    hideZeroTrackWarning();
+    $('btn-a-play').disabled = true;
+    $('a-surface').textContent = '-';
+    $('a-audiocount').textContent = '-';
+    $('a-audioset').textContent = '-';
+  }
+  function showZeroTrackWarning(){
+    var w = $('a-zerowarn');
+    if(w){ w.style.display = 'block'; }
+    logEvent('測試A：⚠ 0 音軌！未勾「同時分享分頁音訊」或此來源不含音訊', 'a');
+  }
+  function hideZeroTrackWarning(){
+    var w = $('a-zerowarn');
+    if(w){ w.style.display = 'none'; }
+  }
+  function startA(){
+    resetA();
+    setStatus('a', '要求擷取權限中…（請在選擇器挑分頁並勾選分享分頁音訊）');
+    logEvent('測試A：呼叫 getDisplayMedia', 'a');
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
+      setStatus('a', '失敗：此瀏覽器沒有 getDisplayMedia（桌面版 Chrome／Edge 才有）。');
+      setResult('A.stream', 'fail', 'no getDisplayMedia');
+      return;
+    }
+    navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+    }).then(function(stream){
+      aStream = stream;
+      setResult('A.stream', 'pass');
+      logEvent('測試A：已取得串流', 'a');
+
+      var vtracks = stream.getVideoTracks();
+      var surface = '(未提供)';
+      if(vtracks.length){
+        var vs = vtracks[0].getSettings ? vtracks[0].getSettings() : {};
+        surface = vs.displaySurface || '(未提供)';
+        capture.displaySurface = surface;
+        for(var i = 0; i < vtracks.length; i++){ try{ vtracks[i].stop(); }catch(e){} }
+        logEvent('測試A：displaySurface=' + surface + '，已即時停用視訊軌', 'a');
+      }
+      $('a-surface').textContent = surface;
+
+      var atracks = stream.getAudioTracks();
+      $('a-audiocount').textContent = String(atracks.length);
+      if(atracks.length === 0){
+        showZeroTrackWarning();
+        setResult('A.audio', 'fail', '0 條音軌');
+        setStatus('a', '未取得音訊軌——見上方紅色警告，重試並勾選分享分頁音訊。');
+        return;
+      }
+      hideZeroTrackWarning();
+      setResult('A.audio', 'pass', atracks.length + ' 條');
+      var as = atracks[0].getSettings ? atracks[0].getSettings() : {};
+      capture.audioSettings = as;
+      renderAudioSettings('a', as);
+
+      for(var j = 0; j < atracks.length; j++){
+        atracks[j].addEventListener('ended', function(){
+          logEvent('測試A：音訊軌 ended（使用者停止分享）', 'a');
+          setStatus('a', '分享已由使用者停止。');
+          if(aMeter){ aMeter.stop(); }
+        });
+      }
+
+      aAudioStream = new MediaStream(atracks);
+      if(aMeter){ aMeter.start(aAudioStream); }
+      setStatus('a', '擷取中，開始 10 秒錄音…（請讓會議裡有聲音）');
+      logEvent('測試A：開始 10 秒錄音', 'a');
+
+      recordAudio(aAudioStream, 10, function(sec){
+        setStatus('a', '錄音中… 剩 ' + sec + ' 秒（請讓會議裡有聲音）');
+      }).then(function(blob){
+        $('a-audio').src = URL.createObjectURL(blob);
+        $('btn-a-play').disabled = false;
+        setResult('A.record', blob.size > 0 ? 'pass' : 'fail', blob.size + ' bytes');
+        setStatus('a', '錄音完成（' + blob.size + ' bytes）。按「回放」聆聽擷取到的內容。');
+        logEvent('測試A：錄音完成 ' + blob.size + ' bytes', 'a');
+      }).catch(function(err){
+        setResult('A.record', 'fail', String(err));
+        setStatus('a', '錄音失敗：' + err);
+        logEvent('測試A：錄音失敗 ' + err, 'a');
+      });
+    }).catch(function(err){
+      handleGetError('a', err);
+      setResult('A.stream', 'fail', ((err && err.name) || 'Error') + ': ' + ((err && err.message) || ''));
+    });
+  }
+  function stopA(){
+    if(aMeter){ aMeter.stop(); }
+    if(aAudioStream){ aAudioStream.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }
+    if(aStream){ aStream.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }
+    setStatus('a', '已停止測試 A。');
+    logEvent('測試A：已停止', 'a');
+  }
+
+  // ---------- 測試 B ----------
+  var bStream = null, bMeter = null;
+  function resetB(){
+    $('btn-b-play').disabled = true;
+    $('b-audioset').textContent = '-';
+  }
+  function listMics(){
+    if(!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices){
+      return Promise.resolve();
+    }
+    return navigator.mediaDevices.enumerateDevices().then(function(devices){
+      var sel = $('b-device');
+      if(!sel){ return; }
+      var cur = sel.value;
+      var mics = devices.filter(function(d){ return d.kind === 'audioinput'; });
+      sel.innerHTML = '';
+      var opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = '（系統預設麥克風）';
+      sel.appendChild(opt0);
+      mics.forEach(function(d, i){
+        var o = document.createElement('option');
+        o.value = d.deviceId;
+        o.textContent = d.label || ('麥克風 ' + (i + 1) + '（授權後顯示名稱）');
+        sel.appendChild(o);
+      });
+      if(cur){ sel.value = cur; }
+    }).catch(function(e){ logEvent('列舉裝置失敗：' + e, 'b'); });
+  }
+  function startB(){
+    resetB();
+    var sel = $('b-device');
+    var devId = sel ? sel.value : '';
+    var audioConstraints = { echoCancellation:false, noiseSuppression:false, autoGainControl:false };
+    if(devId){ audioConstraints.deviceId = { exact: devId }; }
+    setStatus('b', '要求麥克風權限中…');
+    logEvent('測試B：呼叫 getUserMedia', 'b');
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      setStatus('b', '失敗：此瀏覽器沒有 getUserMedia。');
+      setResult('B.stream', 'fail', 'no getUserMedia');
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: audioConstraints }).then(function(stream){
+      bStream = stream;
+      setResult('B.stream', 'pass');
+      logEvent('測試B：已取得麥克風串流', 'b');
+      var at = stream.getAudioTracks();
+      var s = (at.length && at[0].getSettings) ? at[0].getSettings() : {};
+      renderAudioSettings('b', s);
+      listMics();
+      at.forEach(function(t){
+        t.addEventListener('ended', function(){ logEvent('測試B：麥克風軌 ended', 'b'); });
+      });
+      if(bMeter){ bMeter.start(stream); }
+      setStatus('b', '擷取中，開始 5 秒錄音…（請對麥克風說話）');
+      logEvent('測試B：開始 5 秒錄音', 'b');
+      recordAudio(stream, 5, function(sec){
+        setStatus('b', '錄音中… 剩 ' + sec + ' 秒（請對麥克風說話）');
+      }).then(function(blob){
+        $('b-audio').src = URL.createObjectURL(blob);
+        $('btn-b-play').disabled = false;
+        setResult('B.record', blob.size > 0 ? 'pass' : 'fail', blob.size + ' bytes');
+        setStatus('b', '錄音完成（' + blob.size + ' bytes）。按「回放」聆聽。');
+        logEvent('測試B：錄音完成 ' + blob.size + ' bytes', 'b');
+      }).catch(function(err){
+        setResult('B.record', 'fail', String(err));
+        setStatus('b', '錄音失敗：' + err);
+        logEvent('測試B：錄音失敗 ' + err, 'b');
+      });
+    }).catch(function(err){
+      handleGetError('b', err);
+      setResult('B.stream', 'fail', ((err && err.name) || 'Error') + ': ' + ((err && err.message) || ''));
+    });
+  }
+  function stopB(){
+    if(bMeter){ bMeter.stop(); }
+    if(bStream){ bStream.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }
+    setStatus('b', '已停止測試 B。');
+    logEvent('測試B：已停止', 'b');
+  }
+
+  // ---------- 測試 C：環境檢查 ----------
+  function guessBrowserOS(ua){
+    var browser = '未知', os = '未知';
+    if(/Edg\//.test(ua)){ browser = 'Edge'; }
+    else if(/OPR\//.test(ua) || /Opera/.test(ua)){ browser = 'Opera'; }
+    else if(/Chrome\//.test(ua) && !/Chromium/.test(ua)){ browser = 'Chrome'; }
+    else if(/Chromium\//.test(ua)){ browser = 'Chromium'; }
+    else if(/Firefox\//.test(ua)){ browser = 'Firefox'; }
+    else if(/Safari\//.test(ua) && /Version\//.test(ua)){ browser = 'Safari'; }
+    var m = ua.match(/(Edg|OPR|Chrome|Chromium|Firefox|Version)\/([0-9.]+)/);
+    if(m){ browser += ' ' + m[2]; }
+    if(/Windows NT 10/.test(ua)){ os = 'Windows 10/11'; }
+    else if(/Windows/.test(ua)){ os = 'Windows'; }
+    else if(/Mac OS X/.test(ua)){ os = 'macOS'; }
+    else if(/Android/.test(ua)){ os = 'Android'; }
+    else if(/(iPhone|iPad|iPod)/.test(ua)){ os = 'iOS/iPadOS'; }
+    else if(/Linux/.test(ua)){ os = 'Linux'; }
+    return { browser: browser, os: os };
+  }
+  function runEnvCheck(){
+    var ua = navigator.userAgent;
+    $('env-ua').textContent = ua;
+    var guess = guessBrowserOS(ua);
+    $('env-guess').textContent = guess.browser + ' / ' + guess.os;
+    capture.browser = guess.browser;
+    capture.os = guess.os;
+
+    var sec = window.isSecureContext === true;
+    $('env-secure').textContent = String(sec) + (location.protocol === 'file:' ? '（file://）' : '');
+    setResult('env.secure', sec ? 'pass' : 'fail', String(sec));
+
+    var wl = (typeof AudioWorklet !== 'undefined');
+    $('env-worklet').textContent = 'typeof AudioWorklet = ' + (typeof AudioWorklet);
+    setResult('env.worklet', wl ? 'pass' : 'fail');
+
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC){
+      $('env-ctx').textContent = 'AudioContext 不支援';
+      setResult('env.ctx16k', 'fail', 'no AudioContext');
+    } else {
+      try{
+        var c = new AC({ sampleRate: 16000 });
+        var sr = c.sampleRate;
+        capture.ctxSampleRate = sr;
+        $('env-ctx').textContent = '要求 16000 → 實際 ' + sr + ' Hz';
+        setResult('env.ctx16k', sr ? 'pass' : 'fail', 'actual ' + sr);
+        try{ c.close(); }catch(e){}
+      }catch(e){
+        var sr2 = null;
+        try{ var c2 = new AC(); sr2 = c2.sampleRate; c2.close(); }catch(e2){}
+        $('env-ctx').textContent = '16kHz 失敗：' + e.message + (sr2 ? '（預設 ' + sr2 + ' Hz）' : '');
+        setResult('env.ctx16k', 'fail', e.message);
+      }
+    }
+
+    var probe = MIME_CANDIDATES.concat(['audio/webm;codecs=pcm']);
+    var supported = [];
+    for(var i = 0; i < probe.length; i++){
+      if(typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(probe[i])){
+        supported.push(probe[i]);
+      }
+    }
+    capture.recorderMimes = supported;
+    $('env-recorder').textContent = supported.length ? supported.join(', ') : '（無支援格式或無 MediaRecorder）';
+    setResult('env.recorder', supported.length ? 'pass' : 'fail', supported.join(' | '));
+
+    logEvent('環境檢查完成：' + guess.browser + ' / ' + guess.os, 'c');
+  }
+
+  // ---------- 結果複製 ----------
+  function buildJSON(device, soft){
+    var checks = {};
+    for(var i = 0; i < CHECKS.length; i++){
+      var c = CHECKS[i];
+      checks[c.key] = { state: resultState[c.key] || 'pending', detail: resultDetail[c.key] || null };
+    }
+    return {
+      tool: 'meetcopilot-capture-test',
+      ts: new Date().toISOString(),
+      device: device,
+      software: soft,
+      ua: navigator.userAgent,
+      browser: capture.browser || null,
+      os: capture.os || null,
+      protocol: location.protocol,
+      secureContext: window.isSecureContext === true,
+      displaySurface: capture.displaySurface || null,
+      audioSettings: capture.audioSettings || null,
+      ctxSampleRate: capture.ctxSampleRate || null,
+      recorderMimes: capture.recorderMimes || [],
+      checks: checks
+    };
+  }
+  function buildSummary(){
+    var device = $('in-device').value || '(未填)';
+    var soft = $('in-soft').value || '(未填)';
+    var lines = [];
+    lines.push('MeetCopilot 音訊擷取相容性測試結果');
+    lines.push('時間: ' + new Date().toISOString());
+    lines.push('裝置名稱: ' + device);
+    lines.push('開會軟體/情境: ' + soft);
+    lines.push('瀏覽器: ' + (capture.browser || '?') + ' / OS: ' + (capture.os || '?'));
+    lines.push('protocol: ' + location.protocol + ' · secureContext: ' + (window.isSecureContext === true));
+    lines.push('--- 檢查結果 ---');
+    for(var i = 0; i < CHECKS.length; i++){
+      var c = CHECKS[i];
+      var st = resultState[c.key] || 'pending';
+      var tag = st === 'pass' ? 'PASS' : st === 'fail' ? 'FAIL' : '未測';
+      lines.push('[' + tag + '] ' + c.label + (resultDetail[c.key] ? (' — ' + resultDetail[c.key]) : ''));
+    }
+    lines.push('--- 擷取詳情 ---');
+    lines.push('displaySurface: ' + (capture.displaySurface || '-'));
+    if(capture.audioSettings){
+      var a = capture.audioSettings;
+      lines.push('音軌設定: sampleRate=' + (a.sampleRate != null ? a.sampleRate : '?') +
+        ' channelCount=' + (a.channelCount != null ? a.channelCount : '?') +
+        ' echoCancellation=' + a.echoCancellation);
+    }
+    lines.push('AudioContext@16k 實際: ' + (capture.ctxSampleRate || '-'));
+    lines.push('MediaRecorder 支援: ' + ((capture.recorderMimes || []).join(', ') || '-'));
+    lines.push('--- JSON ---');
+    lines.push(JSON.stringify(buildJSON(device, soft)));
+    return lines.join('\n');
+  }
+  function copyResults(){
+    var text = buildSummary();
+    var done = function(msg){ $('copy-status').textContent = msg; logEvent('已產生結果摘要', 'summary'); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){
+        done('已複製到剪貼簿 ✓');
+      }).catch(function(){
+        fallbackCopy(text, done);
+      });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, done){
+    var ta = $('copy-fallback');
+    ta.style.display = 'block';
+    ta.value = text;
+    ta.focus();
+    ta.select();
+    var ok = false;
+    try{ ok = document.execCommand('copy'); }catch(e){ ok = false; }
+    done(ok ? '已複製（相容模式）✓' : '無法自動複製，請從下方文字框手動複製。');
+  }
+
+  // ---------- 初始化 ----------
+  function init(){
+    logBox = $('log');
+    logEvent('工具載入。protocol=' + location.protocol, 'sys');
+    renderSummary();
+    runEnvCheck();
+    listMics();
+    aMeter = createMeter($('a-meter'), $('a-readout'));
+    bMeter = createMeter($('b-meter'), $('b-readout'));
+
+    $('btn-a-start').addEventListener('click', startA);
+    $('btn-a-stop').addEventListener('click', stopA);
+    $('btn-a-play').addEventListener('click', function(){ var au = $('a-audio'); if(au){ au.play(); } });
+    $('btn-b-start').addEventListener('click', startB);
+    $('btn-b-stop').addEventListener('click', stopB);
+    $('btn-b-play').addEventListener('click', function(){ var au = $('b-audio'); if(au){ au.play(); } });
+    $('btn-copy').addEventListener('click', copyResults);
+
+    if(location.protocol === 'file:'){
+      var fn = $('file-note');
+      if(fn){ fn.style.display = 'block'; }
+    }
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>

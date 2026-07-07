@@ -30,3 +30,15 @@
   - **CRM 審查（2 must-fix 全修＋擇要修 nice）**：DbPort 改 async-first（同步簽名會讓「換 pg 不動業務碼」破功；better-sqlite3 的 tx 陷阱已註明）；實作順序補漏掉的 §3 賣方側表；會議衍生值的 provenance 記法定案（human+meeting+verified=1）；persona 逐欄過 provenance 閘（不看 rollup）；(org_id,domain) 改 UNIQUE；crawl_jobs 補 mode；schema_migrations 給最小 DDL；M3/M4 補充實體備忘。
 - **下一步**：計畫書已審定可交付。動工＝M0 地基（照 ARCHITECTURE_PLAN §6，工具鏈約定已定死）＋跟使用者約 S1 測試 Meet。
 - **待決**：接收端限 Chrome/Edge 桌面的硬約束，動工前跟使用者口頭再確認一次可接受。
+
+## 2026-07-07 session（同日續・使用者四項新指示＋交接 HTML）
+
+- **使用者四項指示（Fable 決策、Opus 執行）**：(1) 生圖 API 改 OpenAI「image-2」；(2) 接收聲音硬約束要有測試 code 讓使用者測各裝置×開會軟體；(3) 移植 ezpagesite CLAUDE.md 的 code-tracker 規定；(4) CRM 欄位要能完整介紹一家公司的產品含細節與開發人。加開決策 15–18（00-DECISIONS 補充拍板節）。
+- **執行（4 個 Opus agent 並行工作流＋1 個 HANDOFF agent）**：
+  - **生圖**：查證「image-2」＝`gpt-image-2`（snapshot 2026-04-21）；**原生支援 16:9（`1536x864`）**、繁中 in-image 大幅進步（社群 ~99%，S5 自測）；**關鍵警訊＝延遲 ~80s 級（agentic 規劃）→「一律 pre-meeting」坐實**，會中選配唯一候選 `gpt-image-1-mini`；**前置＝OpenAI 組織驗證＋tier 配額**；輸出強制 C2PA＋SynthID。已回寫 API_FINDINGS §F（Gemini §C 降備選）、ARCHITECTURE_PLAN（§1/.env/S5/§8）、PRODUCT_SPEC、DECISIONS 15、LETTER。
+  - **測試工具（已交付）**：`tools/capture-test.html`（792 行、單檔零外部資源、繁中、雙擊可開）——測試 A 分頁/視窗音訊擷取（zero-track 守衛＋音量表＋10 秒錄放回聽）、測試 B 麥克風、測試 C 環境自檢、結果摘要＋一鍵複製；`tools/README.md` 附裝置×開會軟體矩陣範本。JS 已 node --check 通過；**尚未在真瀏覽器實跑（使用者開起來若有問題回報即修）**。
+  - **code-tracker**：實體＝ezpagesite 的 CHANGE_TRACKER（強制變更日誌：每改程式檔立刻一筆、`<!-- TRACKER_BELOW -->` 錨點插入、嚴禁 Write 覆寫、>500 行打包）。已移植為 `docs/CHANGE_TRACKER.md`（加「工作區」欄＋M0 後補 pre-commit hook 條款），接進 CLAUDE.md 硬規則 8＋路由表＋ARCHITECTURE_PLAN 橫切紀律。
+  - **CRM 產品深檔**：CRM_SCHEMA 新增 `company_products`（規格/功能/定價/技術棧/整合/路線圖/已知問題…全欄位 DDL）＋`company_product_people`（產品↔人 role enum）＋`company_departments`（部門樹）；實體圖/embedding（company_product_card）/副駕白名單/§11 能不能/§12 順序全部同步。agent 三項自檢 PASS。
+  - **交接 HTML（已交付）**：`docs/HANDOFF.html`（636 行、零外部資源、零 JS、繁中、列印友善）——12 節：30 秒版/會議模型圖/18 決策/技術架構/CRM/研究引擎/里程碑+spike/風險/現在就能做的三件事/文件索引。**桌面副本：`C:/Users/Martin/Desktop/MeetCopilot_v2_規劃交接.html`**。
+- **給使用者的三個行動項**：(1) 各裝置開 `tools/capture-test.html` 實測並填矩陣；(2) OpenAI console 完成組織驗證＋查 tier 配額；(3) 備兩個 Google 帳號約 S1 測試 Meet。
+- **狀態**：計畫書含四項新指示全部定稿；仍未動產品程式碼。

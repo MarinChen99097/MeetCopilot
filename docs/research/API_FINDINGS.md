@@ -102,7 +102,7 @@ session.sendRealtimeInput({ audio: { data: base64Chunk, mimeType: 'audio/pcm;rat
 
 ---
 
-## C. Gemini 生圖（DynamicSlide 第二生成路徑；**一律 pre-meeting**）
+## C.（備選）Gemini 生圖——2026-07-07 起主力供應商改 OpenAI（見 §F），本節保留作備選參考
 
 ### C1. 結論：**AI 生圖預設走會前/預取路徑；會中即時以 CSS 路徑優先**（2026-07-07 二次查核校準）
 延遲**無官方數字**（模型頁不給 SLA）；第三方稱 flash-lite 目標 sub-2s、flash 級 ~2–4s（1K）——**全部當工程估計、S5 spike 實測校準**，不得當事實引用。預設政策：**會中即時**用「沿用風格的 CSS 路徑」＋重用會前已生背景圖——理由除延遲變異外，更因**會中被內容安全誤擋（§C5）不可在客戶面前發生**。若 S5 實測 flash-lite 1K 穩定 <2–3s，可開「會中 1K 快速生圖」選配（嚴格逾時＋漸層 fallback），由使用者決定。
@@ -150,3 +150,32 @@ for (const part of res.candidates![0].content!.parts!)
 - `gemini-3.1-flash-lite`（文字/分析/生成主力）：**VERIFIED-in-v1**——v1 於 2026-07-05 對實際可用模型清單查證 API ID、並在生產流程實測（生成 0 空白頁）。v2 wiring 時以 models.list 再確認一次即可。
 - `gemini-embedding-001`（embedding）：同上，v1 實測可用（flash-lite 非 embedding 模型，不可混用）。
 - 兩者經 .env（`GEMINI_TEXT_MODEL`／`GEMINI_EMBED_MODEL`）可換，不寫死；生成品質不足時的升級路＝換 `gemini-3.5-flash`（.env 一行）。
+
+## F. OpenAI 生圖（主力供應商，2026-07-07 使用者拍板＋同日查證；決策 15）
+
+### F1. Model 與呼叫（VERIFIED，developers.openai.com）
+- 使用者說的「image-2」＝**`gpt-image-2`**（snapshot `gpt-image-2-2026-04-21`，2026-04 發布、5 月開放 API，現任旗艦）。全系列：`gpt-image-2`／`gpt-image-1.5`／`gpt-image-1`／**`gpt-image-1-mini`（便宜快速級）**。第三方路由的「gpt-5.4-image-2」等名稱不是 OpenAI API ID，勿用。
+- Node SDK（openai npm）：`openai.images.generate({ model:'gpt-image-2', prompt, size, quality, moderation })` → **只回 base64**（`result.data[0].b64_json`，無 url 欄位）。參數：`size`、`quality: low|medium|high|auto`（預設 auto，可能自動選 high——**要顯式指定**）、`moderation: auto|low`、`background`（**不支援 transparent**）、`output_format: png|jpeg|webp`＋`output_compression`。
+- Responses API 的 `image_generation` tool 是另一條路（model 填文字模型非 gpt-image-2）——我們用不到，直接 Image API 即可。
+
+### F2. 尺寸（VERIFIED）——**原生支援真 16:9**
+- gpt-image-2 接受**任意尺寸**，約束＝邊長 ≤3840、兩邊皆 16 的倍數、長寬比 ≤3:1。
+- **投影片用 `1536x864`（精確 16:9，864=16×54）**；要 4K 用 `3840x2160`（慢且貴）。不需 cover-crop（留作 fallback）。
+
+### F3. 中文 in-image 文字（部分 VERIFIED）
+- 官方把「多語文字渲染（含中文）」列為 2.0 頭條功能（VERIFIED）；社群實測稱 CJK 字元級正確率 ~99%、繁中宋體/楷體無錯字（**UNCERTAIN——非官方量測，S5 用我們自己的繁中銷售字串實測**）。
+- 工程立場不變：關鍵文案仍優先 CSS 真文字疊層；in-image 文字給純視覺頁。
+
+### F4. 延遲與價格（延遲＝關鍵警訊）
+- **延遲（UNCERTAIN、離散大，但方向確定：比 Gemini 慢一個量級）**：gpt-image-2 有 agentic 規劃階段——社群實測 medium 1024² ≈ **~80s**、high ≈ 180s+；較低品質 p50 約 8–25s。**→ 「會中即時生圖」對 gpt-image-2 完全不可行；「一律 pre-meeting」由此坐實**（比 Gemini 時代更堅定）。若未來要會中視覺選配，唯一候選是 `gpt-image-1-mini`＋low——S5 實測後另議。
+- **價格（VERIFIED，token 計價）**：1024² 每張約 low **$0.006**／medium **$0.053**／high **$0.211**；尺寸放大等比增。背景圖用 low/medium 即可。
+
+### F5. 前置與供應鏈（VERIFIED）
+- **組織驗證必做**：呼叫任何 `gpt-image-*` 前，OpenAI console 要完成 API Organization Verification——**使用者的 onboarding 前置**，M0 就提醒。
+- `.env`：`OPENAI_API_KEY`（生圖必填）＋`OPENAI_IMAGE_MODEL`（預設 gpt-image-2）。
+- **溯源**：所有輸出強制帶 C2PA metadata＋SynthID 浮水印（不可關）；C2PA 記錄產生組織——內部簡報無妨，對外展示須知情。
+- 內容審核：`moderation: auto`；被拒絕的 fallback（保留原頁/漸層）照舊必做（具體封鎖清單未公開，UNCERTAIN）。
+- 費率上限：入門 tier 的每月影像請求數很低（~5–250/月依 tier）——**S5 前先查自己帳號的 tier 配額**。
+
+### F6. 對從 Gemini 來的工程師的驚訝點（照抄進實作備忘）
+base64-only（無 CDN url）；quality 預設 auto 可能挑 high（貴＋慢）——顯式給值；不支援透明背景；`input_fidelity` 在 gpt-image-2 不可調（edit 時輸入 token 偏貴）；Responses tool 的 model 欄位不是 gpt-image-2。

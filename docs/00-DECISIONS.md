@@ -14,7 +14,7 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 | **DynamicSlide** | 動態簡報 | 依會議內容**新增**簡報頁（補充說明），兩種生成路徑（沿用風格的 CSS／AI 生圖） |
 | **MeetCopilot（會中副駕）** | 即時副駕 + 模擬訓練 | 會中給報告者即時補充資訊；會前用 CRM 資料做 AI 扮演客戶的**語音**模擬對練 |
 
-## 14 項已鎖定決策
+## 14 項已鎖定決策（2026-07-06；15–18 見下方補充拍板節）
 
 1. **重建方式＝從零重寫**（fresh rewrite）。v1（`c:/Users/Martin/Desktop/MeetCopilot`）保留為參考件，不動；v2 在新目錄 `c:/Users/Martin/Desktop/MeetCopilot_v2`（已 `git init`）。
 2. **技術棧＝同棧重寫**：Next.js 15（App Router、next-intl zh-TW/en、純 CSS）＋ Express＋ws ＋ better-sqlite3 ＋ Gemini（@google/genai）。v1 舊碼可當參考件直接借。
@@ -61,6 +61,13 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 | **I3** | HUD 不外流：Copilot 介面不得出現在被分享畫面 | 雙帳號模型天然隔離（見上）＋播放視圖零 HUD ＋只分享分頁 |
 
 > I1/I2/I3 從 M1 起就生效；在 approval gate／播放視圖隔離機制完工前，任何 demo 禁止把未批准內容顯示給客戶側。
+
+## 2026-07-07 補充拍板（使用者四項新指示）
+
+15. **AI 生圖供應商改 OpenAI `gpt-image-2`**（使用者稱 image-2；同日查證確認 ID＝`gpt-image-2`，snapshot 2026-04-21）：`ImageProvider` 抽象、OpenAI 主力、Gemini 降備選；`1536x864` 原生 16:9、quality 顯式 low/medium/high；被擋/逾時 fallback（漸層/CSS）不變。**查證後果**：延遲 ~80s 級（agentic 規劃階段）→ 生圖**一律 pre-meeting 坐實**、會中選配唯一候選 `gpt-image-1-mini`（S5 另議）；**前置＝OpenAI 組織驗證＋tier 配額確認**；輸出強制 C2PA＋SynthID。細節見 `research/API_FINDINGS.md` §F。
+16. **擷取相容性測試工具先行**：`tools/capture-test.html`（單檔、雙擊可開、免安裝）——使用者要親測「各裝置 × 各開會軟體（Meet/Zoom/Teams…）」的分頁/視窗音訊擷取配合度；此工具是 S1 spike 的載具，M0 前就交付。（**已交付**：tools/capture-test.html＋tools/README.md 矩陣範本。）
+17. **引入 ezpagesite 的 code-tracker 制度**：實體＝ezpagesite 的 **CHANGE_TRACKER**（強制變更日誌：每次改程式檔立刻追加一筆、錨點插入、>500 行打包），移植時加「工作區」欄位。（**已落地**：`docs/CHANGE_TRACKER.md`＋CLAUDE.md 硬規則。）
+18. **CRM 對方產品深檔**：CRM 欄位要能「完整介紹一家公司的產品」含細節與開發人——新增 `company_products`（規格/功能/定價/技術棧/整合/路線圖）、`company_product_people`（產品↔人：developer/PM/owner…）、`company_departments`（部門/主管/人數），接上 embedding 檢索與爬蟲填欄。（**已落地**：CRM_SCHEMA「對方產品深檔」節。）
 
 ## 研究回填（2026-07-06 工作流查證，詳見 `research/API_FINDINGS.md`）
 

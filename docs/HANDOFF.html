@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MeetCopilot v2 規劃交接</title>
+<style>
+  :root{
+    --navy:#1e2a55;
+    --navy-2:#26356b;
+    --violet:#6c4fd8;
+    --violet-soft:#efeafc;
+    --ink:#1f2333;
+    --muted:#5a6072;
+    --line:#e4e7f0;
+    --bg:#f6f8fc;
+    --card:#ffffff;
+    --amber:#b8791d;
+    --amber-soft:#fdf6e8;
+    --green:#1f7a55;
+    --red:#b23b3b;
+    --shadow:0 1px 3px rgba(30,42,85,.06),0 6px 18px rgba(30,42,85,.05);
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:"Segoe UI","Microsoft JhengHei","PingFang TC","Noto Sans TC",system-ui,-apple-system,sans-serif;
+    color:var(--ink);
+    background:var(--bg);
+    line-height:1.65;
+    font-size:16px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1060px;margin:0 auto;padding:0 20px}
+
+  /* sticky top bar */
+  .topbar{
+    position:sticky;top:0;z-index:50;
+    background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(160%) blur(8px);
+    border-bottom:1px solid var(--line);
+  }
+  .topbar .wrap{display:flex;align-items:center;justify-content:space-between;gap:12px;height:52px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;color:var(--navy);letter-spacing:.2px}
+  .brand .dot{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--violet),var(--navy));display:inline-block}
+  .brand small{font-weight:500;color:var(--muted);font-size:12px}
+  .topbar a.toplink{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600}
+  .topbar a.toplink:hover{color:var(--violet)}
+
+  /* cover */
+  .cover{
+    margin-top:26px;
+    background:linear-gradient(135deg,var(--navy) 0%,#2c2a63 55%,var(--violet) 130%);
+    color:#fff;border-radius:20px;padding:44px 40px;box-shadow:var(--shadow);
+    position:relative;overflow:hidden;
+  }
+  .cover::after{content:"";position:absolute;right:-80px;top:-80px;width:280px;height:280px;border-radius:50%;
+    background:radial-gradient(circle,rgba(255,255,255,.14),transparent 70%)}
+  .cover h1{margin:0 0 10px;font-size:34px;line-height:1.2;letter-spacing:.5px}
+  .cover .lede{font-size:17px;max-width:660px;color:#e7e9f6;margin:0 0 22px}
+  .cover .meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .badge{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;padding:6px 13px;border-radius:999px}
+  .badge.status{background:#ffd873;color:#5a3d00}
+  .badge.date{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.25)}
+  .badge .pip{width:8px;height:8px;border-radius:50%;background:#c9971b;display:inline-block}
+
+  /* TOC */
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;margin:22px 0;box-shadow:var(--shadow)}
+  .toc h2{margin:0 0 14px;font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px}
+  .toc ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px 22px;counter-reset:t}
+  .toc li{counter-increment:t}
+  .toc a{display:flex;gap:10px;text-decoration:none;color:var(--ink);padding:5px 8px;border-radius:8px;font-size:14.5px}
+  .toc a:hover{background:var(--violet-soft);color:var(--navy)}
+  .toc a::before{content:counter(t,decimal-leading-zero);font-variant-numeric:tabular-nums;color:var(--violet);font-weight:700;font-size:13px;min-width:22px}
+
+  /* sections */
+  section{margin:46px 0;scroll-margin-top:64px}
+  h2.sec{display:flex;align-items:center;gap:12px;font-size:23px;color:var(--navy);margin:0 0 6px;letter-spacing:.3px}
+  h2.sec .num{background:var(--navy);color:#fff;font-size:14px;font-weight:700;min-width:30px;height:30px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+  .sec-sub{color:var(--muted);margin:0 0 20px;font-size:15px}
+  h3.sub{font-size:16px;color:var(--navy-2);margin:26px 0 12px;font-weight:700}
+  p{margin:0 0 14px}
+  .lead{font-size:16.5px}
+
+  /* cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+  .card h4{margin:0 0 8px;font-size:16px;color:var(--navy)}
+  .card p{margin:0;font-size:14px;color:var(--muted)}
+  .card .kicker{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--violet);margin-bottom:8px}
+  .card.core{grid-column:1/-1;background:linear-gradient(135deg,#fbfaff,#f3f0fc);border:1px solid #ded6f6}
+  .card.core h4{color:var(--violet)}
+  .card.core p{color:#4a4668}
+
+  /* generic callout */
+  .callout{background:var(--amber-soft);border:1px solid #f0dcae;border-left:4px solid var(--amber);border-radius:10px;padding:14px 16px;margin:12px 0}
+  .callout .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--amber);background:#fbe9c6;padding:2px 8px;border-radius:6px;margin-bottom:6px}
+  .callout p{margin:0;font-size:14px;color:#5c4a24}
+  .callouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:16px}
+
+  .note{background:#eef3fb;border:1px solid #d6e2f4;border-left:4px solid var(--navy);border-radius:10px;padding:12px 16px;margin:14px 0;font-size:14px;color:#324068}
+
+  /* tables */
+  .table-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);margin:14px 0}
+  table{border-collapse:collapse;width:100%;font-size:14px;background:var(--card);min-width:520px}
+  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  thead th{background:#f0f2fa;color:var(--navy);font-weight:700;font-size:13px;letter-spacing:.3px;position:sticky;top:0}
+  tbody tr:nth-child(even){background:#fafbfe}
+  tbody tr:hover{background:var(--violet-soft)}
+  td code,p code,li code{background:#eef0f7;color:#3b3170;padding:1px 6px;border-radius:5px;font-size:12.5px;font-family:"Cascadia Code",Consolas,monospace}
+  .cnum{font-weight:700;color:var(--violet);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .pill.new{background:#e8f6ee;color:var(--green)}
+  .pill.hi{background:#fdeaea;color:var(--red)}
+  .pill.user{background:#fff2d6;color:#8a5a00}
+
+  /* meeting flow */
+  .flow{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:16px 0}
+  .flow-col{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow)}
+  .flow-col.a{border-top:4px solid #3f7fd8}
+  .flow-col.b{border-top:4px solid var(--violet)}
+  .flow-col h4{margin:0 0 4px;font-size:15px;color:var(--navy)}
+  .flow-col .role{font-size:12px;color:var(--muted);margin-bottom:12px}
+  .step{background:#f7f8fc;border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:13.5px;margin:0}
+  .arrow{text-align:center;color:var(--violet);font-size:14px;line-height:1;margin:5px 0;font-weight:700}
+  .hud-bar{grid-column:1/-1;background:linear-gradient(135deg,#26356b,#5341b0);color:#fff;border-radius:var(--radius);padding:16px 20px;text-align:center;box-shadow:var(--shadow)}
+  .hud-bar strong{font-size:15px}
+  .hud-bar span{display:block;font-size:13px;color:#d9dcf2;margin-top:4px}
+
+  /* invariants */
+  .inv{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px}
+  .inv-item{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:14px 16px;box-shadow:var(--shadow)}
+  .inv-item .code{font-weight:800;color:#fff;background:var(--violet);border-radius:7px;padding:2px 9px;font-size:13px;margin-right:8px}
+  .inv-item .t{font-weight:700;color:var(--navy);font-size:14px}
+  .inv-item p{margin:8px 0 0;font-size:13px;color:var(--muted)}
+
+  /* constraint chips */
+  .chips{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+  .chip{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 14px;font-size:13.5px;box-shadow:var(--shadow)}
+  .chip b{color:var(--navy)}
+
+  /* tree */
+  .tree{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--shadow);font-size:14px;overflow-x:auto}
+  .tnode{padding:3px 0}
+  .tbranch{border-left:2px solid #e0e4f0;margin-left:10px;padding-left:16px}
+  .tlabel{font-weight:700;color:var(--navy)}
+  .ttag{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:5px;margin-left:6px;vertical-align:middle}
+  .ttag.core{background:#e8f6ee;color:var(--green)}
+  .ttag.trust{background:var(--violet-soft);color:var(--violet)}
+  .ttag.crawl{background:#eaf1fb;color:#2f5fa8}
+  .tmeta{color:var(--muted);font-size:12.5px}
+
+  /* milestones */
+  .mline{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin:16px 0}
+  .mstep{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;box-shadow:var(--shadow);flex:1 1 150px;min-width:150px}
+  .mstep .mtag{display:inline-block;font-weight:800;font-size:13px;color:#fff;background:var(--navy);border-radius:6px;padding:2px 9px;margin-bottom:8px}
+  .mstep h4{margin:0 0 5px;font-size:14px;color:var(--navy)}
+  .mstep p{margin:0;font-size:12.5px;color:var(--muted)}
+  .mconnect{display:flex;align-items:center;color:var(--violet);font-weight:800;font-size:18px}
+  .mparallel{flex:2 1 240px;min-width:220px;background:linear-gradient(135deg,#f4f1fd,#eef3fb);border:1px dashed #cdb9f2;border-radius:12px;padding:10px}
+  .mparallel .plabel{font-size:11.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--violet);text-align:center;margin-bottom:8px}
+  .mparallel .mstep{margin-bottom:8px;flex:none}
+  .mparallel .mstep:last-child{margin-bottom:0}
+  .mstep .mtag.p{background:var(--violet)}
+
+  /* do-now */
+  .steps3{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .stepbig{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);position:relative}
+  .stepbig .n{position:absolute;top:-14px;left:20px;width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--violet),var(--navy));color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow)}
+  .stepbig h4{margin:12px 0 8px;font-size:16px;color:var(--navy)}
+  .stepbig p{margin:0;font-size:13.5px;color:var(--muted)}
+
+  /* footer */
+  footer{margin:48px 0 30px;padding:24px;background:var(--navy);color:#cfd4ee;border-radius:var(--radius);font-size:13.5px}
+  footer .wrap{padding:0}
+  footer code{background:rgba(255,255,255,.12);color:#fff;padding:2px 7px;border-radius:5px}
+  footer .truth{margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.16);color:#aeb4dc}
+
+  ul.tight{margin:8px 0 14px;padding-left:22px}
+  ul.tight li{margin-bottom:6px}
+
+  @media (max-width:720px){
+    .cover{padding:32px 24px}
+    .cover h1{font-size:26px}
+    .flow{grid-template-columns:1fr}
+    .topbar .wrap{height:auto;padding:8px 20px;flex-wrap:wrap}
+    h2.sec{font-size:20px}
+  }
+  @media print{
+    body{background:#fff}
+    .topbar{position:static;box-shadow:none}
+    .cover,.card,.table-scroll,.tree,.mstep,.flow-col,.stepbig,footer{box-shadow:none}
+    section{page-break-inside:avoid}
+    a{color:inherit;text-decoration:none}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <span class="brand"><span class="dot"></span>MeetCopilot v2 <small>規劃交接</small></span>
+    <a class="toplink" href="#toc">目錄 &darr;</a>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- 1. 封面 -->
+  <header class="cover" id="top">
+    <h1>MeetCopilot v2 規劃交接</h1>
+    <p class="lede">一個以「詳細 CRM ＋ 研究引擎」為共用核心的 B2B 開會平台——會前與會中蒐集對方公司與主管情報，供三個消費端（動態簡報、會中副駕、語音模擬訓練）即時運用。</p>
+    <div class="meta">
+      <span class="badge status"><span class="pip"></span>計畫書已定案・尚未動工</span>
+      <span class="badge date">產出日期 2026-07-07</span>
+    </div>
+  </header>
+
+  <!-- TOC -->
+  <nav class="toc" id="toc">
+    <h2>目錄</h2>
+    <ol>
+      <li><a href="#s1">這是什麼（30 秒版）</a></li>
+      <li><a href="#s2">會議運作模型</a></li>
+      <li><a href="#s3">18 項已拍板決策</a></li>
+      <li><a href="#s4">技術架構</a></li>
+      <li><a href="#s5">CRM 資料模型</a></li>
+      <li><a href="#s6">研究引擎</a></li>
+      <li><a href="#s7">里程碑與時間結構</a></li>
+      <li><a href="#s8">風險與誠實揭露</a></li>
+      <li><a href="#s9">你們現在就能做的三件事</a></li>
+      <li><a href="#s10">文件索引</a></li>
+    </ol>
+  </nav>
+
+  <!-- 2. 這是什麼 -->
+  <section id="s1">
+    <h2 class="sec"><span class="num">1</span>這是什麼（30 秒版）</h2>
+    <p class="sec-sub">一個共用核心，餵養三個消費端；對外包裝成兩個產品 surface。</p>
+    <div class="cards">
+      <div class="card core">
+        <span class="kicker">共用核心</span>
+        <h4>CRM ＋ 研究引擎</h4>
+        <p>事先把對方公司、客戶、主管的詳細資料存進 CRM——先用爬蟲填大半欄位、rep 再確認細填。會中還能主動爬對方公司與主管背景。這是整個平台的地基，兩個產品都吃它。</p>
+      </div>
+      <div class="card">
+        <span class="kicker">產品 · DynamicSlide</span>
+        <h4>動態簡報</h4>
+        <p>會中依對話內容<strong>新增</strong>簡報頁當補充說明，一律 append 到簡報尾端。兩種生成路徑：沿用既有風格的 CSS 即時生成、或 AI 生圖。新頁仍需報告者批准才進 deck。</p>
+      </div>
+      <div class="card">
+        <span class="kicker">產品 · MeetCopilot</span>
+        <h4>會中副駕</h4>
+        <p>會中即時聆聽對話，把對方公司/主管補充資訊、對手 battlecard、異議處理、下一步建議浮到報告者的 HUD。訊號經批准後回寫 CRM，養厚下一次。</p>
+      </div>
+      <div class="card">
+        <span class="kicker">產品 · MeetCopilot</span>
+        <h4>語音模擬訓練</h4>
+        <p>會前用 CRM 裡某位客戶的 persona，讓 AI 用<strong>原生語音</strong>扮演「那位客戶」與 rep 即時口語對練（可打斷、低延遲），課後產出評分報告。只依賴 CRM、不需會議擷取，可提早開發。</p>
+      </div>
+    </div>
+    <p class="note"><strong>包裝法：</strong>傘名沿用 <strong>MeetCopilot</strong>，平台下含兩個 surface——<strong>DynamicSlide</strong>（動態簡報）與 <strong>MeetCopilot</strong>（會中副駕＋語音模擬訓練）。</p>
+  </section>
+
+  <!-- 3. 會議運作模型 -->
+  <section id="s2">
+    <h2 class="sec"><span class="num">2</span>會議運作模型</h2>
+    <p class="sec-sub">純網頁、不做桌面軟體。實戰時報告者開兩個帳號／兩個瀏覽器 profile。</p>
+
+    <div class="flow">
+      <div class="flow-col a">
+        <h4>帳號 A</h4>
+        <div class="role">報告 / presenter（一個 profile）</div>
+        <div class="step">開 DynamicSlide「播放視圖」</div>
+        <div class="arrow">&darr;</div>
+        <div class="step">只把「<strong>簡報那個分頁</strong>」分享進 Meet</div>
+        <div class="arrow">&darr;</div>
+        <div class="step">播放視圖是乾淨舞台（<strong>無 HUD</strong>）</div>
+      </div>
+      <div class="flow-col b">
+        <h4>帳號 B</h4>
+        <div class="role">接收聲音 / listener（另一個 profile，建議與擷取分頁同 profile）</div>
+        <div class="step">以靜音＋關鏡頭加入同一個 Meet</div>
+        <div class="arrow">&darr;</div>
+        <div class="step">Copilot web app 用 <code>getDisplayMedia</code> 擷取「Meet 分頁的音訊」＝所有人混音</div>
+        <div class="arrow">&darr;</div>
+        <div class="step">送 ASR &rarr; 分析 &rarr; 研究 &rarr; HUD</div>
+        <div class="arrow">&darr;</div>
+        <div class="step">此瀏覽器<strong>永不被分享</strong></div>
+      </div>
+      <div class="hud-bar">
+        <strong>報告者用第二裝置（手機／平板）看帳號 B 的 HUD</strong>
+        <span>建議卡・研究卡・逐字稿——只看不擷取，故不限瀏覽器</span>
+      </div>
+    </div>
+
+    <h3 class="sub">硬約束</h3>
+    <div class="chips">
+      <span class="chip"><b>接收端限 Chrome/Edge 桌面</b>——分頁音訊擷取只在 Chromium 桌面（Firefox/Safari/行動不支援）</span>
+      <span class="chip"><b>同 profile ＝可靠路徑</b>——帳號 B 的 Meet 分頁與 Copilot 擷取分頁放同一 profile</span>
+      <span class="chip"><b>HUD 檢視端不限</b>——第二裝置只看不擷取，可用手機</span>
+    </div>
+
+    <h3 class="sub">三大不變量（架構層強制，從 M1 起生效）</h3>
+    <div class="inv">
+      <div class="inv-item">
+        <span class="code">I1</span><span class="t">只改 pending</span>
+        <p>deck 變更僅 append 到尾端、不動已播頁；改造引擎只有 <code>APPEND</code>＋pending 尾段 <code>REORDER</code>，移除中段插入。</p>
+      </div>
+      <div class="inv-item">
+        <span class="code">I2</span><span class="t">需報告者批准</span>
+        <p>新頁進 live deck 前必經 approval gate；只有 ACCEPT/EDIT 會 append，未批准客戶永遠看不到。</p>
+      </div>
+      <div class="inv-item">
+        <span class="code">I3</span><span class="t">HUD 絕不外流</span>
+        <p>雙帳號天然隔離（只分享簡報分頁、HUD 在帳號 B／第二裝置）＋播放視圖零 HUD 元素。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. 18 項決策 -->
+  <section id="s3">
+    <h2 class="sec"><span class="num">3</span>18 項已拍板決策</h2>
+    <p class="sec-sub">來源＝2026-07-06 與使用者討論拍板（14 項）＋2026-07-07 補充（15–18）。這些視為既定前提，不重問。</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th style="width:44px">#</th><th style="width:210px">決策</th><th>一句話說明</th></tr></thead>
+        <tbody>
+          <tr><td class="cnum">1</td><td>從零重寫</td><td>fresh rewrite；v1（隔壁目錄）保留為參考件不動，v2 在新目錄，已 git init。</td></tr>
+          <tr><td class="cnum">2</td><td>同棧重寫</td><td>Next.js 15＋Express＋ws＋better-sqlite3＋Gemini（@google/genai）；v1 舊碼可當參考直接借。</td></tr>
+          <tr><td class="cnum">3</td><td>傘名沿用 MeetCopilot</td><td>平台下含 DynamicSlide 與 MeetCopilot 兩個 surface。</td></tr>
+          <tr><td class="cnum">4</td><td>兩產品並行開發</td><td>M2 起三條並行線：DynamicSlide／會中副駕／語音模擬。</td></tr>
+          <tr><td class="cnum">5</td><td>語音模擬可提早</td><td>只依賴 CRM、不需會議擷取，與第一個產品並行。</td></tr>
+          <tr><td class="cnum">6</td><td>先本機、留雲端路</td><td>開發與實戰都在本機（localhost，開會前啟動）；不寫死 localhost，日後上雲不動業務碼。</td></tr>
+          <tr><td class="cnum">7</td><td>SQLite＋repository 層</td><td>better-sqlite3＋JS cosine 檢索；repository 層隔離，日後換 Postgres/pgvector 不動業務碼。</td></tr>
+          <tr><td class="cnum">8</td><td>研究引擎＝混合式</td><td>Gemini Google Search grounding＋搬 ezpagesite 自建爬蟲（Playwright），補上 SSRF 防護。</td></tr>
+          <tr><td class="cnum">9</td><td>會中研究＝自動＋手動</td><td>偵測新話題/新人名自動發研究（每場設成本上限）；HUD 另有「深查」鈕手動點名。</td></tr>
+          <tr><td class="cnum">10</td><td>AI 生圖兩者都做</td><td>(a) 背景圖＋CSS 真文字疊層（預設，中文不糊、pptx 可用）；(b) 整頁生圖（純視覺頁）。</td></tr>
+          <tr><td class="cnum">11</td><td>模擬語音＝Gemini Live API</td><td>原生雙向即時語音、支援打斷；抽象層留接口，配額/品質出問題可退回拼裝。</td></tr>
+          <tr><td class="cnum">12</td><td>直接做語音模擬</td><td>不先做文字版。</td></tr>
+          <tr><td class="cnum">13</td><td>新頁 append 到尾端</td><td>當「補充說明」不再插中段；仍需報告者批准才進 deck（保留 I2）。</td></tr>
+          <tr><td class="cnum">14</td><td>HUD＝第二裝置</td><td>做成 responsive，報告者用另一台手機／平板看建議/研究卡/逐字稿。</td></tr>
+          <tr><td class="cnum">15</td><td>生圖改 OpenAI gpt-image-2 <span class="pill new">補充</span></td><td>ImageProvider 抽象、OpenAI 主力、Gemini 降備選；<code>1536x864</code> 原生 16:9、quality 顯式 low/medium/high；輸出強制 C2PA＋SynthID。</td></tr>
+          <tr><td class="cnum">16</td><td>擷取相容性測試工具先行 <span class="pill new">補充</span></td><td><code>tools/capture-test.html</code>（單檔、雙擊可開、免安裝）——親測各裝置×開會軟體的分頁音訊擷取；S1 spike 的載具，M0 前交付。</td></tr>
+          <tr><td class="cnum">17</td><td>引入 code-tracker 制度 <span class="pill new">補充</span></td><td>移植 ezpagesite 的 CHANGE_TRACKER：每次改程式檔立刻追加一筆變更紀錄（錨點插入、>500 行打包）。</td></tr>
+          <tr><td class="cnum">18</td><td>CRM 對方產品深檔 <span class="pill new">補充</span></td><td>新增 <code>company_products</code>（規格/定價/技術棧/整合/路線圖）、<code>company_product_people</code>（產品↔人）、<code>company_departments</code>（部門/主管）。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="sub">研究回填的三個修正</h3>
+    <div class="callouts">
+      <div class="callout">
+        <span class="tag">查證後校準</span>
+        <p><strong>會議 ASR 不用 Live API。</strong>Live API 無 speaker diarization、為單一互動使用者設計、單場 ~15 分鐘——不適合被動轉寫會議混音。會議 ASR 改走 Gemini 分段轉寫（藏在 <code>AsrProvider</code> 後），diarization 交下游 LLM；Live API 只用於語音模擬訓練。</p>
+      </div>
+      <div class="callout">
+        <span class="tag">查證後校準</span>
+        <p><strong>AI 生圖一律 pre-meeting。</strong>gpt-image-2 有 agentic 規劃階段、實測 medium ~80s 級，會中不可行——生圖坐實為會前預生；會中即時走「沿用風格 CSS 路徑」＋重用已生背景圖，被擋一律 fallback 漸層。</p>
+      </div>
+      <div class="callout">
+        <span class="tag">查證後校準</span>
+        <p><strong>雙帳號建議「同瀏覽器 profile」。</strong>分頁 picker 只列同一 Chromium instance 的分頁——可靠路徑＝B 的 Meet 分頁與 Copilot 擷取分頁同 profile。接收端硬限 Chrome/Edge 桌面；列為 S1 spike（最高風險）。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. 技術架構 -->
+  <section id="s4">
+    <h2 class="sec"><span class="num">4</span>技術架構</h2>
+    <p class="sec-sub">同棧重寫；所有 model ID 皆 2026-07-06/07 查證，連線時再確認一次。</p>
+
+    <h3 class="sub">技術棧</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th style="width:130px">層</th><th style="width:230px">選型</th><th>用途與關鍵限制</th></tr></thead>
+        <tbody>
+          <tr><td>前端</td><td>Next.js 15 App Router＋next-intl（zh-TW/en）＋純 CSS</td><td>UI 語言與內容語言分離；無 Tailwind。</td></tr>
+          <tr><td>後端</td><td>Node＋Express＋<code>ws</code></td><td>REST＋WebSocket；WS 走音訊與即時訊號。</td></tr>
+          <tr><td>資料庫</td><td>better-sqlite3＋repository 層（DbPort 抽象）</td><td>日後換 Postgres/pgvector 不動業務碼；向量用 JS cosine。</td></tr>
+          <tr><td>文字／分析／生成</td><td><code>gemini-3.1-flash-lite</code></td><td>文字生成主力；JSON mode＋responseSchema 用 union-superset（避免空白頁 bug）。</td></tr>
+          <tr><td>Embedding</td><td><code>gemini-embedding-001</code></td><td>JS 暴力 cosine，藏在 EmbeddingRepository；非 embedding 模型不可混用。</td></tr>
+          <tr><td>模擬訓練語音</td><td><code>gemini-3.1-flash-live-preview</code></td><td>原生雙向語音、可打斷；瀏覽器經 ephemeral token 直連；單場 ~15 分鐘，長對練必開 compression＋resumption。</td></tr>
+          <tr><td>會議 ASR</td><td>Gemini 分段轉寫（<code>AsrProvider</code> 後）</td><td>不用 Live API；diarization 交下游 LLM 依內容/語氣推斷。</td></tr>
+          <tr><td>AI 生圖</td><td>OpenAI <code>gpt-image-2</code>（Gemini 備選）</td><td><code>1536x864</code> 原生 16:9；實測 ~80s 級，<strong>一律會前預生</strong>；被擋 fallback 漸層；前置＝OpenAI 組織驗證＋tier 配額。</td></tr>
+          <tr><td>研究／爬蟲</td><td>Gemini Search grounding＋Playwright(+stealth)＋SSRF-safe 抽取器</td><td>SSRF 檢查掛在對使用者提供 URL 的首次 fetch。</td></tr>
+          <tr><td>Auth</td><td>自建 JWT</td><td>JWT_SECRET 缺值 fail-fast。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="sub">Monorepo 六 surface</h3>
+    <p>npm workspaces：<code>packages/shared</code>（契約）、<code>packages/crm</code>（新核心）、<code>apps/server</code>、<code>apps/web</code>、<code>docs/</code>、<code>tools/</code>；<strong>無 desktop</strong>（純網頁）。前端六個 surface：</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th style="width:130px">路由</th><th style="width:150px">Surface</th><th>內容</th></tr></thead>
+        <tbody>
+          <tr><td><code>/crm</code></td><td>CRM 管理</td><td>公司/主管清單＋詳情、確認/細填 provenance UI、爬蟲 enrich 觸發、crawl_jobs 狀態。</td></tr>
+          <tr><td><code>/studio</code></td><td>DynamicSlide 編輯</td><td>三段 wizard、slide 編輯、pptx 匯出、pre-meeting 生圖。</td></tr>
+          <tr><td><code>/present</code></td><td>播放視圖</td><td><strong>零 HUD</strong> 的乾淨舞台（帳號 A 分享此分頁）。</td></tr>
+          <tr><td><code>/copilot</code></td><td>會中副駕擷取端</td><td>帳號 B 開；「開始聆聽」擷取 Meet 分頁、送 ASR；本身極簡（非 HUD）。</td></tr>
+          <tr><td><code>/hud</code></td><td>HUD（第二裝置）</td><td>responsive；建議/研究卡/逐字稿、A/S 接受略過、「深查」鈕。</td></tr>
+          <tr><td><code>/train</code></td><td>模擬訓練</td><td>選 contact persona、語音對練（Live 直連）、課後評分。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="sub">後端模組地圖（精簡）</h3>
+    <div class="chips">
+      <span class="chip"><b>auth</b> · JWT / org / membership</span>
+      <span class="chip"><b>crm</b> · CRUD / provenance / 檢索</span>
+      <span class="chip"><b>research</b> · grounding＋爬蟲編排＋upsertFromCrawl</span>
+      <span class="chip"><b>import</b> · 網址/PDF 抽取（SSRF-safe）＋Playwright</span>
+      <span class="chip"><b>generation</b> · slide-spec＋生圖＋自動 QA</span>
+      <span class="chip"><b>decks</b> · deck CRUD / pptx 匯出</span>
+      <span class="chip"><b>realtime</b> · WS：擷取/ASR/分析/改造引擎/approval FSM</span>
+      <span class="chip"><b>asr</b> · AsrProvider＋Gemini 分段轉寫</span>
+      <span class="chip"><b>analysis</b> · rolling window 增量分析→訊號</span>
+      <span class="chip"><b>train</b> · ephemeral token / persona seed / 評分</span>
+      <span class="chip"><b>gemini.ts</b> · generateJson＋生圖＋live token</span>
+    </div>
+  </section>
+
+  <!-- 6. CRM 資料模型 -->
+  <section id="s5">
+    <h2 class="sec"><span class="num">5</span>CRM 資料模型</h2>
+    <p class="sec-sub">SQLite / better-sqlite3＋repository 層。欄位刻意很多——爬蟲先填大半、人再細填/驗證。</p>
+
+    <div class="tree">
+      <div class="tnode"><span class="tlabel">orgs</span> <span class="tmeta">（租戶根，每張業務表帶 org_id）</span></div>
+      <div class="tbranch">
+        <div class="tnode"><span class="tlabel">users</span> — memberships</div>
+        <div class="tnode"><span class="tlabel">賣方側</span>：seller_companies &rarr; products &rarr; competitors（battlecards）</div>
+        <div class="tnode"><span class="tlabel">companies</span>（對方公司，可爬） <span class="ttag crawl">可爬英雄表</span></div>
+        <div class="tbranch">
+          <div class="tnode"><span class="tmeta">子表：</span>company_locations · company_news · company_funding_rounds · company_tech</div>
+          <div class="tnode"><span class="tlabel">對方產品深檔</span>：company_products &rarr; company_product_people；company_departments <span class="ttag core">決策 18</span></div>
+          <div class="tnode"><span class="tlabel">contacts</span>（主管，可爬 + persona，self-ref reports_to）</div>
+          <div class="tnode"><span class="tlabel">deals</span> &rarr; deal_contacts（採購委員會）· deal_products</div>
+        </div>
+        <div class="tnode"><span class="tlabel">meetings</span> &rarr; meeting_attendees · meeting_transcript_segments · meeting_signals</div>
+        <div class="tnode">activities（時間軸）· notes（多型自由筆記）</div>
+        <div class="tnode"><span class="tlabel">field_provenance</span> <span class="ttag trust">信任層</span> · embeddings / profile_cards <span class="ttag trust">檢索層</span> · crawl_jobs</div>
+      </div>
+    </div>
+
+    <h3 class="sub">信任層（為何整個 schema 長這樣）</h3>
+    <p>爬蟲便宜能填的（firmographics）恰恰最沒差異化；真正贏單的欄位（persona、優先事項、異議、決策權）恰恰是爬蟲不可信的。所以每個值都帶溯源，流程是：</p>
+    <div class="chips">
+      <span class="chip"><b>① 爬蟲填</b>：<code>upsertFromCrawl</code> 在同一 tx 寫實體欄位＋逐欄 <code>field_provenance</code> row（filled_by=crawler＋source_url＋confidence）</span>
+      <span class="chip"><b>② 逐欄 provenance</b>：溯源集中一張表，key＝(entity, field)，值永不與 provenance 漂移</span>
+      <span class="chip"><b>③ 用戶確認/細填</b>：UI 動作對映到寫入——「確認」設 verified=1；「細填」寫新值＋新 human provenance row</span>
+      <span class="chip"><b>④ 副駕信任規則</b>：優先取 human/verified 值；爬蟲值標信心徽章，confidence&lt;0.6 措辭改「據公開資訊」</span>
+    </div>
+    <p class="note"><strong>模擬訓練逐欄把關：</strong>persona 欄位必須逐欄查 provenance（該欄最新未被 supersede 的 row 是 human 或 verified=1 才可用），不看整列 rollup——絕不拿爬蟲猜測幻想。</p>
+
+    <h3 class="sub">新的對方產品深檔（決策 18）</h3>
+    <p>撐起副駕「聊到他們某產品時浮出規格/定價/負責人」與研究引擎的對方組織圖。<code>company_products</code> 由爬蟲從官網＋docs＋release notes 先填（產品名、功能、規格、定價頁、整合、公開路線圖）；<code>company_product_people</code>（產品↔人：developer/PM/owner…）與 <code>company_departments</code>（部門/主管/人數，parent 自參照撐組織樹）多為公開資訊拼湊、<strong>信心低、需人驗</strong>。</p>
+  </section>
+
+  <!-- 7. 研究引擎 -->
+  <section id="s6">
+    <h2 class="sec"><span class="num">6</span>研究引擎</h2>
+    <p class="sec-sub">混合式雙引擎——合法自帶引用的 grounding＋深讀指定網址的自建爬蟲。</p>
+    <div class="cards">
+      <div class="card">
+        <span class="kicker">引擎 A</span>
+        <h4>Gemini Google Search grounding</h4>
+        <p>開放背景研究——公司概況、新聞、主管公開背景。合法、自帶引用、零爬蟲維運。</p>
+      </div>
+      <div class="card">
+        <span class="kicker">引擎 B</span>
+        <h4>Playwright 自建爬蟲</h4>
+        <p>搬 ezpagesite「從網址匯入」：stealth 渲染 SPA、子頁連結評分爬取、視覺截圖。<strong>quick</strong>（單頁、輕量）＝會中即時；<strong>detailed</strong>（子頁＋截圖）＝會前 CRM 建檔。</p>
+      </div>
+    </div>
+    <div class="note"><strong>SSRF 防護：</strong>沿用 v1 SSRF-safe 抽取器，並把檢查掛在對使用者提供 URL 的首次 fetch（ezpagesite 原版缺這個）；擋內網與雲端 metadata（169.254.169.254 等）、外網通。</div>
+    <p><strong>會中即時研究觸發＝自動＋手動並行：</strong>訊號分析偵測新話題/新人名 &rarr; 自動發研究（每場設次數/成本上限）；HUD 有「深查」鈕讓報告者點名主題。爬完 &rarr; <code>upsertFromCrawl</code> 寫實體欄位＋provenance rows &rarr; UI 呈現「確認/細填」。</p>
+  </section>
+
+  <!-- 8. 里程碑 -->
+  <section id="s7">
+    <h2 class="sec"><span class="num">7</span>里程碑與時間結構</h2>
+    <p class="sec-sub">M0→M1 是序列地基；M2/M3/M4 三線並行（M1 契約凍結後同時開工）；M5 收整合。</p>
+
+    <div class="mline">
+      <div class="mstep">
+        <span class="mtag">M0</span>
+        <h4>地基</h4>
+        <p>monorepo、shared 契約、packages/crm（DbPort＋migration）、auth、i18n、gemini client。驗收：typecheck 全綠、migration 建表、auth fail-fast。</p>
+      </div>
+      <div class="mconnect">&rarr;</div>
+      <div class="mstep">
+        <span class="mtag">M1</span>
+        <h4>CRM＋研究引擎</h4>
+        <p>全 schema＋repositories、provenance 確認/細填、研究引擎（grounding＋爬蟲＋SSRF）、embeddings 檢索、CRM 前端。驗收：爬蟲填欄、SSRF 擋內網、檢索 org-scoped 不外洩。</p>
+      </div>
+      <div class="mconnect">&rarr;</div>
+      <div class="mparallel">
+        <div class="plabel">三線並行</div>
+        <div class="mstep"><span class="mtag p">M2</span><h4>DynamicSlide（線 A）</h4><p>CSS 生成、wizard、pptx、pre-meeting 生圖、append-only（I1）、approval FSM（I2）、/present 零-HUD。</p></div>
+        <div class="mstep"><span class="mtag p">M3</span><h4>會中副駕（線 B）</h4><p>realtime WS、ASR、analysis 訊號、CRM 檢索接會中、HUD、自動+手動研究、presenter authz。</p></div>
+        <div class="mstep"><span class="mtag p">M4</span><h4>模擬訓練（線 C）</h4><p>train 模組、ephemeral token、persona seed、Live 直連＋compression/resumption、語音 UI、課後評分。</p></div>
+      </div>
+      <div class="mconnect">&rarr;</div>
+      <div class="mstep">
+        <span class="mtag">M5</span>
+        <h4>整合</h4>
+        <p>三線整合冒煙全鏈路、PII 遮蔽、TTL、成本記帳、CSP/sanitize、code-review＋simplify。</p>
+      </div>
+    </div>
+    <p class="note"><strong>驗收精神：</strong>每個里程碑宣稱完成前，派 fresh-context agent 做 read-back 或跑測試（驗證不自驗）；I2/authz 一律用「非 presenter／跨 org」攻擊者憑證測被拒。</p>
+
+    <h3 class="sub">S1–S5 Spike（動工前先驗地基假設）</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th style="width:50px">#</th><th style="width:190px">Spike</th><th>驗什麼</th><th style="width:120px">需使用者協助</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="cnum">S1 <span class="pill hi">最高風險</span></td>
+            <td>雙帳號擷取 Meet 分頁音訊</td>
+            <td>B profile 開 Meet＋Copilot 分頁、getDisplayMedia 拿含 A 的混音、zero-track 守衛、AudioWorklet 出 16k PCM；順驗跨 profile Window-surface 備援。gate M3。</td>
+            <td><span class="pill user">開真實 Meet</span> 兩個 Google 帳號＋一場會議</td>
+          </tr>
+          <tr>
+            <td class="cnum">S2</td>
+            <td>Gemini 分段轉寫中英混合</td>
+            <td>ASR 品質/延遲可用；下游 LLM 能從逐字稿推斷 speaker。失敗換 Google STT v2。</td>
+            <td><span class="pill user">提供音檔</span> 一段中英混合對話</td>
+          </tr>
+          <tr>
+            <td class="cnum">S3 <span class="pill hi">最高風險</span></td>
+            <td>Gemini Live 語音對練</td>
+            <td>ephemeral token 直連、persona system prompt、打斷、逐字稿、&gt;15min compression+resumption。連線可自驗，體驗需開口。gate M4。</td>
+            <td><span class="pill user">開口對練</span> 實際驗收自然度/打斷</td>
+          </tr>
+          <tr>
+            <td class="cnum">S4</td>
+            <td>Playwright 爬蟲＋SSRF</td>
+            <td>渲染對方官網、子頁爬取、SSRF 擋內網（含雲端 metadata）、外網通、不誤殺。gate M1 爬蟲路徑。</td>
+            <td>agent 可自驗</td>
+          </tr>
+          <tr>
+            <td class="cnum">S5</td>
+            <td>OpenAI 生圖實測</td>
+            <td>繁中 in-image 用自家銷售字串實測、<code>1536x864</code> 延遲與品質、moderation 拒絕 fallback、gpt-image-1-mini 是否夠格。</td>
+            <td><span class="pill user">前置</span> OpenAI 組織驗證＋查 tier 配額</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 9. 風險 -->
+  <section id="s8">
+    <h2 class="sec"><span class="num">8</span>風險與誠實揭露</h2>
+    <p class="sec-sub">已知風險與待決，攤開講清楚。</p>
+    <ul class="tight">
+      <li><strong>混音無乾淨分軌：</strong>帳號 B 聽到的是一條混音，失去 presenter/client 分軌 &rarr; speaker 靠 LLM 依內容/語氣推斷，準確度未知（S2 驗）。</li>
+      <li><strong>只 Chromium 桌面（接收端）：</strong>Firefox/Safari/行動不支援分頁音訊擷取——硬約束，M0 要向使用者再確認可接受。</li>
+      <li><strong>同瀏覽器約束：</strong>雙帳號需 B 的 Meet 分頁＋Copilot 分頁同 profile，實戰 setup 要教學（可能需一頁操作指南）。</li>
+      <li><strong>生圖一律會前預生：</strong>gpt-image-2 實證慢（medium ~80s 級）、會中不可行；會中誤擋不可在客戶面前發生。前置＝OpenAI 組織驗證＋tier 配額確認。</li>
+      <li><strong>Live API 配額：</strong>並發 session 上限依帳號 tier，M4 前查配額頁。</li>
+      <li><strong>會中研究成本／合規：</strong>自動爬對方主管有成本與合規邊界；每場上限＋只蒐集公開資訊＋provenance 溯源；合規責任在使用者（工具僅呈現公開資料）。</li>
+    </ul>
+  </section>
+
+  <!-- 10. 三件事 -->
+  <section id="s9">
+    <h2 class="sec"><span class="num">9</span>你們現在就能做的三件事</h2>
+    <p class="sec-sub">不必等程式碼，這三件現在就能推進、且會直接解鎖最高風險的 spike。</p>
+    <div class="steps3">
+      <div class="stepbig">
+        <span class="n">1</span>
+        <h4>實測擷取相容性矩陣</h4>
+        <p>用 Chrome／Edge 打開 <code>tools/capture-test.html</code>（免安裝、雙擊可開），在各裝置×各開會軟體（Meet/Zoom/Teams…）實測分頁音訊擷取，把 PASS/FAIL 填進 <code>tools/README.md</code> 的矩陣。這是 S1 的載具。</p>
+      </div>
+      <div class="stepbig">
+        <span class="n">2</span>
+        <h4>OpenAI 組織驗證＋查配額</h4>
+        <p>到 OpenAI console 完成 API Organization Verification（未驗證的 org 呼叫 gpt-image-* 會被拒），並查自己帳號的 tier 影像請求配額。這是 S5 生圖的前置。</p>
+      </div>
+      <div class="stepbig">
+        <span class="n">3</span>
+        <h4>準備兩個 Google 帳號</h4>
+        <p>備妥兩個 Google 帳號、約一場真實 Meet 測試——agent 無法自己開會。這是 S1（最高風險、地基假設）能否成立的必要條件。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11. 文件索引 -->
+  <section id="s10">
+    <h2 class="sec"><span class="num">10</span>文件索引</h2>
+    <p class="sec-sub">repo 內每份文件與一句話用途——想深挖時知道去哪。真相來源是 00-DECISIONS。</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th style="width:300px">檔案</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>docs/00-DECISIONS.md</code></td><td><strong>唯一真相來源</strong>——已拍板決策（14＋15–18）、會議模型、研究回填校準。</td></tr>
+          <tr><td><code>docs/PRODUCT_SPEC.md</code></td><td>產品規格——一核心三消費端怎麼運作、流程、不變量、延遲預算、平台約束。</td></tr>
+          <tr><td><code>docs/ARCHITECTURE_PLAN.md</code></td><td>架構與里程碑計畫書——技術棧、monorepo、模組地圖、M0–M5＋驗收、spike、風險。</td></tr>
+          <tr><td><code>docs/CRM_SCHEMA.md</code></td><td>CRM 資料 schema——全 DDL、repository/DbPort、provenance 信任層、embedding 檢索、爬蟲能/不能填。</td></tr>
+          <tr><td><code>docs/research/API_FINDINGS.md</code></td><td>API 事實（不能猜）——Gemini Live/生圖/OpenAI 的 model ID、限制、延遲、價格、擷取相容性。</td></tr>
+          <tr><td><code>docs/research/EZPAGESITE_CRAWLER.md</code></td><td>ezpagesite「從網址匯入」爬蟲的原版實作地圖（借碼參考）。</td></tr>
+          <tr><td><code>docs/CHANGE_TRACKER.md</code></td><td>強制變更日誌——每次改程式檔立刻追加一筆（決策 17）。</td></tr>
+          <tr><td><code>docs/MODEL_DISPATCH.md</code></td><td>派 subagent、選模型、驗證工作的調度規則。</td></tr>
+          <tr><td><code>docs/JUDGMENT_RUBRICS.md</code></td><td>判斷準則——升級？完成了嗎？該問使用者嗎？</td></tr>
+          <tr><td><code>docs/TASK_TEMPLATES.md</code></td><td>交辦 subagent 的模板（含平行契約鎖定守則）。</td></tr>
+          <tr><td><code>docs/MAINTENANCE.md</code></td><td>制度檔修改許可權與教訓回寫格式。</td></tr>
+          <tr><td><code>docs/DIAGNOSIS.md</code></td><td>環境陷阱／前三大坑速查。</td></tr>
+          <tr><td><code>docs/LESSONS.md</code></td><td>教訓回寫（v1 踩坑與 v2 新教訓）。</td></tr>
+          <tr><td><code>docs/LETTER_TO_FUTURE_SESSIONS.md</code></td><td>接手新 session 的全局說明信。</td></tr>
+          <tr><td><code>docs/WORKLOG.md</code></td><td>跨 session 狀態——上次做到哪。</td></tr>
+          <tr><td><code>docs/ORIGINAL_VISION_v1.html</code></td><td>v1 原始願景快照（參考件）。</td></tr>
+          <tr><td><code>tools/capture-test.html</code></td><td>音訊擷取相容性測試工具（單檔、雙擊可開、免安裝）——S1 載具。</td></tr>
+          <tr><td><code>tools/README.md</code></td><td>擷取測試工具說明＋結果矩陣範本。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <div>Git repo：<code>c:/Users/Martin/Desktop/MeetCopilot_v2</code>（已 git init，主要備份）</div>
+    <div style="margin-top:6px">產出日期：2026-07-07　·　狀態：計畫書已定案・尚未動工</div>
+    <div class="truth">本檔為<strong>快照</strong>，內容彙整自 repo 內既有文件；如有任何衝突或更新，<strong>真相來源以 <code>docs/00-DECISIONS.md</code> 為準</strong>。</div>
+  </div>
+</footer>
+
+</body>
+</html>

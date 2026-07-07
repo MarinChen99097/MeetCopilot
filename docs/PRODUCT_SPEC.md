@@ -33,7 +33,7 @@
 - 會中：依對話**新增**簡報頁——**一律 append 到簡報尾端當「補充說明」**（不再插入特定頁後面）。
 - **兩種生成路徑**：
   1. **沿用先前簡報風格的 CSS 生成**（會中即時路徑；快；繼承 anchor 頁 theme；結構化 slide-spec + 固定模板渲染，可編輯、pptx 可匯出）。
-  2. **AI 生圖**（**預設 pre-meeting**，見 API_FINDINGS §C）：(a) 背景圖 + CSS 真文字疊層（預設）；(b) 整頁生圖（純視覺頁，API 參數 `gemini-3-pro-image-preview`）。會中預設只重用會前已生的背景圖；「會中 1K 快速生圖」選配待 S5 實測延遲後由使用者決定開不開。
+  2. **AI 生圖**（**一律 pre-meeting**；供應商＝**OpenAI `gpt-image-2`**，決策 15，見 API_FINDINGS §F）：(a) 背景圖 + CSS 真文字疊層（預設；quality low/medium、`1536x864` 原生 16:9）；(b) 整頁生圖（純視覺頁；quality high；繁中 in-image 品質由 S5 實測）。會中只重用會前已生的圖——gpt-image-2 延遲 ~80s 級、會中不可行；快速選配唯一候選 `gpt-image-1-mini`（S5 另議）。
 - **新頁仍需報告者批准**（I2）：進 HUD 佇列，報告者接受才 append 到 deck 尾部；未批准客戶永遠看不到。
 
 ### 產品二：會中副駕（Meeting Copilot）
@@ -73,7 +73,7 @@
 | 副駕建議浮現（自「話說出口」起算，MVP 誠實值） | ~4–7 s（ASR 分段延遲主導；S2 spike 實測校準） |
 | DynamicSlide 新頁（CSS 路徑，自 final segment 起算） | **< 4 s**（可先出佔位再補內容）|
 | 會中即時研究卡（quick 爬蟲／grounding，**非同步**） | ~5–15 s（不阻塞 <2s 副駕路徑：CRM 既存卡先秒出、研究卡晚到補上）|
-| **AI 生圖** | **預設會前預生**（延遲無官方數字＋會中誤擋風險；S5 實測後可開會中 1K 快速選配，見 API_FINDINGS §C）|
+| **AI 生圖**（OpenAI gpt-image-2） | **一律會前預生**（實測 ~80s 級＋會中誤擋風險；會中選配僅 `gpt-image-1-mini` 候選、S5 另議，見 API_FINDINGS §F）|
 | 模擬訓練語音來回（Live API） | 次秒級（原生音訊）|
 
 ## 資料與隱私
@@ -89,3 +89,5 @@
 - 帳號 B 的 Meet 分頁與 Copilot 分頁**建議同一瀏覽器 profile**（分頁音訊擷取的可靠路徑；跨 profile 的 Window-surface 備援由 S1 驗證，音訊可得性隨 OS/版本）。
 - Live API 單場 ~15 分鐘 → 模擬訓練必開 contextWindowCompression + sessionResumption。
 - AI 生圖被內容安全擋時必須 fallback 到漸層/CSS 背景，絕不出壞頁。
+- **生圖前置**：OpenAI console 完成 **API Organization Verification**（未驗證的 org 呼叫 `gpt-image-*` 會被拒）；所有生圖輸出強制帶 C2PA＋SynthID 溯源（對外展示須知情）。
+- **裝置×開會軟體相容性**：動工前與新增裝置時，用 `tools/capture-test.html`（免安裝、雙擊開）實測並記錄到 tools/README 的矩陣。

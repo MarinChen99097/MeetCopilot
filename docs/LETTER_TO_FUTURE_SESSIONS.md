@@ -17,7 +17,7 @@ v1（隔壁 `c:/Users/Martin/Desktop/MeetCopilot`）是「單一會中簡報 Cop
 
 1. **別拿 Gemini Live API 做會議 ASR**——它沒有 speaker diarization、為單一使用者設計、單場 15 分鐘。會議轉寫走 Gemini 分段轉寫（藏在 `AsrProvider` 後）。Live API 只給**語音模擬訓練**。
 2. **雙帳號的「同瀏覽器」陷阱**——分頁 picker 只列**同一個 Chromium profile** 的分頁（UA 行為），所以 B 的 Meet 分頁與 Copilot 擷取分頁**放同 profile 才是可靠路徑**（跨 profile 有 Window-surface 備援，音訊可得性 S1 一併驗）。接收端**只有 Chrome/Edge 桌面**能擷取。這是 **S1 spike**，最高風險，動工優先驗。
-3. **AI 生圖預設會前預生**——延遲無官方數字（第三方估：flash 級 2–4s、flash-lite 目標 sub-2s；S5 實測校準），且**會中被內容安全誤擋不可在客戶面前發生**；會中即時預設只走 CSS 沿用風格路徑，「會中 1K 快速生圖」選配由 S5 實測後決定。
+3. **AI 生圖一律會前預生（供應商＝OpenAI `gpt-image-2`，決策 15）**——實測延遲 ~80s 級（agentic 規劃階段），會中完全不可行；且**會中被內容安全誤擋不可在客戶面前發生**。會中即時只走 CSS 沿用風格路徑；快速選配唯一候選 `gpt-image-1-mini`（S5 另議）。前置：OpenAI 組織驗證。另注意：每次改程式檔都要照 `docs/CHANGE_TRACKER.md` 立刻記一筆（決策 17，強制）。
 
 ## 從哪開始
 
