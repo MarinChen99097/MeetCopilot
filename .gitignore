@@ -23,3 +23,6 @@ Thumbs.db
 # scratch
 /tmp/
 *.tmp
+
+# TS incremental build info
+*.tsbuildinfo

@@ -1,10 +1,16 @@
 {
-  "//": "Build 專用（tsc -b）：emit 到 dist/ 需 rootDir。以 project reference 引入 shared，其 .d.ts 由被參照的 composite 專案先建置（tsc -b 自動排序），供 crm emit 時解析——避免把 shared src 併入 crm rootDir。Typecheck 走 tsconfig.json（noEmit，零建置順序）。",
+  "//": "Build 專用（deploy 映像用）：改用 plain `tsc -p`（非 `tsc -b`）並覆寫 base 的 paths 指向 shared 已建置的 dist .d.ts（Dockerfile 先 build shared→crm）。原本的 `tsc -b` + project reference 依賴 .tsbuildinfo/mtime 的 up-to-date 判定，在 Docker/Linux 乾淨建置（COPY 正規化 mtime）會誤判而噴 TS6305，連帶讓 shared 型別解析失敗、cascade 成 implicit-any。改為與 apps/server 相同的 paths→dist .d.ts 模式即免疫。必須自設 baseUrl='.'（否則 paths 相對於繼承自 base 的 baseUrl=repo root，`../..` 會指到檔案系統根之上、在 Linux 上 TS2307）。shared 的 .d.ts 為外部宣告，tsc 不 emit、也不觸發 rootDir(TS6059)。排除 *.test.ts。",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "noEmit": false,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@meetcopilot/shared": ["../shared/dist/index.d.ts"]
+    }
   },
-  "references": [{ "path": "../shared" }],
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
 }

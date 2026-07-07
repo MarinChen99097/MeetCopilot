@@ -9,6 +9,7 @@
     "declarationMap": false,
     "sourceMap": false,
     "resolveJsonModule": true,
+    "baseUrl": ".",
     "paths": {
       "@meetcopilot/shared": ["../../packages/shared/dist/index.d.ts"],
       "@meetcopilot/crm": ["../../packages/crm/dist/index.d.ts"]

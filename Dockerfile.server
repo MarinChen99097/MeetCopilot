@@ -27,8 +27,10 @@ COPY apps/server/package.json ./apps/server/
 COPY apps/web/package.json ./apps/web/
 
 # 2) Full install (dev deps included — tsc is needed to build to dist).
+#    NODE_ENV=production (set above) makes npm ci omit devDependencies by default,
+#    so --include=dev is required or tsc is missing at build time.
 #    better-sqlite3 uses a prebuilt binary for linux-x64/node22 (no compile).
-RUN npm ci
+RUN npm ci --include=dev
 
 # 3) Sources needed to build the server (web source not needed in this image).
 COPY tsconfig.base.json ./
