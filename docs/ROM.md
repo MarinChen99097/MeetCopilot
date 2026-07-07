@@ -36,6 +36,14 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-07 17:25 | 接收端瀏覽器約束放寬：Chrome/Edge → Chromium 系（Brave 實測通過）
+- **誰決定**: Fable（依使用者實測證據）
+- **決策**: 「接收聲音端限 Chrome/Edge 桌面」放寬為「**Chromium 系桌面瀏覽器**——Chrome/Edge（文件背書）＋Brave（使用者裝置 2026-07-07 實測 9 項全 PASS，含分頁音訊擷取與錄放回聽）」。同時在 capture-test 工具補 Brave 偵測（UA 偽裝成 Chrome，需 `navigator.brave.isBrave()` 判別）。
+- **脈絡與理由**: 使用者用 Brave 跑第一輪 capture-test：環境 4 項＋測試 A（分頁串流、1 條音軌、160KB 錄音可回放）＋測試 B（麥克風）全 PASS；displaySurface=browser、48kHz 立體聲、AudioContext@16k 正常。Brave 是 Chromium 分支，API 面一致。
+- **考慮過的替代**: 維持只寫 Chrome/Edge（否——使用者主力瀏覽器就是 Brave，實測已過就該入冊）。
+- **留意（未消風險）**: (1) 本輪是單機自測，**還不是真實雙帳號 Meet 情境**（裝置/軟體欄未填）——S1 仍要跑真會議版；(2) Brave 的防指紋（farbling）會對 Web Audio 輸出加極微噪聲，理論上不影響 ASR 品質，S2 實測時順帶確認；(3) Brave Shields 若把會議網站的資源擋掉屬另一類問題，實測時 Shields 保持預設即可。
+- **影響**: PRODUCT_SPEC 硬性平台約束、API_FINDINGS §B、tools/capture-test.html、tools/README.md 矩陣首筆。
+
 ### 2026-07-07 | 建立 ROM 決策總帳制度（本檔）
 - **誰決定**: 使用者（指示）＋Fable（設計細節）
 - **決策**: 在 CHANGE_TRACKER 之外新增 ROM——記錄使用者或 Claude 的所有決策；不精簡、可長可雜；每 500 行歸檔到 `rom_archives/ROM_NNN.md`（序號命名）；ROM.md 頂部維護歸檔目錄（每檔一則簡介）。Fable 補的設計：與 00-DECISIONS 分工（蒸餾 vs 全量）、錨點插入機制沿用 CHANGE_TRACKER、查詢順序三段式。

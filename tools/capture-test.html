@@ -638,6 +638,18 @@
     capture.browser = guess.browser;
     capture.os = guess.os;
 
+    // Brave 的 UA 偽裝成 Chrome，UA 嗅探驗不出來；官方判別法是 navigator.brave.isBrave()（async）。
+    // 矩陣要記「真實瀏覽器」，否則 Brave 的測試結果會被誤記到 Chrome 帳上。
+    if(navigator.brave && typeof navigator.brave.isBrave === 'function'){
+      navigator.brave.isBrave().then(function(isBrave){
+        if(!isBrave) return;
+        var ver = (ua.match(/Chrome\/([0-9.]+)/) || [])[1] || '';
+        capture.browser = 'Brave' + (ver ? ' ' + ver : '') + '（Chromium，UA 顯示 Chrome）';
+        $('env-guess').textContent = capture.browser + ' / ' + capture.os;
+        logEvent('偵測到 Brave（UA 偽裝為 Chrome，已更正瀏覽器標記）', 'c');
+      }).catch(function(){});
+    }
+
     var sec = window.isSecureContext === true;
     $('env-secure').textContent = String(sec) + (location.protocol === 'file:' ? '（file://）' : '');
     setResult('env.secure', sec ? 'pass' : 'fail', String(sec));

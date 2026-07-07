@@ -96,7 +96,7 @@ session.sendRealtimeInput({ audio: { data: base64Chunk, mimeType: 'audio/pcm;rat
 ### B4. 硬約束與風險（排序）
 1. **必須引導使用者勾「Share tab audio」**；漏勾 → 靜音流無錯 → 必須偵測 `getAudioTracks().length===0` 並教學。checkbox 預設狀態 UNCERTAIN（版本/surface 相關）→ 一律建 zero-track 守衛。（S1 spike 驗）
 2. **同瀏覽器（分頁路徑）＝UA 行為、非規範保證**（見 B2.2）→ 端到端實測真實 setup，並順驗 Window-surface 跨 profile 備援的音訊可得性。（S1 spike 驗）
-3. **只 Chromium 桌面**：Chrome 74+/Edge 79+ ✅；**Firefox ❌**（丟音訊無錯）、**Safari ❌**、**行動裝置全 ❌**。→ **硬性產品約束：報告者接收端限 Chrome/Edge 桌面**。（注意：HUD 檢視端可以是手機，因為 HUD 只是看，不擷取。）
+3. **只 Chromium 桌面**：Chrome 74+/Edge 79+ ✅；**Brave ✅（2026-07-07 使用者裝置實測 9 項全 PASS**——UA 偽裝 Chrome 需 `navigator.brave.isBrave()` 判別；防指紋 farbling 對 Web Audio 加極微噪聲，理論上不影響 ASR，S2 順帶確認）；**Firefox ❌**（丟音訊無錯）、**Safari ❌**、**行動裝置全 ❌**。→ **硬性產品約束：報告者接收端限 Chromium 系桌面**。（注意：HUD 檢視端可以是手機，因為 HUD 只是看，不擷取。）
 4. 分享 session 脆弱：按「停止分享」、耳機插拔、關分頁都會殺 track → 需健壯 `ended` 處理 + 重新提示。
 5. 備援：`chrome.tabCapture` 更乾淨但**需 Chrome 擴充**（非純 web），日後要才做。
 

@@ -85,7 +85,7 @@
 
 ## 硬性平台約束（來自 API 研究）
 
-- **會中「接收聲音」端限 Chrome/Edge 桌面**（getDisplayMedia 分頁音訊只在 Chromium 桌面；Firefox/Safari/行動不支援）。HUD 檢視端不限。
+- **會中「接收聲音」端限 Chromium 系桌面瀏覽器**——Chrome/Edge（文件背書）＋**Brave（2026-07-07 使用者裝置實測通過**，UA 偽裝 Chrome、防指紋噪聲待 S2 順帶確認）；Firefox/Safari/行動不支援。HUD 檢視端不限。
 - 帳號 B 的 Meet 分頁與 Copilot 分頁**建議同一瀏覽器 profile**（分頁音訊擷取的可靠路徑；跨 profile 的 Window-surface 備援由 S1 驗證，音訊可得性隨 OS/版本）。
 - Live API 單場 ~15 分鐘 → 模擬訓練必開 contextWindowCompression + sessionResumption。
 - AI 生圖被內容安全擋時必須 fallback 到漸層/CSS 背景，絕不出壞頁。

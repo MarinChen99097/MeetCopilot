@@ -8,7 +8,7 @@ MeetCopilot v2 採用**雙帳號會議模型**：一個「監聽」瀏覽器 pro
 
 這裡有一條硬性技術限制要先驗證清楚：
 
-- 分頁音訊擷取是 **Chromium 桌面版（Chrome／Edge）限定**。
+- 分頁音訊擷取是 **Chromium 系桌面瀏覽器限定**（Chrome／Edge 有文件背書；**Brave 已於 2026-07-07 在使用者裝置實測通過**——注意 Brave 的 UA 偽裝成 Chrome，工具已內建偵測更正）。
 - 來源選擇器裡的**「同時分享分頁音訊 / Share tab audio」核取方塊**是關鍵，沒勾就是 0 音軌。
 - 選「視窗（Window）」surface 是備援方案，**視窗音訊是否可用會隨作業系統不同**（Windows 較常有、macOS 常常沒有）。
 
@@ -58,7 +58,7 @@ python -m http.server 8000
 
 | 日期 | 裝置 / OS | 瀏覽器 + 版本 | 開會軟體 | 擷取 surface（分頁/視窗/螢幕） | 有音軌? | 錄放回聽品質 | 備註 |
 |---|---|---|---|---|---|---|---|
-| 2026-07-07 | Dell XPS 13 / Win11 | Chrome 126 | Meet 網頁版 | 分頁 | 是（1） | 清晰 | 有勾分享分頁音訊 |
+| 2026-07-07 | 使用者主力機 / Win11 | **Brave** 150（Chromium；UA 顯示 Chrome） | （首輪自測，非會議分頁） | 分頁 | 是（1） | 可回放（160KB／10s） | file:// 開啟、9 項全 PASS；48kHz 立體聲、echoCancellation=false；**真實雙帳號 Meet 情境待測（S1）** |
 | | | | | | | | |
 | | | | | | | | |
 | | | | | | | | |
@@ -80,6 +80,7 @@ python -m http.server 8000
 |---|---|---|
 | Chrome 桌面版 — 分頁 + 勾分享分頁音訊 | ✅ 應 PASS | 主要支援路徑 |
 | Edge 桌面版 — 分頁 + 勾分享分頁音訊 | ✅ 應 PASS | 同為 Chromium |
+| Brave 桌面版 — 分頁 + 勾分享分頁音訊 | ✅ **實測 PASS**（2026-07-07） | Chromium 系；UA 偽裝 Chrome，工具已加 `navigator.brave` 偵測。防指紋 farbling 對 Web Audio 加極微噪聲，理論上不影響 ASR（S2 順帶確認） |
 | Chrome/Edge — 沒勾分享分頁音訊 | ❌ 0 音軌 | 核取方塊沒勾就取不到 |
 | Firefox（桌面/行動） | ❌ 預期 FAIL | 不支援分頁音訊擷取 |
 | Safari（桌面/iOS） | ❌ 預期 FAIL | 不提供分頁音訊 |
