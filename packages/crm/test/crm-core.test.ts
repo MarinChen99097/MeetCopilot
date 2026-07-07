@@ -5,13 +5,13 @@
  *  (c) tx：tx(fn) 內丟例外 → 寫入 rollback。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createCrmCore } from "../src/core.js";
+import { makeTestCore, listTableNames } from "../src/test-helpers.js";
 import type { CrmCore } from "../src/ports.js";
 
 let core: CrmCore;
 
 beforeEach(async () => {
-  core = await createCrmCore(":memory:");
+  core = await makeTestCore();
   await core.migrate();
 });
 
@@ -21,11 +21,7 @@ afterEach(() => {
 
 describe("migrate", () => {
   it("creates the 3 tenancy tables", async () => {
-    const rows = await core.db.all<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table'",
-      [],
-    );
-    const names = rows.map((r) => r.name);
+    const names = await listTableNames(core);
     expect(names).toContain("orgs");
     expect(names).toContain("users");
     expect(names).toContain("memberships");

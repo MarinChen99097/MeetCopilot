@@ -155,7 +155,9 @@ export class SqliteCompanyRepository implements CompanyRepository {
     const where = ["org_id = ?"];
     const params: unknown[] = [orgId];
     if (filter.query) {
-      where.push("(name LIKE ? OR domain LIKE ?)");
+      // LOWER(col) LIKE LOWER(?)：SQLite 的 LIKE 對 ASCII 預設不分大小寫，Postgres 的 LIKE 分大小寫；
+      // 兩邊都 LOWER() 讓搜尋在兩種 driver 上行為一致（避免移植後 CRM 搜尋靜默改變結果）。
+      where.push("(LOWER(name) LIKE LOWER(?) OR LOWER(domain) LIKE LOWER(?))");
       const like = `%${filter.query}%`;
       params.push(like, like);
     }

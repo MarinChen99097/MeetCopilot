@@ -36,6 +36,16 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 11:35 | 部署路線定案：Cloud Run(min=0/max=1)+Cloud SQL Postgres；Postgres 移植完成
+- **誰決定**: 使用者（要 scale-to-zero autoscaling＋「可以創一個 SQL 資料庫」）＋Fable（架構裁決）
+- **決策**:
+  1. **改上 Cloud Run + Cloud SQL Postgres**（取代原決策 20 的 GCE 單 VM+SQLite）。理由：使用者要 scale-to-zero（min=0）經濟性，SQLite 在 Cloud Run 短暫 FS 會掉資料→必須 Cloud SQL。**Cloud Run 自帶 *.run.app HTTPS**→網域/TLS 問題消失（secure context 免費，麥克風/Live 可用）。
+  2. **max=1 硬約束（非使用者說的 2）**：會中副駕 session 狀態在單進程記憶體＋WS 長連線，多實例會拆散會議。min=0/max=1 給 scale-to-zero 又正確；max>1 需未來 Redis 外部化 session。cpu=2/ram=4 OK。
+  3. **成本誠實**：Cloud Run compute 閒置→$0，但 **Cloud SQL 本身不 scale-to-zero**（最小 db-f1-micro 約 $8–10/月常態底）。仍遠低於 e2-medium 常開 VM（$27）。若要連 DB 都 $0 idle＝Neon 等第三方 serverless PG（非 GCP 原生，使用者要的是同 ezpagesite 專案故用 Cloud SQL）。
+  4. **Postgres 移植完成並驗證**：雙驅動（不破 SQLite）、crm 43/43 兩 DB 皆綠、真 server 在 pg 端到端。
+- **考慮過的替代**: GCE 小 VM+SQLite+排程停機（幾乎零工程但非真 autoscaling；使用者選了 SQL DB 路）；Neon serverless PG（$0 idle 但非 GCP 專案內）。
+- **影響**: packages/crm 雙驅動、apps/server crm.ts；接著 provision Cloud SQL＋Cloud Run（ezpagesite 專案）＋deploy 2 服務（server/web）。ARCHITECTURE 部署節與決策 20 更新為 Cloud Run 路線。
+
 ### 2026-07-08 09:05 | M5 PASS — 整個產品 M0–M5 完成（含誠實 gap）
 - **誰決定**: Fable（依全鏈路整合驗收裁決）
 - **決策**:

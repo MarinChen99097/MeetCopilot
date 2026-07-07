@@ -15,14 +15,17 @@ export class SqliteUsageRepository implements UsageRepository {
   constructor(private readonly db: DbPort) {}
 
   /**
-   * 冪等記一筆用量。INSERT OR IGNORE → (org_id, idempotency_key) 已存在則靜默忽略（不拋錯、不重複計費）。
+   * 冪等記一筆用量。ON CONFLICT (org_id, idempotency_key) DO NOTHING → 已存在則靜默忽略（不拋錯、不重複計費）。
+   * 用 ON CONFLICT 而非 SQLite-only 的 INSERT OR IGNORE，讓同一字串在 SQLite（≥3.24）與 Postgres 皆合法。
+   * 衝突目標對應 009_ops.sql 的 UNIQUE(org_id, idempotency_key)。
    * est_cost_usd 由呼叫端（Meter）依定價常數估算後帶入（欄位 NOT NULL DEFAULT 0，故一律給值）。
    */
   async record(orgId: string, event: NewUsageEvent): Promise<void> {
     await this.db.run(
-      `INSERT OR IGNORE INTO usage_events
+      `INSERT INTO usage_events
          (id, org_id, kind, model, input_tokens, output_tokens, est_cost_usd, meeting_id, idempotency_key, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (org_id, idempotency_key) DO NOTHING`,
       [
         uuidv7(),
         orgId,

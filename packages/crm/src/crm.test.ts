@@ -8,7 +8,7 @@
  *  - findPrimaryOrgOf：最早加入的 org
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createCrmCore } from "./core.js";
+import { makeTestCore, listTableNames } from "./test-helpers.js";
 import type { CrmCore } from "./ports.js";
 import type { CrawlPayload } from "@meetcopilot/shared";
 
@@ -17,7 +17,7 @@ const ORG = "org-A";
 const USER = "user-1";
 
 beforeEach(async () => {
-  core = await createCrmCore(":memory:");
+  core = await makeTestCore();
   await core.migrate();
   // 直接種 org（repo.create 會生 uuid，但測試想用固定 org id 便於斷言）。
   await core.db.run("INSERT INTO orgs (id, name, default_locale, created_at) VALUES (?, ?, ?, ?)", [
@@ -32,11 +32,7 @@ afterEach(() => core.close());
 
 describe("migrate", () => {
   it("creates all core tables", async () => {
-    const rows = await core.db.all<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table'",
-      [],
-    );
-    const names = new Set(rows.map((r) => r.name));
+    const names = new Set(await listTableNames(core));
     for (const t of [
       "companies",
       "contacts",

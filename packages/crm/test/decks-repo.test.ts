@@ -2,7 +2,7 @@
  * DeckRepository 驗收（vitest, in-memory DB）：007_decks.sql DDL + CRUD + I1（append-only）守門 + image_jobs。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createCrmCore } from "../src/core.js";
+import { makeTestCore } from "../src/test-helpers.js";
 import { I1ViolationError } from "../src/repos-decks.js";
 import type { CrmCore } from "../src/ports.js";
 import type { SlideSpec } from "@meetcopilot/shared";
@@ -15,7 +15,7 @@ function slide(text: string): SlideSpec {
 }
 
 beforeEach(async () => {
-  core = await createCrmCore(":memory:");
+  core = await makeTestCore();
   await core.migrate();
 });
 afterEach(() => core.close());

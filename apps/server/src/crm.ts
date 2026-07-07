@@ -13,8 +13,18 @@
  */
 import type { CrmCore } from "@meetcopilot/crm";
 
-/** Signature A2 commits to (ports.ts trailing comment): `createCrmCore(dbPath): Promise<CrmCore>`. */
-type CreateCrmCore = (dbPath: string) => Promise<CrmCore>;
+/**
+ * Signature createCrmCore commits to (packages/crm/src/core.ts): back-compat string overload
+ * `createCrmCore(dbPath)` → SQLite; plus options overload `createCrmCore({ driver, connString, dbPath })`.
+ * We accept both here so the server can pick Postgres via env (Cloud Run + Cloud SQL) WITHOUT
+ * changing the default local-dev SQLite path.
+ */
+type CrmCoreOptions = {
+  driver?: "sqlite" | "pg";
+  dbPath?: string;
+  connString?: string;
+};
+type CreateCrmCore = (arg: string | CrmCoreOptions) => Promise<CrmCore>;
 
 export async function initCrm(dbPath: string): Promise<CrmCore> {
   const mod = (await import("@meetcopilot/crm")) as unknown as {
@@ -25,6 +35,15 @@ export async function initCrm(dbPath: string): Promise<CrmCore> {
       "[crm] @meetcopilot/crm does not export createCrmCore yet — A2 (packages/crm/src/core.ts) " +
         "must land and be re-exported from the package index before the server can start.",
     );
+  }
+  // Driver selection: DB_DRIVER=pg (+ DATABASE_URL) → Postgres/Cloud SQL; otherwise SQLite at dbPath.
+  const driver = (process.env.DB_DRIVER ?? "sqlite").trim();
+  if (driver === "pg") {
+    const connString = (process.env.DATABASE_URL ?? "").trim();
+    if (!connString) {
+      throw new Error("[crm] DB_DRIVER=pg requires DATABASE_URL to be set.");
+    }
+    return mod.createCrmCore({ driver: "pg", connString });
   }
   return mod.createCrmCore(dbPath);
 }

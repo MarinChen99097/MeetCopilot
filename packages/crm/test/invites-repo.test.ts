@@ -6,14 +6,14 @@
  *  (d) 找不到成員 → MemberNotFoundError。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createCrmCore } from "../src/core.js";
+import { makeTestCore } from "../src/test-helpers.js";
 import type { CrmCore } from "../src/ports.js";
 import { LastOwnerError, MemberNotFoundError } from "../src/repos-invites.js";
 
 let core: CrmCore;
 
 beforeEach(async () => {
-  core = await createCrmCore(":memory:");
+  core = await makeTestCore();
   await core.migrate();
 });
 afterEach(() => core.close());

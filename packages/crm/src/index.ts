@@ -2,6 +2,7 @@
 export * from "./ports.js";
 export * from "./core.js";
 export { createSqliteDbPort, type SqliteHandle } from "./sqlite-db.js";
+export { createPgDbPort, runMigrationsPg, toPgPlaceholders, type PgHandle } from "./pg-db.js";
 export { runMigrations } from "./migrate.js";
 export {
   SqliteOrgRepository,

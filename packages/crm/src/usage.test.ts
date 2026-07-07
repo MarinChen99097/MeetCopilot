@@ -5,7 +5,7 @@
  *  - 窗界：created_at 在窗外的事件不計入
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createCrmCore } from "./core.js";
+import { makeTestCore } from "./test-helpers.js";
 import type { CrmCore } from "./ports.js";
 import type { NewUsageEvent } from "@meetcopilot/shared";
 
@@ -14,7 +14,7 @@ const ORG = "org-A";
 const OTHER = "org-B";
 
 beforeEach(async () => {
-  core = await createCrmCore(":memory:");
+  core = await makeTestCore();
   await core.migrate();
 });
 

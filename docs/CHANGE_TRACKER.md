@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 11:30 | Postgres 移植（雙驅動；為 Cloud Run + Cloud SQL，4 agent；指揮官代記）
+- **工作區**: packages/crm＋apps/server
+- **類型**: feat
+- **檔案**: 新 `packages/crm/src/pg-db.ts`（PgDbPort＋`?`→`$n` 轉換＋AsyncLocalStorage tx＋int8→Number＋runMigrationsPg）＋`migrations-pg/001-009`＋`test-helpers.ts`；改 `core.ts`（driver 選擇工廠＋back-compat overload）、`index.ts`、5 個 repo 的方言 SQL、`apps/server/src/crm.ts`（DB_DRIVER=pg 支援）、5 個測試檔（driver 切換）
+- **改了什麼**: 加 Postgres 持久層路徑、**不破壞 SQLite**（env `DB_DRIVER`＋`DATABASE_URL` 選）。repo 完全 DbPort-agnostic → 同一份 `Sqlite*Repository` 在 pg 上跑，**免寫 Pg 版**。方言修正：`INSERT OR IGNORE`→`ON CONFLICT DO NOTHING`、`MAX(a,b)`→JS Math.max、`LIKE`→`LOWER() LIKE LOWER()`（大小寫 parity）、pg 版 DDL 全 epoch 欄 `INTEGER`→`BIGINT`（int4 溢位）、bool 保持 integer 0/1、JSON 保持 TEXT。
+- **為什麼**: 使用者選 Cloud Run scale-to-zero → 需 Cloud SQL Postgres（SQLite 在 Cloud Run 短暫檔案系統會掉資料）。**驗證：crm 43/43 在 SQLite＋Postgres 皆綠、server 32/32、真 server 在 pg 端到端（含真爬蟲、bigint 持久化）、SQLite 本機不破**。app 已 Postgres-ready for Cloud SQL。
+
 ### 2026-07-08 09:40 | 訊號→CRM 批准回寫端點（M5 flywheel 收尾，關閉唯一 PARTIAL）
 - **工作區**: apps/server＋packages/crm＋apps/web
 - **類型**: feat

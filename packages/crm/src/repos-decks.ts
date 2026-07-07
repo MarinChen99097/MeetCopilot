@@ -212,12 +212,24 @@ export class SqliteDeckRepository implements DeckRepository {
     });
   }
 
-  /** page_commit 推進 committed_index：單調遞增（MAX 守護，永不回退；I1 依它）。 */
+  /**
+   * page_commit 推進 committed_index：單調遞增（永不回退；I1 依它）。
+   * 取 max 在 JS 端算而非 SQL：SQLite 的 2-arg `MAX(a,b)` 是純量函式，但 Postgres 的 MAX 是聚合函式（單參數）
+   * → `GREATEST` 才是 PG 對應，而 SQLite 無 GREATEST，故任一關鍵字都不可移植。改在 tx 內讀→Math.max→寫，單一程式路徑跨兩 driver。
+   */
   async setCommittedIndex(orgId: string, deckId: string, index: number): Promise<void> {
-    await this.db.run(
-      "UPDATE decks SET committed_index = MAX(committed_index, ?), updated_at = ? WHERE org_id = ? AND id = ?",
-      [index, Date.now(), orgId, deckId],
-    );
+    await this.db.tx(async () => {
+      const row = await this.db.get<{ committed_index: number }>(
+        "SELECT committed_index FROM decks WHERE org_id = ? AND id = ?",
+        [orgId, deckId],
+      );
+      if (!row) return; // deck 不存在：與原 UPDATE …WHERE 命中 0 列同語意（不拋錯）。
+      const next = Math.max(row.committed_index, index);
+      await this.db.run(
+        "UPDATE decks SET committed_index = ?, updated_at = ? WHERE org_id = ? AND id = ?",
+        [next, Date.now(), orgId, deckId],
+      );
+    });
   }
 
   // ── slides（append-only I1）──
