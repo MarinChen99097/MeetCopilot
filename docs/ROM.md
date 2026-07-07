@@ -36,6 +36,16 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-07 18:10 | S1 結案＋開工分工＋API 契約 v1.0 凍結
+- **誰決定**: 使用者（S1 事實＋分工）＋Fable（契約設計）
+- **決策**:
+  1. **S1 spike PASS 結案**——使用者確認 2026-07-07 那輪 capture-test 就是「真實雙帳號 Meet」情境（Brave/Win11，9 項全 PASS）。會議模型地基成立，可開工。殘項：Window-surface 備援未測（非阻斷）。
+  2. **分工**——前端：使用者以 Claude Design 設計互動元件（我方提供設計 prompt 包）；後端：Fable 負責設計（架構/契約/裁決），**程式碼一律派非 Fable 的 agent（Opus）執行**。
+  3. **API 契約 v1.0 凍結**（`docs/API_CONTRACT.md`）——關鍵形狀：長任務（爬蟲/生圖）一律 job 模式（202+輪詢+WS 推播）；WS 三角色 capture/hud/present、音訊走 binary frame；presenter-only 動作（suggestion_action/page_commit）server 驗身分；「確認」＝provenance verify、「細填」＝PATCH 實體並寫 human provenance；train 用 ephemeral token 讓瀏覽器直連 Gemini Live（語音不經我方 server）；錯誤一律 `{error}`；前端永不傳 orgId。
+- **脈絡與理由**: 使用者要開始設計/實作；平行開發前必須先凍結前後端交界（v1 L5 契約漂移教訓）。
+- **考慮過的替代**: 音訊走 JSON base64（否——binary frame 省 33% 頻寬與編解碼）；生圖同步等待（否——gpt-image-2 ~80s 必須 job 化）。
+- **影響**: docs/API_CONTRACT.md（新）、docs/FRONTEND_DESIGN_PROMPTS.md（派工中）、M0 實作工作流啟動、ARCHITECTURE_PLAN spike 表 S1 標 PASS、tools/README 矩陣更正。
+
 ### 2026-07-07 17:25 | 接收端瀏覽器約束放寬：Chrome/Edge → Chromium 系（Brave 實測通過）
 - **誰決定**: Fable（依使用者實測證據）
 - **決策**: 「接收聲音端限 Chrome/Edge 桌面」放寬為「**Chromium 系桌面瀏覽器**——Chrome/Edge（文件背書）＋Brave（使用者裝置 2026-07-07 實測 9 項全 PASS，含分頁音訊擷取與錄放回聽）」。同時在 capture-test 工具補 Brave 偵測（UA 偽裝成 Chrome，需 `navigator.brave.isBrave()` 判別）。

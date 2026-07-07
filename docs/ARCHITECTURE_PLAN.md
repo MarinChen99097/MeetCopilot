@@ -91,7 +91,7 @@ MeetCopilot_v2/
 
 | # | Spike | 驗什麼 | 失敗的話 |
 |---|---|---|---|
-| **S1** | 雙帳號擷取 Meet 分頁音訊 | 真實 setup：B profile 開 Meet 分頁+Copilot 分頁，getDisplayMedia 拿到含 A 的混音；zero-track 守衛；AudioWorklet 出 16k PCM；順驗跨 profile Window-surface 備援的音訊可得性。**需使用者協助**（兩個 Google 帳號＋一場真實 Meet，agent 無法自己開會） | 音訊模型的地基不成立 → 回頭與使用者重議（擴充？改 Meet bot？） |
+| **S1** ✅ **PASS（2026-07-07 結案）** | 雙帳號擷取 Meet 分頁音訊 | **使用者以 Brave/Win11＋真實雙帳號 Meet 實測 9 項全 PASS**（分頁音軌 1 條、錄放回聽正常、AudioContext@16k OK）——會議模型地基成立，M3 開工 gate 已開。殘項：Window-surface 備援可得性未測（非阻斷，之後順測） | ~~回頭重議~~（未觸發） |
 | **S2** | Gemini 分段轉寫中英混合會議音訊 | ASR 品質/延遲可用；下游 LLM 能從逐字稿推斷 speaker（presenter/client）。**需真實音訊素材**（請使用者提供/錄一段中英混合對話，agent 不能自造人聲驗品質） | 換 Google STT v2（AsrProvider 換 impl） |
 | **S3** | Gemini Live 語音對練 | ephemeral token 瀏覽器直連、persona system prompt、打斷、逐字稿；>15min 用 compression+resumption。**連線/token/轉寫可由 agent 自驗；語音對練體驗（打斷、自然度）需使用者實際開口驗收** | 退回 ASR+文字LLM+TTS 拼裝（train 抽象層留好） |
 | **S4** | Playwright 爬蟲 + SSRF | Playwright+stealth 渲染對方官網、子頁爬取、SSRF 檢查擋內網（含雲端 metadata）、外網通。**注意：Playwright 不走 undici，v1 的 DNS-pin 不直接適用**——落地手法＝導航前解析並驗證 IP＋`page.route()` 逐請求攔截驗證＋擋未驗 redirect；S4 要驗這套在真實網站不誤殺 | 退回純 grounding + v1 undici 單頁抽取（能力降但可用） |

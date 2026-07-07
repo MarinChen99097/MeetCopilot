@@ -58,7 +58,7 @@ python -m http.server 8000
 
 | 日期 | 裝置 / OS | 瀏覽器 + 版本 | 開會軟體 | 擷取 surface（分頁/視窗/螢幕） | 有音軌? | 錄放回聽品質 | 備註 |
 |---|---|---|---|---|---|---|---|
-| 2026-07-07 | 使用者主力機 / Win11 | **Brave** 150（Chromium；UA 顯示 Chrome） | （首輪自測，非會議分頁） | 分頁 | 是（1） | 可回放（160KB／10s） | file:// 開啟、9 項全 PASS；48kHz 立體聲、echoCancellation=false；**真實雙帳號 Meet 情境待測（S1）** |
+| 2026-07-07 | 使用者主力機 / Win11 | **Brave** 150（Chromium；UA 顯示 Chrome） | **Meet 網頁版（真實雙帳號）** | 分頁 | 是（1） | 可回放（160KB／10s） | file:// 開啟、9 項全 PASS；48kHz 立體聲、echoCancellation=false；**使用者確認此輪即為 Meet＋兩帳號實測 → S1 spike PASS 結案** |
 | | | | | | | | |
 | | | | | | | | |
 | | | | | | | | |
