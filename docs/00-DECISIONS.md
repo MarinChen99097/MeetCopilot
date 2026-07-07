@@ -33,7 +33,7 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 
 ## 會議運作模型（web-only 雙帳號 — 使用者 2026-07-06 明確指定）
 
-**不做桌面軟體，一律網頁版。** Google Meet 實戰時報告者開**兩個帳號/兩個瀏覽器**：
+**不做桌面軟體，一律網頁版。** Google Meet 實戰時報告者開**兩個帳號／兩個瀏覽器 profile**（⚠️ 帳號 B 的 Meet 分頁與 Copilot 擷取分頁**放同一個 profile 才是可靠路徑**，見文末研究回填 3）：
 
 ```
 帳號 A（報告 / presenter）          帳號 B（接收聲音 / listener）
@@ -50,7 +50,7 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 ### 為什麼這個模型是重大簡化
 - **I3（HUD 不外流）幾乎天然成立**：報告者只分享「簡報分頁」；HUD 在帳號 B / 第二裝置，從不進任何被分享的畫面。v1 那套 `getDisplayMedia` 整螢幕 preflight 複雜度大幅下降（仍保留「播放視圖不得渲染 HUD 元素」「分享分頁而非整螢幕」的輕量守則）。
 - **音訊擷取大幅簡化**：不需 loopback、不需 Electron desktopCapturer。帳號 B 是真實與會者，透過 Meet 自己的混音聽到所有人；Copilot 只需擷取 Meet 分頁音訊。
-- **代價（誠實揭露）**：帳號 B 聽到的是**一條混音**，失去乾淨的 presenter/client 分軌 → **辨識誰在講話改用「轉逐字稿後 LLM 依內容/語氣推斷」**（決策 R#），不做雙軌 diarization。帳號 B 在 Meet 靜音，故混音裡不含 B 自己的麥克風、無回音迴圈。
+- **代價（誠實揭露）**：帳號 B 聽到的是**一條混音**，失去乾淨的 presenter/client 分軌 → **辨識誰在講話改用「轉逐字稿後 LLM 依內容/語氣推斷」**（使用者 2026-07-06 拍板），不做雙軌 diarization。帳號 B 在 Meet 靜音，故混音裡不含 B 自己的麥克風、無回音迴圈。
 
 ## 三大不變量（延續 v1，依新模型調整落點）
 
@@ -67,7 +67,7 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 四項載重假設已查證，其中**三項修正/釐清了原決策**（動工前務必吸收）：
 
 1. **會議 ASR 不用 Gemini Live API**（釐清決策 11 邊界）：Live API 無 speaker diarization、為單一互動使用者設計、單場 ~15 分鐘——**不適合被動轉寫會議混音**。→ 會議 ASR 走 Gemini 分段轉寫（藏在 `AsrProvider` 後），diarization 交下游 LLM。Live API **只用於語音模擬訓練**（決策 11/12 的強適配用途不變）。
-2. **AI 生圖一律 pre-meeting**（修正決策 10 的落地）：整頁生圖光生成就 2–4s，**進不了 <4s 會中預算**。→ 所有 AI 生圖是會前/預取；會中即時只走「沿用風格 CSS 路徑」＋重用會前已生背景圖。生圖被內容安全擋時 fallback 漸層/CSS，絕不出壞頁。
-3. **雙帳號需「同瀏覽器 profile」**（釐清會議模型）：getDisplayMedia 分頁音訊只列**同一 Chromium instance** 的分頁——帳號 B 的 Meet 分頁與 Copilot 擷取分頁必須同 profile；且**接收端硬限 Chrome/Edge 桌面**（Firefox/Safari/行動不支援）。HUD 檢視端（第二裝置）不受限，因只看不擷取。→ 列為 **S1 spike**（最高風險）。
+2. **AI 生圖預設 pre-meeting**（修正決策 10 的落地；2026-07-07 二次查核再校準）：生圖延遲**無官方數字**（第三方：flash-lite 目標 sub-2s、flash 級 ~2–4s）→ 當工程估計、S5 spike 實測。預設仍會前/預取（延遲變異＋**會中被內容安全誤擋不可在客戶面前發生**）；會中即時走「沿用風格 CSS 路徑」＋重用已生背景圖；若 S5 實測穩定可開「會中 1K 快速生圖」選配（嚴格逾時＋fallback）。被擋一律 fallback 漸層/CSS，絕不出壞頁。
+3. **雙帳號建議「同瀏覽器 profile」**（釐清會議模型；2026-07-07 二次查核校準）：分頁 picker 只列**同一 Chromium instance** 的分頁（UA 實作行為、規範未載明）——**可靠路徑**＝B 的 Meet 分頁與 Copilot 擷取分頁同 profile；跨 profile 有 Window-surface 備援（音訊可得性隨 OS/版本，S1 一併驗）。**接收端硬限 Chrome/Edge 桌面**（Firefox/Safari/行動不支援分頁音訊擷取）。HUD 檢視端（第二裝置）不受限，因只看不擷取。→ 列為 **S1 spike**（最高風險）。
 
 其餘查證確認可照原決策：Gemini Live model `gemini-3.1-flash-live-preview`（瀏覽器經 ephemeral token 直連、長對練開 compression+resumption）；生圖 `gemini-3.1-flash-image`（背景）/`gemini-3-pro-image`（中文 in-image 97%，會前純視覺頁）；CRM 詳細 schema 已定案於 `CRM_SCHEMA.md`。

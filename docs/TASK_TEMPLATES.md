@@ -1,5 +1,7 @@
 # 任務交辦 Prompt 範本
 
+> 模型選擇以 `MODEL_DISPATCH.md` 開頭的使用者拍板覆寫節為準（Fable 指揮、subagent 一律 opus）；本檔範例中出現的 haiku/sonnet 為 v1 歷史語彙。
+
 > 用法：交辦 subagent 前，複製對應範本，把 `【】` 填滿。**不要即興寫交辦 prompt**。
 > 每個範本已含三要素（目標與動機／驗收條件／回報格式）與建議模型。
 > 模型欄位是 Agent 工具的 `model` 參數；用 Workflow 時另加 effort（見 MODEL_DISPATCH.md 第三節）。
@@ -33,8 +35,8 @@
 ## T2. 實作（`general-purpose`，`model: "sonnet"`）
 
 ```
-目標：實作【功能，例：deck model 的 INSERT_AFTER 操作】。
-動機：【它在系統中的角色，例：這是改造引擎三操作之一，M3 里程碑】。
+目標：實作【功能，例：deck model 的 APPEND 操作（附加到尾端）】。
+動機：【它在系統中的角色，例：這是改造引擎兩操作（APPEND＋pending 區 REORDER）之一，M3 里程碑】。
 規格依據：先讀 docs/PRODUCT_SPEC.md 的【章節】。相關既有程式碼在【檔案:行號】。
 
 硬性約束：
@@ -43,7 +45,7 @@
 - 只做本任務範圍內的事，不要順手重構別的
 
 驗收條件：
-- 【可驗證條件1，例：index <= committedIndex 的 INSERT 被 reject 並回傳原因】
+- 【可驗證條件1，例：非 append 的 op／REORDER 觸及 committed 區段 被 reject 並回傳原因】
 - 【可驗證條件2，例：新增測試 X 與 Y 通過】
 - 所有既有測試仍通過（若有測試）
 - 若橫跨模組邊界（前端↔後端等）：一律 import／對照共用契約，不得自創路徑/欄位；缺什麼回報 gaps（L5）

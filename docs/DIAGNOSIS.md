@@ -3,6 +3,7 @@
 > 目的：讓每個 session（不論模型大小）避開這個環境最貴的三種浪費。
 > 讀者：Sonnet 等級模型。每條都是「照做即可」的規則，不是建議。
 > 撰於 2026-07-04，由 Fable 5 session 根據實際環境盤點寫成。
+> 模型調度以 `MODEL_DISPATCH.md` 使用者拍板覆寫節為準（subagent 一律 opus）；本檔內文出現的 `haiku`／`sonnet` 為 v1 歷史語彙。
 
 ---
 

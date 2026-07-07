@@ -14,7 +14,7 @@
 | `docs/PRODUCT_SPEC.md` | ⚠️ 只在規格原檔（HTML）更新後同步 | 憑對話印象改規格 → 先問使用者 |
 | `docs/JUDGMENT_RUBRICS.md`、`docs/TASK_TEMPLATES.md`、`docs/DIAGNOSIS.md` | ⚠️ 可加正反例，不准刪規則 | 刪除或放寬任何規則 → 先問使用者 |
 | `docs/LETTER_TO_FUTURE_SESSIONS.md` | ❌ 歷史文件 | 不改；新的交接寫進 WORKLOG |
-| `Dynamic_Keynote_Copilot_Tech_Internal.html` | ❌ | 規格原檔，只有使用者能決定改 |
+| `docs/ORIGINAL_VISION_v1.html` | ❌ | v1 原始願景，v2 僅供歷史參考；規格真相來源＝`docs/00-DECISIONS.md` + `docs/PRODUCT_SPEC.md`。只有使用者能決定改 |
 
 通用規則（版本保護）：本專案是 git repo，改 ⚠️ 級檔案前確認 `git status` 乾淨、改完階段性 commit 即可回滾——不需 `.bak`（非 git 目錄工作時才用 `.bak`）。✅ 級的追加型檔案（WORKLOG、LESSONS、research/）日常追加更不需特別處理。此規則與 CLAUDE.md 硬規則 4、DIAGNOSIS 次要浪費節一致。
 

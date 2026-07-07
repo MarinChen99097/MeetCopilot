@@ -18,3 +18,15 @@
 - **下一步（動工）**：從 **M0 地基**開始（monorepo + packages/shared 契約 + packages/crm DbPort/migration/base repo + auth + i18n + gemini client），**平行跑 S1/S3/S4 spike**。S1（雙帳號擷取）最高風險，先驗；失敗要回頭與使用者重議。
 - **待決/誠實**：三線並行（M2–M4）契約漂移風險高（v1 踩過）→ 動工前先凍結 shared 契約。接收端只 Chromium 桌面是硬約束，M0 要再向使用者確認可接受。會中研究的成本/合規邊界只做公開資訊＋每場上限＋provenance。
 - **狀態**：計畫書定案，未動程式碼。git（v2）尚未首次 commit（待本 session 收尾 commit 制度檔+計畫書）。
+
+## 2026-07-07 session（Fable 5 · 審查 Opus 產出＋新調度規則）
+
+- **背景**：上一段「continue」之後（含最後一輪決策、研究工作流、整套計畫書、首次 commit 1588235）由 Opus 4.8 執行；使用者切回 Fable 並要求 (1) 審查 Opus 產出是否足夠詳細與正確、(2) 新調度規則——**Fable 主決策、搜尋調查等 agent 用 opus**（已寫入 MODEL_DISPATCH 拍板覆寫節＋CLAUDE.md 硬規則 1＋記憶）。
+- **審查方法（三路，全 opus agent）**：(a) 事實查核工作流——21 條 API 載重宣稱對抗式重驗（live 來源）；(b) 全計畫書跨檔一致性審查；(c) CRM schema 設計審查（DDL 心智編譯）。加上 Fable 親自比對對話定案 vs 文件。
+- **審查結論**：骨幹高品質、決策全數入檔、I1/I2/I3 三處表述一致；Live API 7 條宣稱全確認。但抓到並修正：
+  - **事實面**：「同瀏覽器硬限制」降級為 UA 行為＋Window-surface 備援（S1 一併驗）；生圖「97%」非官方數字（官方＝單行文字錯誤率多 <10%）；**API 參數要用 `gemini-3-pro-image-preview`**（-preview 是現行字串）；生圖延遲無官方數字→「一律 pre-meeting」改「預設 pre-meeting、S5 實測後可開會中 1K 快速選配」。
+  - **Fable 親自抓**：contacts DDL 一行無效 SQL（斜線合併宣告）、懸空「決策 R#」引用、延遲預算沿用 v1 串流數字（MVP 分段轉寫 final 應為 ~2–5s，已誠實化）、quick/detailed 分工漏寫、ezpagesite 爬蟲 file:line 地圖未落檔（已補 research/EZPAGESITE_CRAWLER.md）。
+  - **一致性審查（10 must-fix 全修）**：TASK_TEMPLATES T2 範本仍教已廢除的 INSERT_AFTER（會教壞弱模型違反 I1）；M0 缺 .env 欄位清單/測試框架（vitest）/npm scripts 約定（已補進 ARCHITECTURE_PLAN §1）；flash-lite/embedding model ID 補進 API_FINDINGS §E；MAINTENANCE 死連結；LESSONS/RUBRICS v1 語彙加 v2 對齊註記；M0 驗收與 spike gate 解耦（S1 需使用者協助不擋 M0 收尾）；S2/S3 標註需真人音訊；Playwright 端 SSRF 不適用 DNS-pin→page.route 攔截方案。
+  - **CRM 審查（2 must-fix 全修＋擇要修 nice）**：DbPort 改 async-first（同步簽名會讓「換 pg 不動業務碼」破功；better-sqlite3 的 tx 陷阱已註明）；實作順序補漏掉的 §3 賣方側表；會議衍生值的 provenance 記法定案（human+meeting+verified=1）；persona 逐欄過 provenance 閘（不看 rollup）；(org_id,domain) 改 UNIQUE；crawl_jobs 補 mode；schema_migrations 給最小 DDL；M3/M4 補充實體備忘。
+- **下一步**：計畫書已審定可交付。動工＝M0 地基（照 ARCHITECTURE_PLAN §6，工具鏈約定已定死）＋跟使用者約 S1 測試 Meet。
+- **待決**：接收端限 Chrome/Edge 桌面的硬約束，動工前跟使用者口頭再確認一次可接受。

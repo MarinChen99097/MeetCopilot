@@ -16,8 +16,8 @@ v1（隔壁 `c:/Users/Martin/Desktop/MeetCopilot`）是「單一會中簡報 Cop
 ## 三個最容易踩的雷（都寫進 API_FINDINGS 了）
 
 1. **別拿 Gemini Live API 做會議 ASR**——它沒有 speaker diarization、為單一使用者設計、單場 15 分鐘。會議轉寫走 Gemini 分段轉寫（藏在 `AsrProvider` 後）。Live API 只給**語音模擬訓練**。
-2. **雙帳號的「同瀏覽器」陷阱**——帳號 B 的 Meet 分頁與 Copilot 擷取分頁必須在**同一個 Chromium profile**，getDisplayMedia 才列得到那個分頁。而且接收端**只有 Chrome/Edge 桌面**能擷取。這是 **S1 spike**，最高風險，動工優先驗。
-3. **AI 生圖進不了會中**——2–4s，超出 <4s 預算。所有生圖是**會前預生**；會中即時只走 CSS 沿用風格路徑。
+2. **雙帳號的「同瀏覽器」陷阱**——分頁 picker 只列**同一個 Chromium profile** 的分頁（UA 行為），所以 B 的 Meet 分頁與 Copilot 擷取分頁**放同 profile 才是可靠路徑**（跨 profile 有 Window-surface 備援，音訊可得性 S1 一併驗）。接收端**只有 Chrome/Edge 桌面**能擷取。這是 **S1 spike**，最高風險，動工優先驗。
+3. **AI 生圖預設會前預生**——延遲無官方數字（第三方估：flash 級 2–4s、flash-lite 目標 sub-2s；S5 實測校準），且**會中被內容安全誤擋不可在客戶面前發生**；會中即時預設只走 CSS 沿用風格路徑，「會中 1K 快速生圖」選配由 S5 實測後決定。
 
 ## 從哪開始
 
@@ -25,7 +25,7 @@ v1（隔壁 `c:/Users/Martin/Desktop/MeetCopilot`）是「單一會中簡報 Cop
 
 ## 工作紀律（v1 血淚，別重蹈）
 
-- **指揮官不下場**：讀 3+ 檔/掃目錄/驗證 → 派便宜 subagent，主線只收結論＋`檔案:行號`。
+- **指揮官不下場**：讀 3+ 檔/掃目錄/驗證 → 派 subagent（模型分工見 MODEL_DISPATCH 覆寫節：Fable 決策、搜尋/調查/驗證一律 opus），主線只收結論＋`檔案:行號`。
 - **平行 agent 先凍結契約**：v1 三個平行 agent 各自改契約 → 前後端跑不通。並行前把 shared 契約定死。
 - **授權用攻擊者憑證測**：I2/authz 用非 presenter、跨 org 憑證測「被拒」，不是只測正路。
 - **Gemini responseSchema 用 union-superset**：v1 把 block 定成空 `{type:OBJECT}` → Gemini 吐 `{}` → 全空白頁。type 必填當判別、其餘 optional。

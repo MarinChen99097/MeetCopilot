@@ -17,12 +17,17 @@
 | Embedding | `gemini-embedding-001` | JS cosine，藏在 EmbeddingRepository |
 | 會議 ASR | Gemini 分段轉寫，藏在 `AsrProvider` 介面後 | **不用 Live API**（API_FINDINGS §A1/§D）；diarization 交下游 LLM |
 | 模擬訓練語音 | **Gemini Live API** `gemini-3.1-flash-live-preview` | 瀏覽器經 ephemeral token 直連；長對練開 compression+resumption（§A） |
-| AI 生圖 | `gemini-3.1-flash-image`（背景）/ `gemini-3-pro-image`（整頁含中文字） | **一律 pre-meeting**；被擋 fallback 漸層（§C） |
+| AI 生圖 | `gemini-3.1-flash-image`（背景）/ `gemini-3-pro-image-preview`（整頁含中文字；API 參數含 `-preview`） | **預設 pre-meeting**；被擋 fallback 漸層；會中 1K 快速選配待 S5 實測（§C） |
 | 研究/爬蟲 | Gemini Search grounding + Playwright(+stealth) 自建爬蟲 + v1 SSRF-safe 抽取器 | SSRF 檢查掛在首次 fetch（§PRODUCT_SPEC 核心） |
 | Auth | 自建 JWT（沿用 v1，JWT_SECRET fail-fast） | |
 | 打包 | 先 `npm run dev` 本機跑；架構留雲端路 | 不寫死 localhost |
 
 **環境**：Windows 11 + PowerShell 5.1（`&&` 不可用）+ Bash 工具。寫檔一律 Write/Edit（PS 5.1 UTF-16 會亂碼）。v2 已 git init（主要備份）。
+
+**工具鏈約定（M0 就定死，弱模型不用猜）**：
+- 測試框架：**vitest**（各 workspace `npm run test`）；e2e 冒煙用 node 腳本（`scripts/smoke-*.mjs`）打真實 server。
+- 每個 workspace 的 npm scripts 統一命名：`dev`／`build`／`typecheck`（tsc --noEmit）／`test`；apps/server 另有 `migrate`（套 packages/crm 的 migrations）。根目錄聚合：`npm run typecheck --workspaces`。
+- **.env（apps/server，附 .env.example）**：`GEMINI_API_KEY`（必填）、`JWT_SECRET`（必填，缺值 fail-fast）、`PORT`（預設 8787）、`DB_PATH`（預設 `./data/meetcopilot.db`）、`GEMINI_TEXT_MODEL`（預設 `gemini-3.1-flash-lite`）、`GEMINI_EMBED_MODEL`（預設 `gemini-embedding-001`）、`GEMINI_LIVE_MODEL`（預設 `gemini-3.1-flash-live-preview`）、`GEMINI_IMAGE_MODEL`（預設 `gemini-3.1-flash-image`）、`GEMINI_IMAGE_PRO_MODEL`（預設 `gemini-3-pro-image-preview`）、`RESEARCH_AUTO_LIMIT_PER_MEETING`（預設 10）。web 端：`NEXT_PUBLIC_API_BASE`（預設 `http://localhost:8787`——經環境變數，**不寫死於程式碼**，這就是「雲端路」）。
 
 ---
 
@@ -35,7 +40,7 @@ MeetCopilot_v2/
 │  └─ crm/               # ★新核心：DbPort、repositories(介面+SqliteImpl)、migrations、embeddings、provenance
 ├─ apps/
 │  ├─ server/            # Express + ws；REST + WS；模組見 §3
-│  └─ web/               # Next.js；三個 surface：/crm、/studio(DynamicSlide)、/copilot、/train
+│  └─ web/               # Next.js；六個 surface：/crm、/studio、/present、/copilot、/hud、/train（見 §4）
 ├─ docs/                 # 本計畫書 + 制度檔
 └─ (無 desktop —— 決策：純網頁)
 ```
@@ -60,7 +65,7 @@ MeetCopilot_v2/
 | `train/` | 模擬訓練：ephemeral token 發放、persona seed builder、評分 | 新 |
 | `gemini.ts` | generateJson（多模態）+ generateImage + live token | 借 + 擴充 |
 
-**改造引擎 op（I1）**：`type PatchOp = { kind:'APPEND'; slide } | { kind:'REORDER'; fromIndex; toIndex }`（皆須 index > committedIndex；移除 v1 的 INSERT_AFTER/REPLACE 中段操作）。
+**改造引擎 op（I1）**：`type PatchOp = { kind:'APPEND'; slide } | { kind:'REORDER'; fromIndex; toIndex }`（APPEND 天然作用於尾端、恆滿足 I1；REORDER 的 `fromIndex`/`toIndex` 皆須 > committedIndex；移除 v1 的 INSERT_AFTER/REPLACE 中段操作）。
 
 ---
 
@@ -85,11 +90,11 @@ MeetCopilot_v2/
 
 | # | Spike | 驗什麼 | 失敗的話 |
 |---|---|---|---|
-| **S1** | 雙帳號擷取 Meet 分頁音訊 | 真實 setup：B profile 開 Meet 分頁+Copilot 分頁，getDisplayMedia 拿到含 A 的混音；zero-track 守衛；AudioWorklet 出 16k PCM | 音訊模型的地基不成立 → 回頭與使用者重議（擴充？改 Meet bot？） |
-| **S2** | Gemini 分段轉寫中英混合會議音訊 | ASR 品質/延遲可用；下游 LLM 能從逐字稿推斷 speaker（presenter/client） | 換 Google STT v2（AsrProvider 換 impl） |
-| **S3** | Gemini Live 語音對練 | ephemeral token 瀏覽器直連、persona system prompt、打斷、逐字稿；>15min 用 compression+resumption | 退回 ASR+文字LLM+TTS 拼裝（train 抽象層留好） |
-| **S4** | Playwright 爬蟲 + SSRF | Playwright+stealth 渲染對方官網、子頁爬取、SSRF 檢查擋內網（含雲端 metadata）、外網通 | 退回純 grounding + v1 undici 單頁抽取（能力降但可用） |
-| **S5** | 生圖中文品質 + 延遲 | `gemini-3-pro-image` 中文 in-image 字可讀；`flash-image` 背景圖延遲；確認「不進會中」 | 只做背景圖+CSS 疊層路徑（放棄整頁生圖） |
+| **S1** | 雙帳號擷取 Meet 分頁音訊 | 真實 setup：B profile 開 Meet 分頁+Copilot 分頁，getDisplayMedia 拿到含 A 的混音；zero-track 守衛；AudioWorklet 出 16k PCM；順驗跨 profile Window-surface 備援的音訊可得性。**需使用者協助**（兩個 Google 帳號＋一場真實 Meet，agent 無法自己開會） | 音訊模型的地基不成立 → 回頭與使用者重議（擴充？改 Meet bot？） |
+| **S2** | Gemini 分段轉寫中英混合會議音訊 | ASR 品質/延遲可用；下游 LLM 能從逐字稿推斷 speaker（presenter/client）。**需真實音訊素材**（請使用者提供/錄一段中英混合對話，agent 不能自造人聲驗品質） | 換 Google STT v2（AsrProvider 換 impl） |
+| **S3** | Gemini Live 語音對練 | ephemeral token 瀏覽器直連、persona system prompt、打斷、逐字稿；>15min 用 compression+resumption。**連線/token/轉寫可由 agent 自驗；語音對練體驗（打斷、自然度）需使用者實際開口驗收** | 退回 ASR+文字LLM+TTS 拼裝（train 抽象層留好） |
+| **S4** | Playwright 爬蟲 + SSRF | Playwright+stealth 渲染對方官網、子頁爬取、SSRF 檢查擋內網（含雲端 metadata）、外網通。**注意：Playwright 不走 undici，v1 的 DNS-pin 不直接適用**——落地手法＝導航前解析並驗證 IP＋`page.route()` 逐請求攔截驗證＋擋未驗 redirect；S4 要驗這套在真實網站不誤殺 | 退回純 grounding + v1 undici 單頁抽取（能力降但可用） |
+| **S5** | 生圖中文品質 + 延遲 | `gemini-3-pro-image-preview` 中文 in-image 字可讀（順比 flash 級）；`flash-image`/`flash-lite-image` **實測延遲**（無官方數字）；據實測決定「會中 1K 快速生圖」選配開不開 | 只做背景圖+CSS 疊層路徑（放棄整頁生圖） |
 
 > 每個 spike 派 fresh-context agent 實測（read-back / 跑真 API），主線只收結論＋`檔案:行號`（指揮官不下場）。S1、S3 是最高風險（新能力），優先。
 
@@ -98,15 +103,19 @@ MeetCopilot_v2/
 ## 6. 里程碑（M0→M5，含驗收條件）
 
 > 驗收條件 = 「宣稱完成前，派 fresh-context agent 做 read-back 或跑測試」通過的可測項（硬規則 5：驗證不自驗）。
-> 決策：**M2 起三條產品線並行**（DynamicSlide / 會中副駕 / 模擬訓練）；並行派工照 TASK_TEMPLATES 的契約鎖定守則（v1 L5 教訓：平行 agent 契約漂移）。
+> **順序**：M0→M1 是序列地基；**M2/M3/M4 是三條並行線**——編號只是索引不是先後，三線都在 M1 完成＋契約凍結後同時開工（M4 語音模擬只依賴 CRM，決策 5 明定可提早）；M5 收整合。並行派工照 TASK_TEMPLATES 的契約鎖定守則（v1 L5 教訓：平行 agent 契約漂移）。
 
 ### M0 — 地基
 **範圍**：monorepo（workspaces）、packages/shared 契約（slide-spec append-only、protocol、signals、crm domain types、trust-rule 純函式）、packages/crm（DbPort、migration runner + schema_migrations、base repository org-scoping）、auth（JWT + org/membership，含 fail-fast）、i18n 骨架、gemini client、.env(GEMINI_API_KEY) + config。**平行跑 S1、S3、S4。**
-**驗收**：
-- `npm install` + 三 workspace typecheck 全綠。
+**驗收（程式地基，可獨立判定——不等 spike，spike 依賴使用者時間）**：
+- `npm install` + 全 workspace typecheck 全綠。
 - migration runner 建出 §2 租戶表；base repo 的 CRUD 冒煙（含跨 org 讀被 org_id-scope 擋）。
 - auth register/login 冒煙（含錯誤 JWT_SECRET fail-fast）。
-- S1/S3/S4 至少 S1 有結論（成/敗）；敗則停下問使用者。
+
+**Spike gate（與 M0 平行跑；不擋 M0 收尾，擋「對應線」開工）**：
+- **S4 → gate M1 的爬蟲路徑**（敗則 M1 退純 grounding＋單頁抽取，其餘照做）。
+- **S1 → gate M3 開工**（需使用者協助開測試 Meet——儘早跟使用者約時間；敗則停下重議會議模型）。
+- **S3 → gate M4 開工**（敗則退 ASR＋文字 LLM＋TTS 拼裝）。
 
 ### M1 — CRM ＋ 研究引擎（新核心）
 **範圍**：CRM 全 schema（CRM_SCHEMA §4–8）+ repositories（含 `upsertFromCrawl` 值+provenance 同 tx、`findByDomain` dedupe）；provenance「確認/細填」寫入語意；研究引擎（grounding + Playwright 爬蟲 + SSRF 首次 fetch 檢查 + crawl_jobs）；embeddings + profile_cards + JS cosine 檢索；CRM 前端（清單/詳情/確認細填/enrich 觸發）。
@@ -166,4 +175,4 @@ MeetCopilot_v2/
 - **混音無乾淨分軌**：speaker 靠 LLM 推斷，準確度未知（S2 驗）。
 - **會中研究成本/合規**：自動爬對方主管有成本與合規邊界；每場上限 + 只公開資訊 + provenance；合規責任在使用者。
 - **Live API 配額**：並發上限依 tier，M4 前查配額頁。
-- **生圖會前預生**：會中不即時整頁生圖；若使用者要「會中即時視覺頁」需另議（只能 1K flash-lite 背景 + 嚴格逾時 + fallback）。
+- **生圖預設會前預生**：「會中 1K 快速生圖」選配開不開由 S5 實測延遲決定（僅 flash-lite 1K＋嚴格逾時＋漸層 fallback 的形態）；誤擋不可在客戶面前發生是預設會前生的主因。

@@ -20,6 +20,8 @@
 | **Embedding** | `TEXT`（JSON `number[]`）＋ JS 暴力 cosine（如 v1）；同存 `dims`+`model`。日後可換 pgvector / `sqlite-vec`，藏在 repo 後面。 |
 | **可填性標記** | **C**＝爬蟲可填 · **H**＝人細填/覆寫 · **S**＝系統管理 · **C+H**＝爬蟲先填、人驗證/覆寫。 |
 | **來源溯源** | 爬蟲寫的值**不**在每欄加 `_source`/`_confidence`（欄位爆炸）。溯源集中在一張 `field_provenance` 表，key＝`(entity_type, entity_id, field_name)`。各表只帶粗略 rollup：`crawl_confidence`、`last_crawled_at`、`verified_status`。 |
+| **CHECK 簡寫** | 表格式欄位清單裡的 `CHECK('a','b')` 是簡寫，實作一律展開為 `CHECK (col IN ('a','b'))`（完整 code block 已是標準寫法）。 |
+| **參照完整性** | **刻意不宣告 SQL FOREIGN KEY**（多型表 entity_type/entity_id 與 JSON 內參照本來就無法宣告）；完整性由 repository 層強制，`PRAGMA foreign_keys` 維持預設（off）。註解裡的「FK」＝邏輯參照，不是要你寫 FOREIGN KEY 子句。 |
 
 ---
 
@@ -184,7 +186,8 @@ CREATE TABLE IF NOT EXISTS companies (
   CHECK (verified_status IN ('none','partial','verified'))
 );
 CREATE INDEX IF NOT EXISTS idx_companies_org        ON companies(org_id);
-CREATE INDEX IF NOT EXISTS idx_companies_org_domain ON companies(org_id, domain);
+-- UNIQUE：給 upsertFromCrawl 的 domain dedupe 硬保證（SQLite 的 NULL 互不相等，無 domain 的列不受此限）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_org_domain ON companies(org_id, domain);
 CREATE INDEX IF NOT EXISTS idx_companies_org_owner  ON companies(org_id, owner_user_id);
 ```
 
@@ -229,7 +232,9 @@ CREATE TABLE IF NOT EXISTS contacts (
   bio                TEXT,                             -- C+H 公開 bio
   background_summary TEXT,                             -- C+H 職涯敘事(匯總)
   previous_companies_json TEXT,                        -- C [{company,title,years}]
-  education_json / skills_json / certifications_json TEXT, -- C
+  education_json     TEXT,                             -- C
+  skills_json        TEXT,                             -- C
+  certifications_json TEXT,                            -- C
   publications_talks_json TEXT,                        -- C 演講/引述/文章 → 揭露優先事項
   interests_json     TEXT,                             -- C+H 個人興趣(社群)
   -- ── PERSONA / 副駕需要的 (多半 H + 會議) ──
@@ -287,7 +292,7 @@ CREATE INDEX IF NOT EXISTS idx_contacts_org_owner   ON contacts(org_id, owner_us
 ## 7. Meetings / 逐字稿 / 訊號（餵會中副駕 ＋ 回寫）
 
 ### `meetings` — S/H
-`id/org_id/company_id`, `deal_id`(nullable), `copilot_session_id`(FK 即時 session 表), `title`, `meeting_type CHECK('discovery','demo','negotiation','check_in','qbr','other')`, `platform`, `scheduled_at/started_at/ended_at`, `duration_sec`, `status CHECK('scheduled','completed','canceled','no_show')`, `presenter_user_id`, `agenda`, `summary`(embedded for RAG), `outcome`, `sentiment`, `next_steps_json/action_items_json`, `recording_url`, `created_at/updated_at`。
+`id/org_id/company_id`, `deal_id`(nullable), `copilot_session_id`(**跨模組參照**：realtime 即時 session 表 M3 才定義——nullable、純 TEXT、無 FK), `title`, `meeting_type CHECK('discovery','demo','negotiation','check_in','qbr','other')`, `platform`, `scheduled_at/started_at/ended_at`, `duration_sec`, `status CHECK('scheduled','completed','canceled','no_show')`, `presenter_user_id`, `agenda`, `summary`(embedded for RAG), `outcome`, `sentiment`, `next_steps_json/action_items_json`, `recording_url`, `created_at/updated_at`。
 
 ### `meeting_attendees` — S/H
 `id, org_id, meeting_id`, `contact_id`(nullable 外部), `user_id`(nullable 內部), `name`, `is_internal`, `role_in_meeting`, `talk_time_sec`(S), `sentiment`(S)。
@@ -297,7 +302,8 @@ CREATE INDEX IF NOT EXISTS idx_contacts_org_owner   ON contacts(org_id, owner_us
 > **注意**：`speaker` 的判定在 v2 雙帳號混音模型下是「轉逐字後 LLM 依內容/語氣推斷」（見 DECISIONS 會議模型），不是乾淨分軌。
 
 ### `meeting_signals` — S
-`id, org_id, meeting_id, segment_id (nullable)`, `type CHECK('interest','objection','pain','competitor_mention','buying_signal','risk','pricing','next_step','landmine')`, `label`, `payload_json`, `entity_ref_json`(關於哪個 contact/deal/product), `confidence REAL`, `created_at`。**這是回寫來源**：一個確認的 `objection` 訊號經**人批准的 enrichment 步驟**（保持 I2 式批准紀律）寫進某 contact 的 `objections_raised_json` / deal 的 `risk_flag`。
+`id, org_id, meeting_id, segment_id (nullable)`, `type CHECK('interest','objection','pain','competitor_mention','buying_signal','risk','pricing','next_step','landmine')`, `label`, `payload_json`, `entity_ref_json`(關於哪個 contact/deal/product), `confidence REAL`, `created_at`。**這是回寫來源**：一個確認的 `objection` 訊號經**人批准的 enrichment 步驟**（保持 I2 式批准紀律）寫進某 contact 的 `objections_raised_json` / deal 的 `risk_flags_json`。
+**批准回寫的 provenance 記法（信任規則的接縫，實作照抄）**：`filled_by='human'`（批准者背書）＋`source_type='meeting'`＋`source_detail=meeting_id`＋`verified=1`——如此信任判準（human 或 verified=1）自然接受會議衍生值，且出處可追。
 
 ---
 
@@ -343,7 +349,11 @@ CREATE INDEX IF NOT EXISTS idx_provenance_field ON field_provenance(org_id, enti
 **副駕信任規則（deterministic，所以誠實）**：任一欄位優先取 provenance 為 `filled_by='human'` 或 `verified=1` 的值；否則用爬蟲值但在浮出的卡上標信心徽章，且 `confidence < 0.6` 時措辭改成「據公開資訊/reportedly」。模擬訓練只扮演**人驗證過或會議衍生**的 persona 欄位（絕不拿爬蟲猜測幻想）。
 
 ### `crawl_jobs` — enrichment 執行追蹤（S）
-`id, org_id`, `target_type CHECK('company','contact')`, `target_id`, `target_domain`, `status CHECK('queued','running','done','failed')`, `requested_by`, `started_at`, `finished_at`, `sources_json`(打過的 URLs), `fields_filled INTEGER`, `error`, `raw_result_ref`, `created_at`。讓 UI 顯示「上次 enrich / 重新 enrich」。
+`id, org_id`, `target_type CHECK('company','contact')`, `target_id`, `target_domain`, `mode CHECK('quick','detailed')`(對應爬蟲雙模式：quick=會中、detailed=會前), `status CHECK('queued','running','done','failed')`, `requested_by`, `started_at`, `finished_at`, `sources_json`(打過的 URLs), `fields_filled INTEGER`, `error`, `raw_result_ref`, `created_at`。讓 UI 顯示「上次 enrich / 重新 enrich」。
+
+### M3/M4 補充實體（備忘，DDL 屆時定案，避免遺漏）
+- **realtime 即時 session 表**（M3）：`copilot_session_id` 的目標；含 **consent 記錄**與**逐字稿 TTL/持久化 opt-in** 設定（PRODUCT_SPEC 資料與隱私的落地欄位）。
+- **`training_sessions`／評分報告**（M4）：模擬訓練的持久化——persona `contact_id`、started/ended、雙向逐字稿參照、`score_json`（評分報告）。
 
 ---
 
@@ -394,6 +404,7 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_scope ON embeddings(org_id, entity_typ
 
 ### **模擬訓練**怎麼查
 載入目標 `contact_card` + persona 欄位（`communication_style`、`personality_notes`、`hot_buttons`、`objections_raised`、`known_priorities`）+ `company_card` + 相關 `deal_card`/過往 `meeting_summary` chunks → 種下扮演 system prompt。只用人驗證/會議衍生的 persona 欄位（信任規則），所以對練對象真實不幻想。
+**⚠️ 逐欄把關，不是看 rollup**：persona 欄位的取用必須**逐欄查 `field_provenance`**（該欄最新未被 supersede 的 row 是 `filled_by='human'` 或 `verified=1` 才可用）；`contacts.verified_status` 是整列粗略 rollup，擋不住「整列 partial 但某欄未驗」的漏網。profile_cards 的組卡同理逐欄過閘。
 
 *SQLite 規模註記*：對一個 org 幾千條向量做暴力 cosine 沒問題。不動業務碼的升級：`sqlite-vec` 擴充（SQLite）或 **pgvector**（Postgres），都藏在 `EmbeddingRepository.search()` 後面。
 
@@ -420,15 +431,17 @@ SqliteCompanyRepository      PgCompanyRepository   (未來)
         Database *port* (exec / prepare / transaction)
 ```
 
-**Port 介面**（唯一知道引擎的東西）：
+**Port 介面**（唯一知道引擎的東西）——**async-first**（2026-07-07 審查修正：若用同步簽名，日後換 pg 的 async driver 會把 `await` 波及所有 repo 與 service，「不動業務碼」承諾即破功）：
 ```ts
 export interface DbPort {
-  get<T>(sql: string, params: unknown[]): T | undefined;
-  all<T>(sql: string, params: unknown[]): T[];
-  run(sql: string, params: unknown[]): { changes: number };
-  tx<T>(fn: () => T): T;            // better-sqlite3: db.transaction; pg: BEGIN/COMMIT
+  get<T>(sql: string, params: unknown[]): Promise<T | undefined>;
+  all<T>(sql: string, params: unknown[]): Promise<T[]>;
+  run(sql: string, params: unknown[]): Promise<{ changes: number }>;
+  tx<T>(fn: () => Promise<T>): Promise<T>;
 }
 ```
+- **SqliteDbPort**：get/all/run 直接包 better-sqlite3 的同步呼叫（`Promise.resolve`，零成本）。
+- **⚠️ tx 的實作陷阱**：better-sqlite3 自帶的 `db.transaction()` **是同步的、內部不可 await**——SqliteDbPort 的 `tx` 不要用它，改手動 `BEGIN IMMEDIATE` → `await fn()` → `COMMIT`/出錯 `ROLLBACK`（單連線單進程下正確）。Pg 版天然 async，同一簽名成立。
 
 **Repository 介面（範例）：**
 ```ts
@@ -476,9 +489,19 @@ export interface CompanyRepository {
 
 ---
 
+### `schema_migrations`（migration runner 的最小 DDL，實作照抄）
+```sql
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    INTEGER PRIMARY KEY,   -- 對應 /migrations/NNN_*.sql 的 NNN
+  name       TEXT NOT NULL,
+  applied_at INTEGER NOT NULL       -- epoch ms
+);
+```
+runner 邏輯：啟動時掃 `/migrations/NNN_*.sql` → 比對已套用的 version → 把缺的按序各自在一個 tx 內套用並記錄。
+
 ## 12. 實作順序（給實作這份的弱模型）
 
-1. Migration runner + `schema_migrations`；§2 租戶 DDL（沿用 v1）→ `companies`、`contacts`（§4–5）→ 其子表。
+1. Migration runner + `schema_migrations`；§2 租戶 DDL（沿用 v1）→ **§3 賣方側（`seller_companies`、`products`、`competitors`）** → `companies`、`contacts`（§4–5）→ 其子表。（§3 必須先做：`deal_products.product_id` 與 `product_card` embedding 都依賴它，漏掉會卡步驟 4/5）
 2. `field_provenance` + `DbPort` + base repository（org-scoping + row/domain 映射 + `tx`）。
 3. `CompanyRepository`/`ContactRepository` 含 `upsertFromCrawl`（一個 tx 寫值+provenance）與 `findByDomain` dedupe。
 4. Deals/meetings/signals/notes/activities（§6–8）。

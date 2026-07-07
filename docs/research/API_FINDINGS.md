@@ -2,7 +2,7 @@
 
 > 來源＝研究工作流三個 agent（gemini-live-api / tab-audio-capture / gemini-image-gen），對照 ai.google.dev、MDN、caniuse、context7 `/googleapis/js-genai` v2.0.1。
 > **這份是「寫計畫時不能猜、必須照的事實」。** 每個 model ID / 限制都標 VERIFIED 或 UNCERTAIN(連線時再確認)。
-> 完整原始 brief 在 workflow journal（`subagents/workflows/wf_dd7636ee-fde/journal.jsonl`）。
+>（內部註記，不可攜：原始研究 brief 存於產生本檔的 session 工作目錄、不在 repo 內；本檔已收錄全部載重結論，後續模型以本檔為準。）
 
 ---
 
@@ -74,7 +74,7 @@ session.sendRealtimeInput({ audio: { data: base64Chunk, mimeType: 'audio/pcm;rat
 
 ### B2. 六個要點（VERIFIED）
 1. **內容**：使用者在 picker 選 Meet 分頁並勾「Share tab audio」→ 拿到 Meet 混音。**只有「分頁」surface 有預勾的 share-tab-audio**；整螢幕只在 Win/ChromeOS 給系統音、window 音訊不穩。**用分頁 surface**。
-2. **⚠️ 同瀏覽器硬限制（關鍵）**：picker 的「Chrome Tab」清單只含**同一個 Chromium instance** 的分頁。所以 **B 的 Meet 分頁與 B 的 Copilot 分頁必須在同一個瀏覽器/profile**。「兩個瀏覽器」的說法是陷阱——正解是：帳號 A（報告）用一個 profile 分享簡報；帳號 B（接收）用**另一個 profile**，B 的 profile 裡有 [Meet 分頁] + [Copilot 擷取分頁] 兩個分頁，Copilot 擷取 Meet 分頁。
+2. **⚠️ 同瀏覽器約束（分頁路徑；2026-07-07 二次查核校準）**：picker 的「Chrome Tab」清單只列**同一個 Chromium instance** 的分頁——此為 UA 實作行為（W3C 規範/MDN 未載明，picker 內容屬實作自定），實務成立但無文件背書。**可靠路徑**＝B 的 Meet 分頁與 Copilot 擷取分頁放**同一個瀏覽器 profile**（帳號 A 用另一個 profile 分享簡報）。**跨 profile/瀏覽器有備援**：改選「Window」surface 也可附音訊（Chrome 文件稱 tab 與 window 皆提供音訊選項），但 window 音訊可得性隨 OS/版本浮動——S1 spike 兩條都驗，預設教學走同 profile 分頁路徑。
 3. **權限**：`getDisplayMedia()` 每次需 transient activation（一次點擊），權限不可持久。→ Copilot UI 一顆「開始聆聽」鈕。
 4. **擷取音軌不是麥克風**，預設無 AEC/降噪；為 ASR 乾淨度應顯式 `echoCancellation:false, noiseSuppression:false, autoGainControl:false`。
 5. **背景執行**：擷取是 pipeline tap，Copilot 分頁被切到背景仍持續（發聲分頁豁免節流）。**用 AudioWorklet 不要 rAF/ScriptProcessor**。
@@ -95,7 +95,7 @@ session.sendRealtimeInput({ audio: { data: base64Chunk, mimeType: 'audio/pcm;rat
 
 ### B4. 硬約束與風險（排序）
 1. **必須引導使用者勾「Share tab audio」**；漏勾 → 靜音流無錯 → 必須偵測 `getAudioTracks().length===0` 並教學。checkbox 預設狀態 UNCERTAIN（版本/surface 相關）→ 一律建 zero-track 守衛。（S1 spike 驗）
-2. **同瀏覽器**（見 B2.2）→ 端到端實測真實 setup。（S1 spike 驗）
+2. **同瀏覽器（分頁路徑）＝UA 行為、非規範保證**（見 B2.2）→ 端到端實測真實 setup，並順驗 Window-surface 跨 profile 備援的音訊可得性。（S1 spike 驗）
 3. **只 Chromium 桌面**：Chrome 74+/Edge 79+ ✅；**Firefox ❌**（丟音訊無錯）、**Safari ❌**、**行動裝置全 ❌**。→ **硬性產品約束：報告者接收端限 Chrome/Edge 桌面**。（注意：HUD 檢視端可以是手機，因為 HUD 只是看，不擷取。）
 4. 分享 session 脆弱：按「停止分享」、耳機插拔、關分頁都會殺 track → 需健壯 `ended` 處理 + 重新提示。
 5. 備援：`chrome.tabCapture` 更乾淨但**需 Chrome 擴充**（非純 web），日後要才做。
@@ -104,13 +104,13 @@ session.sendRealtimeInput({ audio: { data: base64Chunk, mimeType: 'audio/pcm;rat
 
 ## C. Gemini 生圖（DynamicSlide 第二生成路徑；**一律 pre-meeting**）
 
-### C1. 結論：**整頁生圖無法進 <4s 會中預算 → 所有 AI 生圖是會前/預取路徑**
-最快模型光生成就 ~2–4s（1K），還沒算 prompt 組裝 + 網路 + base64 解碼 + 渲染。**會中即時**只用「沿用風格的 CSS 路徑」（快）＋重用會前已生的背景圖；**不在會中跑整頁生圖**。
+### C1. 結論：**AI 生圖預設走會前/預取路徑；會中即時以 CSS 路徑優先**（2026-07-07 二次查核校準）
+延遲**無官方數字**（模型頁不給 SLA）；第三方稱 flash-lite 目標 sub-2s、flash 級 ~2–4s（1K）——**全部當工程估計、S5 spike 實測校準**，不得當事實引用。預設政策：**會中即時**用「沿用風格的 CSS 路徑」＋重用會前已生背景圖——理由除延遲變異外，更因**會中被內容安全誤擋（§C5）不可在客戶面前發生**。若 S5 實測 flash-lite 1K 穩定 <2–3s，可開「會中 1K 快速生圖」選配（嚴格逾時＋漸層 fallback），由使用者決定。
 
 ### C2. Model IDs（VERIFIED）— 用 `ai.models.generateContent`（Imagen 已淘汰，Aug 17 2026 關閉，不要用）
 | Model ID | 別名 | 特性 |
 |---|---|---|
-| `gemini-3-pro-image` | Nano Banana Pro | 1K/2K/4K，**最佳 in-image 文字 97%（含中文）**，有 grounding，**延遲最高**（僅會前純視覺頁用） |
+| `gemini-3-pro-image`（**API 參數用 `gemini-3-pro-image-preview`**——`-preview` 是現行 API 字串，無後綴版是文件/model-card 代號） | Nano Banana Pro | 1K/2K/4K，官方定位「最佳 in-image 文字」：**單行文字錯誤率多 <10%（含亞洲語系，官方 heatmap）**——「97%」是第三方轉述、勿當官方數字；有 grounding，**延遲最高**（僅會前純視覺頁用） |
 | `gemini-3.1-flash-image` | Nano Banana 2 | 通用主力，低延遲（背景圖用） |
 | `gemini-3.1-flash-lite-image` | Nano Banana 2 Lite | **僅 1K**，最快最便宜 ~4s（要極速時用） |
 
@@ -129,7 +129,7 @@ for (const part of res.candidates![0].content!.parts!)
 
 ### C4. 兩路建議
 - **(a) 背景圖＋CSS 真文字（產品預設）**：`gemini-3.1-flash-image`（1K/2K）或 `gemini-3.1-flash-lite-image`（1K 極速）。prompt 明講「no words / 留 negative space」。**保留 CSS 真文字疊層當預設**：文字可編輯、中文銳利、pptx 可用、是唯一能過會中延遲的路。
-- **(b) 整頁生圖（純視覺、含中文 in-image 字）**：`gemini-3-pro-image`（唯一可信中文 in-image 97%）。**只會前生**，接受其延遲/成本。
+- **(b) 整頁生圖（純視覺、含中文 in-image 字）**：`gemini-3-pro-image-preview`（官方定位「最佳 in-image 文字」、亞洲語系錯誤率多 <10%；「flash 級中文 in-image 較弱」是推論非官方文件——S5 一併實測比較）。**預設只會前生**，接受其延遲/成本。
 
 ### C5. 安全與浮水印（VERIFIED）
 - 內容安全會擋善意商業圖：高風險＝可辨識**人臉/公眾人物/品牌 logo**。→ **必須設 fallback**：被擋/空結果就退回漸層/CSS 背景，絕不讓會中出現壞掉的頁。Imagen 有 `personGeneration`/`includeRaiReason`。
@@ -144,3 +144,9 @@ for (const part of res.candidates![0].content!.parts!)
   1. **Gemini 非 Live 音訊理解**（分段上傳轉寫，如 v1 做法）——同一把 key、最省事，MVP 首選；diarization 交給下游 LLM。
   2. Google Cloud Speech-to-Text v2（串流 + 原生 diarization + 長音訊）——品質更好但要另接 GCP。
 - **決策**：MVP 用候選 1（沿用 v1 的 Gemini 分段轉寫），把 ASR 藏在 `AsrProvider` 介面後面，日後品質不足可換候選 2 不動上層。（這與 v1 WORKLOG「ASR flash-lite 音訊能力未實測」的待驗項一致 → 併入 S2 spike。）
+
+## E. 文字與 embedding 模型（沿用 v1 實測；補列於此以符「model ID 不能猜」規則）
+
+- `gemini-3.1-flash-lite`（文字/分析/生成主力）：**VERIFIED-in-v1**——v1 於 2026-07-05 對實際可用模型清單查證 API ID、並在生產流程實測（生成 0 空白頁）。v2 wiring 時以 models.list 再確認一次即可。
+- `gemini-embedding-001`（embedding）：同上，v1 實測可用（flash-lite 非 embedding 模型，不可混用）。
+- 兩者經 .env（`GEMINI_TEXT_MODEL`／`GEMINI_EMBED_MODEL`）可換，不寫死；生成品質不足時的升級路＝換 `gemini-3.5-flash`（.env 一行）。
