@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 09:00 | M5 整合／隱私／生產強化／邀請／部署產物（7 agent；指揮官代記）
+- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web＋repo 根（部署）
+- **類型**: feat
+- **檔案**: crm `migrations/009_ops.sql`＋repos(usage/invites/members)；shared `ops-types.ts`/`redact.ts`；server `ops/`(meter/rate-limiter/pricing/log/health)＋`realtime/transcript-privacy.ts`/`transcript-retention.ts`＋`org-routes/`＋隱私 gate 改 hub/session-runtime/meeting-store／限流+log+安全標頭+優雅關機 in index.ts／刪孤兒 ws.ts；web `next.config.mjs`(CSP)＋`/settings/team`；根 `Dockerfile.server`/`Dockerfile.web`/`docker-compose.yml`/`Caddyfile`/`.env.production.example`/`scripts/backup.sh`＋`docs/DEPLOY.md`
+- **改了什麼**: (A 隱私) 同意閘（未同意不分析/不落）、逐字稿預設記憶體即棄（persist=0 不寫 DB）、PII 遮蔽（送 LLM＋落 DB 前，實測 `請聯絡我 *** 或電話 ***`）、TTL purge、CSP。(B 成本) usage_events 冪等＋meter 包裝＋/api/usage rollup。(C 強化) 限流 429、結構化 log（0 洩漏）、/ready、安全標頭、優雅關機、刪死碼。(D 邀請) invites/members 路由＋last-owner guard＋/settings/team。(E 部署) Docker/compose/Caddy/DEPLOY runbook（不跑 gcloud）。
+- **為什麼**: M5 里程碑。全鏈路整合驗收 8/9 PASS（typecheck 綠、crm 43/43＋server 29/29 測試、next build 13 路由）。1 PARTIAL：訊號→CRM 批准回寫端點未做（見下筆補）。詳見 ROM 2026-07-08 09:05。
+
 ### 2026-07-08 06:00 | /code-review 修 7 個確認 findings（含 1 critical 跨租戶）
 - **工作區**: apps/server＋apps/web
 - **類型**: fix

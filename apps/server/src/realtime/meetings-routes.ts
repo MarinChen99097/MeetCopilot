@@ -37,9 +37,20 @@ export function createMeetingsRouter(hub: RealtimeHub, jwtSecret: string, port: 
     const companyId = str(body.companyId) ?? undefined;
     const dealId = str(body.dealId) ?? undefined;
     const deckId = str(body.deckId) ?? undefined;
+    // M5 §A: ephemeral-by-default — transcript persists only when the presenter explicitly opts in.
+    const persistTranscript = body.persistTranscript === true;
+    const rd = Number(body.retentionDays);
+    const retentionDays = Number.isFinite(rd) && rd > 0 ? Math.min(3650, Math.floor(rd)) : undefined;
 
     try {
-      const created = await hub.store.create(orgId, { title, companyId, dealId, presenterUserId: userId });
+      const created = await hub.store.create(orgId, {
+        title,
+        companyId,
+        dealId,
+        presenterUserId: userId,
+        persistTranscript,
+        retentionDays,
+      });
       hub.registerMeeting(created.id, { orgId, presenterUserId: userId, companyId, dealId, deckId });
       const wsToken = mintWsToken(jwtSecret, {
         meetingId: created.id,

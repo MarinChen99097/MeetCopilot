@@ -23,6 +23,7 @@ import type { CopilotOrchestrator } from "./copilot.js";
 import type { LiveSessionRuntime } from "./session-runtime.js";
 import { retrieveInfoCards, type RetrievalDeps } from "./retrieval.js";
 import type { GeminiClient } from "../gemini.js";
+import type { Meter } from "../ops/meter.js";
 import { withDeadline } from "./util.js";
 
 const TRANSCRIPT_CONTEXT_MAX = 12;
@@ -44,6 +45,8 @@ export interface OrchestratorDeps {
   /** Analysis-tier model (3.5-flash) for speaker inference. */
   inferenceModel: string;
   getRuntime(meetingId: string): LiveSessionRuntime | undefined;
+  /** 計費（M5 §B，可選）：會中檢索的 query embedding 記為 embedding。 */
+  meter?: Meter;
 }
 
 export class CrmCopilotOrchestrator implements CopilotOrchestrator {
@@ -53,7 +56,7 @@ export class CrmCopilotOrchestrator implements CopilotOrchestrator {
   private readonly retrieval: RetrievalDeps;
 
   constructor(private readonly deps: OrchestratorDeps) {
-    this.retrieval = { core: deps.core, gemini: deps.gemini };
+    this.retrieval = { core: deps.core, gemini: deps.gemini, meter: deps.meter };
   }
 
   onInfoCard(cb: (sessionId: string, card: InfoCard) => void): void {
@@ -76,7 +79,11 @@ export class CrmCopilotOrchestrator implements CopilotOrchestrator {
     if (!runtime) return;
 
     // 1) CRM retrieval → info_card(s) for the HUD.
-    retrieveInfoCards(this.retrieval, { orgId: runtime.orgId, companyId: runtime.companyId, dealId: runtime.dealId }, items)
+    retrieveInfoCards(
+      this.retrieval,
+      { orgId: runtime.orgId, companyId: runtime.companyId, dealId: runtime.dealId, meetingId: sessionId },
+      items,
+    )
       .then((cards) => {
         for (const card of cards) this.infoCardCb?.(sessionId, card);
       })

@@ -13,6 +13,7 @@ import type { CrawlTargetType, CrawlMode } from "@meetcopilot/shared";
 import { authRequired } from "../auth/jwt.js";
 import { createGeminiClient } from "../gemini.js";
 import type { AppConfig } from "../config.js";
+import type { Meter } from "../ops/meter.js";
 import { createCrawlProvider, type CrawlProvider } from "./crawler.js";
 import { createCrawlExtractor, type CrawlExtractor } from "./extractor.js";
 import { createGroundingProvider, type GroundingProvider } from "./grounding.js";
@@ -42,13 +43,29 @@ export interface ResearchRouterDeps {
   quota?: MeetingResearchQuota;
 }
 
-export function createResearchRouter(core: CrmCore, config: AppConfig, jwtSecret: string, deps: ResearchRouterDeps = {}): Router {
+export function createResearchRouter(
+  core: CrmCore,
+  config: AppConfig,
+  jwtSecret: string,
+  deps: ResearchRouterDeps = {},
+  meter?: Meter,
+): Router {
   const gemini = createGeminiClient(config.gemini);
   const crawler = deps.crawler ?? createCrawlProvider();
   const extractor = deps.extractor ?? createCrawlExtractor(gemini, config.gemini.extractModel);
   const grounding = deps.grounding ?? createGroundingProvider(gemini);
   const jobs = createCrawlJobStore(core.db);
-  const orchestrator = deps.orchestrator ?? createResearchOrchestrator({ core, crawler, extractor, jobs });
+  const orchestrator =
+    deps.orchestrator ??
+    createResearchOrchestrator({
+      core,
+      crawler,
+      extractor,
+      jobs,
+      meter,
+      gemini,
+      extractModel: config.gemini.extractModel,
+    });
   const quota = deps.quota ?? createMeetingResearchQuota(config.researchAutoLimitPerMeeting);
 
   const router = Router();

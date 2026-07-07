@@ -16,9 +16,11 @@
 import type { WebSocket } from "ws";
 import type { CrmCore } from "@meetcopilot/crm";
 import type { ServerMessage, SignalItem, TranscriptSegment, WsRole } from "@meetcopilot/shared";
+import { redactPii } from "@meetcopilot/shared";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config.js";
 import type { GeminiClient } from "../gemini.js";
+import type { Meter } from "../ops/meter.js";
 import { GeminiAsrProvider } from "../asr/gemini-asr.js";
 import { RollingWindowAnalysisEngine } from "../analysis/gemini-analysis.js";
 import type { AsrSegment } from "../asr/asr-provider.js";
@@ -26,6 +28,7 @@ import { LiveSessionRuntime } from "./session-runtime.js";
 import { CrmCopilotOrchestrator } from "./orchestrator.js";
 import { LivePatchService } from "./patch-service.js";
 import { MeetingStore } from "./meeting-store.js";
+import { routeTranscriptSegment } from "./transcript-privacy.js";
 import type { BroadcastSink, BroadcastTarget, ConnMeta } from "./types.js";
 
 /** Binding captured at meeting creation, consumed when the runtime is first materialized. */
@@ -59,6 +62,7 @@ export class RealtimeHub implements BroadcastSink {
     private readonly core: CrmCore,
     private readonly config: AppConfig,
     private readonly gemini: GeminiClient,
+    meter?: Meter,
   ) {
     this.store = new MeetingStore(core.db);
     this.orchestrator = new CrmCopilotOrchestrator({
@@ -66,6 +70,7 @@ export class RealtimeHub implements BroadcastSink {
       gemini,
       inferenceModel: config.gemini.extractModel,
       getRuntime: (id) => this.sessions.get(id),
+      meter,
     });
     this.patch = new LivePatchService({
       getRuntime: (id) => this.sessions.get(id),
@@ -169,6 +174,22 @@ export class RealtimeHub implements BroadcastSink {
     return ok;
   }
 
+  /**
+   * Graceful shutdown: tear down every live runtime (clears all timers/buffers — L13) and close all
+   * open sockets, so SIGTERM leaves no dangling ASR/analysis work or leaked handles. Idempotent.
+   */
+  disposeAll(): void {
+    for (const meetingId of [...this.sessions.keys()]) this.disposeSession(meetingId);
+    for (const set of this.rooms.values()) {
+      for (const conn of set) {
+        if (conn.ws.readyState === conn.ws.OPEN) conn.ws.close(1001, "server shutting down");
+      }
+    }
+    this.rooms.clear();
+    for (const timer of this.graceTimers.values()) clearTimeout(timer);
+    this.graceTimers.clear();
+  }
+
   private disposeSession(meetingId: string): void {
     const runtime = this.sessions.get(meetingId);
     if (runtime) {
@@ -190,6 +211,14 @@ export class RealtimeHub implements BroadcastSink {
 
     const binding = this.bindings.get(meta.meetingId);
     const presenterUserId = binding?.presenterUserId ?? meta.userId;
+
+    // Ephemeral-by-default (M5 §A): read the meeting's persist_transcript flag; default false (in-memory only).
+    let persistTranscript = false;
+    try {
+      persistTranscript = (await this.store.privacySettings(meta.orgId, meta.meetingId)).persistTranscript;
+    } catch (err) {
+      console.warn(`[hub] privacy settings load failed (meeting=${meta.meetingId}): ${(err as Error).message}`);
+    }
 
     // Best-effort load of deck head (M2 repo; may throw as a stub during parallel build → tolerate).
     let committedIndex = -1;
@@ -217,6 +246,7 @@ export class RealtimeHub implements BroadcastSink {
       companyId: binding?.companyId,
       dealId: binding?.dealId,
       initialCommittedIndex: committedIndex,
+      persistTranscript,
       researchQuota: this.config.researchAutoLimitPerMeeting,
       asr,
       engine,
@@ -236,12 +266,26 @@ export class RealtimeHub implements BroadcastSink {
   }
 
   private async onAsrFinal(runtime: LiveSessionRuntime, seg: AsrSegment): Promise<void> {
-    const speaker = await this.orchestrator.inferSpeaker(runtime.meetingId, seg.text);
+    // Consent gate (M5 §A): no analysis, no persistence, no LLM egress before consent — drop the segment.
+    if (!runtime.consent) return;
+    // Redact PII before ANY LLM egress; speaker inference is an LLM call, so it sees redacted text too.
+    const redactedText = redactPii(seg.text);
+    const speaker = await this.orchestrator.inferSpeaker(runtime.meetingId, redactedText);
+    // Re-check: consent may have been revoked during the async speaker inference above.
+    if (!runtime.consent) return;
     const ts: TranscriptSegment = { id: randomUUID(), t: seg.t, speaker, text: seg.text, final: true };
-    this.broadcast(runtime.meetingId, { type: "transcript", segment: ts }, "hud"); // I3: hud only
-    this.store.saveSegment(runtime.orgId, runtime.meetingId, ts).catch(() => {});
-    this.orchestrator.onTranscript(runtime.meetingId, ts);
-    runtime.engine.ingest(runtime.meetingId, seg);
+
+    const route = routeTranscriptSegment({
+      consent: runtime.consent,
+      persistTranscript: runtime.persistTranscript,
+      segment: ts,
+    });
+    // I3: raw transcript only to the presenter's private HUD (account B, isolated).
+    if (route.hud) this.broadcast(runtime.meetingId, { type: "transcript", segment: route.hud }, "hud");
+    // Ephemeral-by-default: persist (redacted) only when the meeting opted in.
+    if (route.persist) this.store.saveSegment(runtime.orgId, runtime.meetingId, route.persist).catch(() => {});
+    if (route.contextSegment) this.orchestrator.onTranscript(runtime.meetingId, route.contextSegment);
+    if (route.analysisText != null) runtime.engine.ingest(runtime.meetingId, { ...seg, text: route.analysisText });
   }
 
   private onSignals(runtime: LiveSessionRuntime, items: SignalItem[]): void {

@@ -1,0 +1,77 @@
+# MeetCopilot v2 — production topology (single GCE VM, decision 20).
+#
+#   caddy (:80/:443, auto-TLS)  ──►  web  (Next.js standalone, :3000)   → "/"
+#                               └─►  server (Express + ws, :8787)        → "/api/*", "/ws*"
+#
+# SQLite lives on the host bind-mount ./data (persistent). Only caddy publishes
+# ports; web/server are reachable only on the internal compose network.
+#
+# Run with:  docker compose --env-file .env.production up -d --build
+#   --env-file feeds ${VARS} interpolation below (build args, DOMAIN, ACME_EMAIL);
+#   the per-service `env_file:` feeds each container's runtime environment.
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    env_file: .env.production
+    volumes:
+      - ./data:/data # persistent SQLite (DB_PATH=/data/meetcopilot.db)
+    expose:
+      - "8787"
+    restart: unless-stopped
+    healthcheck:
+      # Node 22 has global fetch; avoids depending on curl in the image.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        # Baked into the client bundle + CSP at build time — rebuild web on domain change.
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE}
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    expose:
+      - "3000"
+    depends_on:
+      server:
+        condition: service_started
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # ACME certs/keys — MUST persist across restarts
+      - caddy_config:/config
+    environment:
+      # Only DOMAIN/ACME_EMAIL reach caddy — no app secrets in the TLS terminator.
+      - DOMAIN=${DOMAIN}
+      - ACME_EMAIL=${ACME_EMAIL}
+    depends_on:
+      web:
+        condition: service_started
+      server:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

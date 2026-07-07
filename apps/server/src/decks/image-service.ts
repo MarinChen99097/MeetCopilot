@@ -12,6 +12,7 @@ import type { CrmCore } from "@meetcopilot/crm";
 import type { ImageKind } from "@meetcopilot/shared";
 import { extractSlideText } from "@meetcopilot/shared";
 import { OpenAIImageRefusedError, type ImageProvider } from "../providers/image.js";
+import type { Meter } from "../ops/meter.js";
 
 export interface ImageService {
   /** Enqueue a pre-meeting image job → { jobId } (202). Runs async; poll via GET /api/image-jobs/:id. */
@@ -37,7 +38,12 @@ function composePrompt(kind: ImageKind, callerPrompt: string | undefined, slideT
   return `${base}${styleSuffix}`;
 }
 
-export function createImageService(core: CrmCore, provider: ImageProvider): ImageService {
+export function createImageService(
+  core: CrmCore,
+  provider: ImageProvider,
+  meter?: Meter,
+  imageModel?: string,
+): ImageService {
   async function run(orgId: string, jobId: string, deckId: string, slideIdx: number, kind: ImageKind, prompt?: string) {
     try {
       await core.decks.updateImageJob(orgId, jobId, { status: "running" });
@@ -58,10 +64,17 @@ export function createImageService(core: CrmCore, provider: ImageProvider): Imag
       });
       let result;
       try {
-        result = await Promise.race([
-          provider.generate({ prompt: finalPrompt, kind }),
-          deadline,
-        ]);
+        const generate = () => Promise.race([provider.generate({ prompt: finalPrompt, kind }), deadline]);
+        // 計費（M5 §B）：一次生圖記一筆 openai_image（per-image 成本由 pricing 依 model 估算）。
+        // idemKey = job id（穩定）→ 同一 job 重跑不重複計費。生圖無 token，故只帶 model。
+        result = meter
+          ? await meter.meter(
+              orgId,
+              "openai_image",
+              async () => ({ result: await generate(), model: imageModel }),
+              `img:${jobId}`,
+            )
+          : await generate();
       } finally {
         if (timer) clearTimeout(timer);
       }

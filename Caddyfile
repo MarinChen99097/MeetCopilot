@@ -1,0 +1,39 @@
+# MeetCopilot v2 — reverse proxy + automatic HTTPS (Let's Encrypt).
+# DOMAIN / ACME_EMAIL come from the caddy container environment (see docker-compose.yml).
+#
+# Routing:
+#   /api/*  → server:8787   (REST)
+#   /ws*    → server:8787   (realtime copilot WebSocket; Caddy proxies WS transparently)
+#   /*      → web:3000       (Next.js)
+#
+# Automatic HTTPS is on by default for a real domain: Caddy provisions + renews the
+# cert via ACME and redirects http→https. caddy_data volume persists the certs.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Realtime WebSocket. reverse_proxy upgrades Connection/Upgrade automatically;
+	# no special directive needed in Caddy v2.
+	handle /ws* {
+		reverse_proxy server:8787
+	}
+
+	# REST API.
+	handle /api/* {
+		reverse_proxy server:8787
+	}
+
+	# Everything else → the Next.js app.
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

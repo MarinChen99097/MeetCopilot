@@ -47,17 +47,54 @@ export interface GenerateGroundedOptions {
   attempts?: number;
 }
 
+/** 一次呼叫的用量（供計費；token 取自 API usageMetadata，缺則 undefined）。 */
+export interface TokenUsage {
+  /** 實際使用的 model id（估價 key）。 */
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+/** 業務結果 + 計費用量（*Metered 變體的回傳）。 */
+export interface Metered<T> {
+  value: T;
+  usage: TokenUsage;
+}
+
 export interface GeminiClient {
   isConfigured(): boolean;
   generateJson<T>(opts: GenerateJsonOptions): Promise<T>;
+  /**
+   * generateJson 的計費變體：回傳結果 + token 用量（Meter 包裝用）。
+   * generateJson 內部即委派本方法並丟棄 usage，故行為完全一致。
+   */
+  generateJsonMetered<T>(opts: GenerateJsonOptions): Promise<Metered<T>>;
   /** Google Search grounding：回答 + 引用來源（GroundingProvider 用）。 */
   generateGrounded(opts: GenerateGroundedOptions): Promise<GroundedResult>;
   embed(text: string): Promise<number[]>;
+  /** embed 的計費變體：回傳向量 + token 用量。 */
+  embedMetered(text: string): Promise<Metered<number[]>>;
 }
 
 /** @google/genai 的 groundingMetadata 子形狀（跨版本寬鬆取用，避免型別耦合）。 */
 interface GroundingChunkLoose {
   web?: { uri?: string; title?: string };
+}
+
+/** @google/genai 的 usageMetadata 子形狀（跨版本寬鬆取用）。 */
+interface UsageMetadataLoose {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+}
+
+/** 從 generateContent/embedContent 回應寬鬆讀出 token 用量（缺欄→undefined，不臆造）。 */
+function readUsage(model: string, meta: UsageMetadataLoose | undefined): TokenUsage {
+  return {
+    model,
+    inputTokens: typeof meta?.promptTokenCount === "number" ? meta.promptTokenCount : undefined,
+    outputTokens: typeof meta?.candidatesTokenCount === "number" ? meta.candidatesTokenCount : undefined,
+  };
 }
 
 /**
@@ -94,10 +131,7 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
     return cached;
   };
 
-  return {
-    isConfigured: () => Boolean(cfg.apiKey),
-
-    async generateJson<T>(opts: GenerateJsonOptions): Promise<T> {
+  async function generateJsonMetered<T>(opts: GenerateJsonOptions): Promise<Metered<T>> {
       const ai = client();
       const model = opts.model ?? cfg.textModel;
       const attempts = opts.attempts ?? 2;
@@ -116,7 +150,7 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
             ]
           : opts.prompt;
 
-      return withRetry<T>(
+      return withRetry<Metered<T>>(
         async () => {
           const response = await ai.models.generateContent({
             model,
@@ -131,8 +165,9 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
           const text = response.text;
           if (!text) throw new Error("empty Gemini response");
           const cleaned = stripJsonFences(text);
+          const usage = readUsage(model, response.usageMetadata as UsageMetadataLoose | undefined);
           try {
-            return JSON.parse(cleaned) as T;
+            return { value: JSON.parse(cleaned) as T, usage };
           } catch (err) {
             throw new Error(
               `Gemini JSON parse failed: ${(err as Error).message}; head: ${cleaned.slice(0, 300)}`,
@@ -142,9 +177,9 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
         attempts,
         "generateJson",
       );
-    },
+  }
 
-    async generateGrounded(opts: GenerateGroundedOptions): Promise<GroundedResult> {
+  async function generateGrounded(opts: GenerateGroundedOptions): Promise<GroundedResult> {
       const ai = client();
       const model = opts.model ?? cfg.textModel;
       const attempts = opts.attempts ?? 2;
@@ -177,14 +212,33 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
         attempts,
         "generateGrounded",
       );
-    },
+  }
 
-    async embed(text: string): Promise<number[]> {
+  async function embedMetered(text: string): Promise<Metered<number[]>> {
       const ai = client();
       const response = await ai.models.embedContent({ model: cfg.embedModel, contents: text });
       const values = response.embeddings?.[0]?.values;
       if (!values) throw new Error("Gemini returned no embedding vector");
-      return values;
+      const usage = readUsage(
+        cfg.embedModel,
+        (response as { usageMetadata?: UsageMetadataLoose }).usageMetadata,
+      );
+      // embedContent 常不回 usageMetadata；無回報時用字元數粗估 input token（~4 chars/token），
+      // 讓 embedding 也有非零成本觀測（M5_CONTRACT §B「無則估」）。
+      if (usage.inputTokens === undefined) usage.inputTokens = Math.max(1, Math.ceil(text.length / 4));
+      return { value: values, usage };
+  }
+
+  return {
+    isConfigured: () => Boolean(cfg.apiKey),
+    generateJsonMetered,
+    async generateJson<T>(opts: GenerateJsonOptions): Promise<T> {
+      return (await generateJsonMetered<T>(opts)).value;
+    },
+    generateGrounded,
+    embedMetered,
+    async embed(text: string): Promise<number[]> {
+      return (await embedMetered(text)).value;
     },
   };
 }

@@ -87,3 +87,12 @@
 - **待使用者驗**：語音真開口打斷體感、>15min resumption（同 S1 模式）。
 - **下一步**：commit 三線 → **/code-review（使用者指定）** → 修 confirmed findings。
 - **狀態**：M0/M1/M2/M3/M4 全部 build 完成且逐線驗收 PASS；三 spike（S1/S3/S4）過；待 commit＋code-review。
+
+## 2026-07-08 session（同日續・/code-review 修正 + M5 整合/隱私/強化/部署）
+
+- **/code-review**（多鏡頭對抗式，CodeRabbit 未裝故自建）：12 raw→5 refuted→**7 confirmed 全修**（F1 critical 跨租戶掐會議＋回歸測試；F2 live 重連卡死；F3 /present 假重連；F4 SSRF DNS-rebinding；F5 train hang；F6 計時；F7 圖片 413）。**F4 二次校準**：fail-closed 弄壞 www→apex 重導經真站抓到→改回只 pin 目標（L16）。commit a21a903。
+- **M5**（工作流 7 agent）：**8/9 整合驗收 PASS**——(A) 隱私：同意閘/PII 遮蔽（實測 `*** 或電話 ***`）/逐字稿預設即棄/TTL/CSP；(B) 成本：usage_events 冪等＋/api/usage；(C) 強化：限流 429/結構化 log（0 洩漏）/ready/安全標頭/優雅關機/刪死碼；(D) 邀請制成員＋/settings/team＋last-owner guard；(E) 部署產物：Docker/compose/Caddy/DEPLOY.md。typecheck＋72 測試＋13 路由 build 綠。
+- **1 PARTIAL → 補**：訊號→CRM 批准回寫端點（PRODUCT_SPEC flywheel），M5 closeout 補上。
+- **carry-forward**：成本記帳串流小項未涵蓋；persona-lock/真語音待使用者真跑；npm audit 已 triage。
+- **使用者唯一未完＝上線**：GCP 專案/帳單/網域/DNS、OpenAI 組織驗證、換 JWT_SECRET，照 DEPLOY.md。
+- **狀態**：**MeetCopilot v2 = M0–M5 完整成品**（CRM＋研究引擎＋3 產品＋6 前端＋隱私/成本/強化/邀請/部署產物），經對抗審查修正。只差使用者上線＋真語音驗。

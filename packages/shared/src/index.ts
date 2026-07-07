@@ -6,3 +6,5 @@ export * from "./crm-types.js";
 export * from "./trust.js";
 export * from "./deck.js";
 export * from "./train.js";
+export * from "./ops-types.js";
+export * from "./redact.js";

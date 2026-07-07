@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+# ─────────────────────────────────────────────────────────────────────────────
+# MeetCopilot v2 — API server (Express + ws + Playwright crawler + better-sqlite3)
+#
+# Single-stage on Debian bookworm (NOT alpine/slim): Playwright chromium needs
+# glibc + apt system libs, and `playwright install --with-deps` uses apt. The
+# workspace resolves @meetcopilot/{shared,crm} via npm's node_modules symlinks,
+# so we build in place (shared → crm → server) and run `node dist/index.js`.
+# Kept single-stage on purpose: copying node_modules between stages would break
+# those workspace symlinks (the exact layout validated locally).
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-bookworm
+
+ENV NODE_ENV=production \
+    PORT=8787 \
+    # Playwright caches browsers here; keep it on the image (not a volume).
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /app
+
+# 1) Manifests first (better layer caching). All workspace package.json files are
+#    required for `npm ci` to reconstruct the workspace tree matching package-lock.
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/crm/package.json ./packages/crm/
+COPY apps/server/package.json ./apps/server/
+COPY apps/web/package.json ./apps/web/
+
+# 2) Full install (dev deps included — tsc is needed to build to dist).
+#    better-sqlite3 uses a prebuilt binary for linux-x64/node22 (no compile).
+RUN npm ci
+
+# 3) Sources needed to build the server (web source not needed in this image).
+COPY tsconfig.base.json ./
+COPY packages ./packages
+COPY apps/server ./apps/server
+
+# 4) Build order: shared (composite) → crm (tsc -b) → server (emit dist/).
+RUN npm run build --workspace @meetcopilot/shared \
+ && npm run build --workspace @meetcopilot/crm \
+ && npm run build --workspace @meetcopilot/server
+
+# 5) Chromium + system deps for the research crawler (Playwright).
+RUN npx playwright install --with-deps chromium
+
+# 6) Persistent SQLite lives on a mounted volume (see docker-compose.yml + DB_PATH).
+VOLUME ["/data"]
+
+EXPOSE 8787
+
+# config.ts resolves paths from the built file location, not CWD; env comes from
+# the container environment (docker-compose env_file). DB_PATH should point at /data.
+CMD ["node", "apps/server/dist/index.js"]

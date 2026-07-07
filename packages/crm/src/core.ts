@@ -7,6 +7,7 @@ import type { CrmCore } from "./ports.js";
 import { createSqliteDbPort } from "./sqlite-db.js";
 import { runMigrations } from "./migrate.js";
 import { SqliteOrgRepository, SqliteUserRepository, SqliteMembershipRepository } from "./repos.js";
+import { SqliteInviteRepository, SqliteMemberRepository } from "./repos-invites.js";
 import {
   SqliteCompanyRepository,
   SqliteContactRepository,
@@ -21,6 +22,7 @@ import {
 } from "./repos-retrieval.js";
 import { SqliteTrainingRepository } from "./repos-training.js";
 import { SqliteDeckRepository } from "./repos-decks.js";
+import { SqliteUsageRepository } from "./repos-ops.js";
 
 /** 開啟 SQLite（`:memory:` 或檔案路徑）並回傳組裝好的 CrmCore。呼叫端負責 `await core.migrate()`。 */
 export async function createCrmCore(dbPath: string): Promise<CrmCore> {
@@ -45,6 +47,10 @@ export async function createCrmCore(dbPath: string): Promise<CrmCore> {
     decks: new SqliteDeckRepository(port),
     // ── M4：訓練 repo（008_training.sql）──
     training: new SqliteTrainingRepository(port),
+    // ── M5：ops repos（009_ops.sql）──
+    usage: new SqliteUsageRepository(port),
+    invites: new SqliteInviteRepository(port),
+    members: new SqliteMemberRepository(port),
     migrate: () => runMigrations(raw),
     close,
   };

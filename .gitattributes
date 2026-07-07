@@ -1,0 +1,7 @@
+# Force LF for files that run on the Linux VM — a CRLF shebang/`\r` breaks
+# backup.sh, the Dockerfiles, and the Caddyfile when checked out on Windows.
+*.sh          text eol=lf
+Dockerfile*   text eol=lf
+Caddyfile     text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf

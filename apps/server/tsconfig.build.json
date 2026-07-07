@@ -1,0 +1,19 @@
+{
+  "//": "Build 專用（deploy 映像用）：apps/server 平時以 tsx 執行、typecheck 走 tsconfig.json（noEmit）。生產映像需純 JS，故本檔 emit 到 dist/。不使用 project reference（避免動 crm 的 build 設定）；改把 base 的 paths 覆寫指向 shared/crm 已建置的 dist .d.ts（Dockerfile 先 build shared→crm→server）。.d.ts 為外部宣告，tsc 不 emit、也不觸發 rootDir(TS6059)。原始碼相對 import 已用顯式 .js，emit 後可直接 `node dist/index.js`。排除 *.test.ts。",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "resolveJsonModule": true,
+    "paths": {
+      "@meetcopilot/shared": ["../../packages/shared/dist/index.d.ts"],
+      "@meetcopilot/crm": ["../../packages/crm/dist/index.d.ts"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

@@ -31,6 +31,10 @@ export interface NewMeeting {
   companyId?: string;
   dealId?: string;
   presenterUserId: string;
+  /** M5 §A ephemeral-by-default: opt in to transcript persistence (default false → in-memory only). */
+  persistTranscript?: boolean;
+  /** Retention window (days) for persisted transcript; null/undefined → service default (30). */
+  retentionDays?: number;
 }
 
 interface MeetingRow {
@@ -67,13 +71,27 @@ export class MeetingStore {
     const id = randomUUID();
     const now = Date.now();
     // meetings.company_id is NOT NULL (005); the API allows omitting companyId → store '' sentinel.
+    // persist_transcript/retention_days (009): ephemeral-by-default → default 0 / NULL when not opted in.
     await this.db.run(
       `INSERT INTO meetings
-         (id, org_id, company_id, deal_id, copilot_session_id, title, status, presenter_user_id, started_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`,
-      [id, orgId, input.companyId ?? "", input.dealId ?? null, id, input.title, input.presenterUserId, now, now, now],
+         (id, org_id, company_id, deal_id, copilot_session_id, title, status, presenter_user_id,
+          persist_transcript, retention_days, started_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?)`,
+      [
+        id, orgId, input.companyId ?? "", input.dealId ?? null, id, input.title, input.presenterUserId,
+        input.persistTranscript ? 1 : 0, input.retentionDays ?? null, now, now, now,
+      ],
     );
     return { id, presenterUserId: input.presenterUserId, createdAt: now };
+  }
+
+  /** Ephemeral-by-default privacy settings for a meeting (M5 §A). Missing meeting → persist off. */
+  async privacySettings(orgId: string, meetingId: string): Promise<{ persistTranscript: boolean }> {
+    const row = await this.db.get<{ persist_transcript: number | null }>(
+      `SELECT persist_transcript FROM meetings WHERE id = ? AND org_id = ?`,
+      [meetingId, orgId],
+    );
+    return { persistTranscript: row?.persist_transcript === 1 };
   }
 
   async findRef(orgId: string, id: string): Promise<MeetingRef | null> {

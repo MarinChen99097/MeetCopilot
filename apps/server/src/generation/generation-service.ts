@@ -4,9 +4,12 @@
  * auto-QA + DESIGN_PRINCIPLES, rewritten to v2 SlideSpec / append-only) to the DeckRepository for persistence.
  * Analysis/generation use the gemini-3.5-flash tier (config.gemini.extractModel), NOT flash-lite (L15).
  */
+import { randomUUID } from "node:crypto";
 import type { CrmCore } from "@meetcopilot/crm";
 import type { Deck, GenerateDeckInput, SlideSpec } from "@meetcopilot/shared";
 import type { GeminiClient } from "../gemini.js";
+import type { Meter } from "../ops/meter.js";
+import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { generateDeckSlides, regenerateOneSlide } from "./slide-gen.js";
 
 export interface GenerationService {
@@ -28,10 +31,17 @@ export function createGenerationService(
   core: CrmCore,
   gemini: GeminiClient,
   model: string,
+  meter?: Meter,
 ): GenerationService {
+  /** 有 meter 就現包一個 per-request metered client（記為 gemini_text）；否則透傳原 client。 */
+  const forOrg = (orgId: string): GeminiClient =>
+    meter
+      ? meteredGeminiClient(gemini, meter, { orgId, kind: "gemini_text", idemPrefix: `gen:${randomUUID()}` })
+      : gemini;
+
   return {
     async generateDeck(orgId, input) {
-      const slides = await generateDeckSlides(gemini, model, input);
+      const slides = await generateDeckSlides(forOrg(orgId), model, input);
       if (slides.length === 0) throw new GenerationEmptyError();
       return core.decks.create(orgId, {
         title: input.topic,
@@ -48,7 +58,7 @@ export function createGenerationService(
       const { deck, slides } = found;
       const anchor = idx > 0 ? slides[idx - 1]?.spec : undefined;
       const current = slides.find((s) => s.idx === idx)?.spec;
-      const next = await regenerateOneSlide(gemini, model, deck.language, anchor, current, hint);
+      const next = await regenerateOneSlide(forOrg(orgId), model, deck.language, anchor, current, hint);
       // updateSlide 守 I1（idx ≤ committedIndex → I1ViolationError）；會前 committedIndex=-1 不受限。
       const saved = await core.decks.updateSlide(orgId, deckId, idx, next);
       return saved.spec;

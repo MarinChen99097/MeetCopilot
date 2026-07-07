@@ -9,6 +9,7 @@ build/
 .env
 .env.*
 !.env.example
+!.env.production.example
 # db (local SQLite)
 *.db
 *.db-journal

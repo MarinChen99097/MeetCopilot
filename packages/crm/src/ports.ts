@@ -66,6 +66,12 @@ import type {
   TrainTurn,
   TrainReport,
   NewTrainReport,
+  // ── M5 生產強化（本檔凍結；UsageRepository/InviteRepository/MemberRepository 實作＝M5 build agent）──
+  NewUsageEvent,
+  UsageRollup,
+  Invite,
+  NewInvite,
+  OrgMember,
 } from "@meetcopilot/shared";
 
 /** 成員角色（memberships.role，CRM_SCHEMA §2）。結構等同 @meetcopilot/shared 的 MembershipRole。 */
@@ -354,6 +360,54 @@ export interface TrainingRepository {
 }
 
 // ─────────────────────────────────────────────────────────────
+// M5 成本記帳 存取（009_ops.sql: usage_events；M5_CONTRACT §B）
+// 實作＝M5 build agent（core.ts 目前為 throwing stub）。
+// 冪等鐵律：record 以 (org_id, idempotency_key) UNIQUE 去重（INSERT OR IGNORE）——
+//   同一計費呼叫重試不重複記帳。est_cost_usd 由呼叫端（Meter）依定價常數估算後帶入。
+// ─────────────────────────────────────────────────────────────
+export interface UsageRepository {
+  /** 冪等記一筆用量（(orgId, idempotencyKey) 已存在則忽略，不拋錯）。 */
+  record(orgId: string, event: NewUsageEvent): Promise<void>;
+  /** per-org rollup：[from, to] 窗內依 kind 分組加總＋總成本（GET /api/usage）。 */
+  rollup(orgId: string, from: number, to: number): Promise<UsageRollup>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// M5 邀請制成員管理 存取（009_ops.sql: invites；M5_CONTRACT §D；決策 20：無計費、邀請制）
+// 實作＝M5 build agent（core.ts 目前為 throwing stub）。
+// findByToken 為**全域查詢**（token UNIQUE，跨 org）：接受邀請時登入者尚不在該 org。
+// accept 由 service 在同一 tx 內：findByToken → 建 membership → 標記 accepted_at。
+// ─────────────────────────────────────────────────────────────
+export interface InviteRepository {
+  /** 發邀請：repo 生成 UUIDv7 id、密碼學隨機 UNIQUE token、created_at。 */
+  create(orgId: string, input: NewInvite): Promise<Invite>;
+  /** org 內邀請清單（含未接受/已接受）。 */
+  list(orgId: string): Promise<Invite[]>;
+  /** 依 token 全域查（token UNIQUE）；未命中回 null。 */
+  findByToken(token: string): Promise<Invite | null>;
+  /** 標記已接受（設 accepted_at=at）。org-scoped：呼叫前已由 findByToken 取得 orgId。 */
+  accept(orgId: string, inviteId: string, at: number): Promise<void>;
+  /** 撤銷邀請（org-scoped）。 */
+  delete(orgId: string, id: string): Promise<void>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// M5 成員角色管理 存取（memberships ⨝ users；M5_CONTRACT §D）
+// 實作＝M5 build agent（core.ts 目前為 throwing stub）。
+// **last-owner 守則（鐵律）**：updateRole 降級唯一 owner、或 remove 唯一 owner → 實作須在 tx 內
+//   統計 org 內 role='owner' 數，若將使 owner 數歸零則**拋錯**（route 層對映為 409/400），
+//   確保每個 org 永遠至少一名 owner。
+// ─────────────────────────────────────────────────────────────
+export interface MemberRepository {
+  /** org 成員清單（memberships join users：userId/email/displayName/role/createdAt）。 */
+  list(orgId: string): Promise<OrgMember[]>;
+  /** 改成員角色。降級唯一 owner → 拋錯（last-owner 守則）。 */
+  updateRole(orgId: string, userId: string, role: Role): Promise<void>;
+  /** 移除成員（刪 membership）。移除唯一 owner → 拋錯（last-owner 守則）。 */
+  remove(orgId: string, userId: string): Promise<void>;
+}
+
+// ─────────────────────────────────────────────────────────────
 // CrmCore — A2 組裝好的核心（db + repositories + 生命週期）
 // A3 的 server 只依賴此介面拿到 repositories，不碰 DbPort/SQL。
 // ─────────────────────────────────────────────────────────────
@@ -376,6 +430,10 @@ export interface CrmCore {
   // ── M2/M4（B0 凍結介面；core.ts 目前為 throwing stub，build agent 實作）──
   decks: DeckRepository;
   training: TrainingRepository;
+  // ── M5（本檔凍結介面；core.ts 目前為 throwing stub，M5 build agent 實作）──
+  usage: UsageRepository;
+  invites: InviteRepository;
+  members: MemberRepository;
   /** 套用 /migrations/NNN_*.sql（schema_migrations runner，CRM_SCHEMA §11 尾）。 */
   migrate(): Promise<void>;
   /** 關閉底層連線（測試/優雅關機）。 */

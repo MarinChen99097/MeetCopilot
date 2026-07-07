@@ -31,6 +31,12 @@ export interface SessionRuntimeDeps {
   companyId?: string;
   dealId?: string;
   initialCommittedIndex: number;
+  /**
+   * Ephemeral-by-default privacy flag (M5 §A). false (default) → transcript segments stay in SessionRuntime
+   * memory and are NEVER written to meeting_transcript_segments (gone on dispose). true → segments persist
+   * (redacted). Loaded from meetings.persist_transcript by the hub when the runtime is materialized.
+   */
+  persistTranscript?: boolean;
   researchQuota: number;
   asr: AsrProvider;
   engine: AnalysisEngine;
@@ -49,6 +55,8 @@ export class LiveSessionRuntime implements SessionRuntime {
   readonly dealId?: string;
   committedIndex: number;
   consent = false;
+  /** Ephemeral-by-default (M5 §A): only persist transcript segments to DB when this is true. */
+  readonly persistTranscript: boolean;
   readonly asr: AsrProvider;
   readonly engine: AnalysisEngine;
 
@@ -67,6 +75,7 @@ export class LiveSessionRuntime implements SessionRuntime {
     this.companyId = deps.companyId;
     this.dealId = deps.dealId;
     this.committedIndex = deps.initialCommittedIndex;
+    this.persistTranscript = deps.persistTranscript ?? false;
     this.deckLength = Math.max(0, deps.initialCommittedIndex + 1);
     this.research = deps.researchQuota;
     this.asr = deps.asr;

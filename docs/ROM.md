@@ -36,6 +36,15 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 09:05 | M5 PASS — 整個產品 M0–M5 完成（含誠實 gap）
+- **誰決定**: Fable（依全鏈路整合驗收裁決）
+- **決策**:
+  1. **M5 驗收 PASS 入庫**：全鏈路 fresh-context smoke 8/9 PASS——隱私（同意閘/PII 遮蔽實測遮罩/persist=0 逐字稿 0 落 DB）、成本（usage rollup 跨 org 隔離）、強化（/ready、限流 429、安全標頭、log 0 洩漏）、邀請（invite→accept＋跨 org 隔離）、I1/I2（append-only＋非 presenter 被拒）、typecheck＋72 測試＋13 路由 build 全綠。
+  2. **1 PARTIAL＝訊號→CRM 批准回寫端點未做**：目前訊號 review-only，PRODUCT_SPEC 的「會後訊號經批准回寫 CRM」flywheel 尚缺端點 → **指揮官決定補上**（M5 closeout，小範圍）：POST 批准回寫，寫進 contact 的 objections/pain 等，provenance `filled_by=human, source_type=meeting, verified=1`（CRM_SCHEMA §7 接縫早已定）。
+- **carry-forward（非阻斷，記錄）**: 成本記帳未涵蓋 ASR/rolling 分析/speaker 推斷/live-token/grounding（大宗 generation/image/extract 已記，串流小項未記）；persona-lock、真語音體驗待使用者真跑；npm audit（hardening agent 已 triage）。
+- **使用者前置（唯一未完＝上線）**: GCP 專案/帳單/網域/DNS、OpenAI 組織驗證、換強 JWT_SECRET，照 `docs/DEPLOY.md` 跑（我不跑 gcloud）。
+- **影響**: M5 全量 commit；ARCHITECTURE 里程碑 M5；接著補訊號回寫。**至此 MeetCopilot v2 為 M0–M5 完整成品，只差使用者上線＋真語音驗。**
+
 ### 2026-07-08 06:05 | /code-review 收尾：7 confirmed 全修＋SSRF 回歸攔截
 - **誰決定**: Fable（依審查證據＋回歸驗證裁決）
 - **決策**:

@@ -887,3 +887,36 @@ kbd { background: #0e1728; border: 1px solid var(--mc-border); border-radius: 5p
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }
+
+/* ── settings / team（M5 §D 邀請制成員管理） ───────────────────── */
+.mc-input--sm { width: auto; padding: 6px 9px; font-size: 13px; }
+
+.mc-teamsec { margin-top: 26px; }
+.mc-teamsec__h2 { font-size: 15px; margin: 0 0 12px; color: var(--mc-text); }
+.mc-teamsec__empty { color: var(--mc-text-muted); font-size: 13px; margin: 0; }
+
+.mc-memberlist, .mc-invitelist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.mc-memberrow, .mc-inviterow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: var(--mc-card);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+}
+.mc-memberrow__id { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mc-memberrow__name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.mc-memberrow__meta { display: block; font-size: 12px; color: var(--mc-text-muted); margin-top: 2px; }
+.mc-memberrow__actions { display: flex; align-items: center; gap: 8px; }
+
+.mc-inviterow__email { font-weight: 600; font-size: 14px; }
+.mc-inviterow__meta { display: block; font-size: 12px; color: var(--mc-text-muted); margin-top: 2px; }
+
+.mc-invitelink { margin-top: 12px; padding: 12px; background: rgba(139, 92, 246, 0.08); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); }
+.mc-invitelink__label { display: block; font-size: 12px; color: var(--mc-text-muted); margin-bottom: 6px; }
+.mc-invitelink__row { display: flex; gap: 8px; align-items: center; }
+.mc-invitelink__url { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }

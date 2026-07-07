@@ -42,6 +42,7 @@ import { parsePptx } from "../import/pptx-parser.js";
 import { parsePdf } from "../import/pdf-parser.js";
 import { detectLanguage } from "../import/detect-language.js";
 import { asyncHandler, orgId, param, str, badRequest, notFound, isOneOf } from "../crm-routes/helpers.js";
+import type { Meter } from "../ops/meter.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -108,12 +109,17 @@ function contentDisposition(title: string): string {
   return `attachment; filename="${ascii}.pptx"; filename*=UTF-8''${encoded}`;
 }
 
-export function createDecksRouter(core: CrmCore, config: AppConfig): Router {
+export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Meter): Router {
   const router = Router();
   const gemini = createGeminiClient(config.gemini);
-  const generation = createGenerationService(core, gemini, config.gemini.extractModel);
+  const generation = createGenerationService(core, gemini, config.gemini.extractModel, meter);
   const pptxExporter = createPptxExporter();
-  const imageService = createImageService(core, new OpenAIImageProvider(config.openai));
+  const imageService = createImageService(
+    core,
+    new OpenAIImageProvider(config.openai),
+    meter,
+    config.openai.imageModel,
+  );
 
   // ── GET /decks ──
   router.get(

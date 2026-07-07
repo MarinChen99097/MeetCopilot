@@ -13,6 +13,8 @@
 import type { CrmCore } from "@meetcopilot/crm";
 import type { InfoCard, InfoCardKind, SignalItem } from "@meetcopilot/shared";
 import type { GeminiClient } from "../gemini.js";
+import type { Meter } from "../ops/meter.js";
+import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { randomUUID } from "node:crypto";
 import { withDeadline } from "./util.js";
 
@@ -24,6 +26,8 @@ export interface MeetingContext {
   orgId: string;
   companyId?: string;
   dealId?: string;
+  /** 歸屬會議（計費 usage_event.meeting_id）。 */
+  meetingId?: string;
 }
 
 function kindOf(entityType: string): InfoCardKind {
@@ -45,6 +49,8 @@ function queryFromSignals(signals: SignalItem[]): string {
 export interface RetrievalDeps {
   core: CrmCore;
   gemini: GeminiClient;
+  /** 計費（M5 §B，可選）：query embedding 記為 embedding，歸屬本場 meetingId。 */
+  meter?: Meter;
 }
 
 /**
@@ -75,7 +81,17 @@ export async function retrieveInfoCards(
     if (ctx.dealId) entityIds.push(ctx.dealId);
     if (entityIds.length === 0) return [];
 
-    const queryVec = await withDeadline(deps.gemini.embed(query), EMBED_DEADLINE_MS, "retrieval.embed");
+    // 計費（M5 §B）：有 meter 就現包 metered client，query embedding 記為 embedding（歸屬 meetingId）。
+    const embedClient =
+      deps.meter && ctx.meetingId
+        ? meteredGeminiClient(deps.gemini, deps.meter, {
+            orgId: ctx.orgId,
+            kind: "embedding",
+            meetingId: ctx.meetingId,
+            idemPrefix: `retr:${randomUUID()}`,
+          })
+        : deps.gemini;
+    const queryVec = await withDeadline(embedClient.embed(query), EMBED_DEADLINE_MS, "retrieval.embed");
     const hits = await deps.core.embeddings.search(ctx.orgId, queryVec, { entityIds }, TOP_K);
 
     return hits.map((h) => ({

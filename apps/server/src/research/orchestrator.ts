@@ -10,8 +10,11 @@
 import type { CrmCore } from "@meetcopilot/crm";
 import type { CrawlMode, CrawlTargetType, CrawlPayload, ContactCrawlPayload } from "@meetcopilot/shared";
 import type { CrawlProvider } from "./crawler.js";
-import type { CrawlExtractor } from "./extractor.js";
+import { createCrawlExtractor, type CrawlExtractor } from "./extractor.js";
 import type { CrawlJobStore } from "./jobs.js";
+import type { GeminiClient } from "../gemini.js";
+import type { Meter } from "../ops/meter.js";
+import { meteredGeminiClient } from "../ops/metered-gemini.js";
 
 export interface EnrichRequest {
   orgId: string;
@@ -27,6 +30,10 @@ export interface ResearchDeps {
   crawler: CrawlProvider;
   extractor: CrawlExtractor;
   jobs: CrawlJobStore;
+  /** 計費（M5 §B，可選）：提供 meter + 基底 gemini + extractModel 時，runJob 會用 per-job metered 抽取器記 gemini_extract。 */
+  meter?: Meter;
+  gemini?: GeminiClient;
+  extractModel?: string;
 }
 
 /** 從 URL 推 domain（去 www.）。無法解析回 undefined。 */
@@ -59,6 +66,19 @@ export interface ResearchOrchestrator {
 
 export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestrator {
   const { core, crawler, extractor, jobs } = deps;
+
+  /** 選抽取器：有 meter + gemini 就現包 per-job metered 抽取器（記 gemini_extract）；否則用預設抽取器。 */
+  const extractorFor = (orgId: string, jobId: string): CrawlExtractor => {
+    if (deps.meter && deps.gemini) {
+      const mg = meteredGeminiClient(deps.gemini, deps.meter, {
+        orgId,
+        kind: "gemini_extract",
+        idemPrefix: `extract:${jobId}`,
+      });
+      return createCrawlExtractor(mg, deps.extractModel);
+    }
+    return extractor;
+  };
 
   return {
     async createJob(req) {
@@ -98,20 +118,21 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
 
     async runJob(args) {
       const { orgId, jobId, targetType, mode, url, domain } = args;
+      const jobExtractor = extractorFor(orgId, jobId);
       try {
         await jobs.markRunning(orgId, jobId);
         const raw = await crawler.crawl({ url, mode, screenshots: false });
 
         let fieldsFilled = 0;
         if (targetType === "company") {
-          const payload: CrawlPayload = await extractor.toCompany(raw);
+          const payload: CrawlPayload = await jobExtractor.toCompany(raw);
           const upsertDomain = domain ?? payload.company.domain ?? domainFromUrl(raw.finalUrl ?? url) ?? "";
           // 指名 targetId：upsert 以 id 命中 enrich 的目標列（缺 domain 就回填），保證更新既有列、不新建重複列。
           await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId: args.targetId });
           fieldsFilled = payload.provenance.length;
         } else {
           // 主管 target：抽出的第一位（best-effort，M1）寫回其公司下。
-          const contacts = await extractor.toContacts(raw);
+          const contacts = await jobExtractor.toContacts(raw);
           const companyId = args.companyIdForContact;
           const first = contacts[0];
           if (companyId && first) {

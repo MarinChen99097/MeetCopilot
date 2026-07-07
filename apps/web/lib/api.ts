@@ -46,6 +46,10 @@ import type {
   TrainDifficulty,
   TrainReport,
   TrainTurn,
+  // ── M5 Org / invites (§D) ──
+  Invite,
+  InviteRole,
+  OrgMember,
 } from "@meetcopilot/shared";
 
 /** REST base URL (the "cloud path"); env-driven per API_CONTRACT §0. */
@@ -511,4 +515,41 @@ export function finishTrainSession(sessionId: string): Promise<{ reportId: strin
 }
 export function getTrainReport(reportId: string): Promise<TrainReport> {
   return request<TrainReport>(`/api/train/reports/${reportId}`);
+}
+
+// ── Org / invite-based membership (API_CONTRACT §D) ─────────────
+// All owner/admin only except accept (any logged-in user). org isolation is server-side from the JWT
+// (management) or from the invite token (accept) — the frontend never sends orgId.
+
+/** POST /api/org/invites result: the created invite + a copyable accept link. */
+export interface CreateInviteResult {
+  invite: Invite;
+  acceptUrl: string;
+}
+/** POST /api/org/invites/accept result: the joined org + granted role. */
+export interface AcceptInviteResult {
+  org: AuthOrg;
+  role: MembershipRole;
+}
+
+export function listOrgMembers(): Promise<OrgMember[]> {
+  return request<OrgMember[]>("/api/org/members");
+}
+export function listOrgInvites(): Promise<Invite[]> {
+  return request<Invite[]>("/api/org/invites");
+}
+export function createOrgInvite(input: { email: string; role: InviteRole }): Promise<CreateInviteResult> {
+  return request<CreateInviteResult>("/api/org/invites", { method: "POST", body: input });
+}
+export function revokeOrgInvite(id: string): Promise<void> {
+  return request<void>(`/api/org/invites/${id}`, { method: "DELETE" });
+}
+export function acceptOrgInvite(token: string): Promise<AcceptInviteResult> {
+  return request<AcceptInviteResult>("/api/org/invites/accept", { method: "POST", body: { token } });
+}
+export function updateOrgMemberRole(userId: string, role: MembershipRole): Promise<void> {
+  return request<void>(`/api/org/members/${userId}`, { method: "PATCH", body: { role } });
+}
+export function removeOrgMember(userId: string): Promise<void> {
+  return request<void>(`/api/org/members/${userId}`, { method: "DELETE" });
 }
