@@ -6,7 +6,30 @@
  *   server-side from the JWT — the frontend never sends orgId.
  * - Error contract: non-2xx is always `{ error: string }`; surfaced as `ApiError` carrying that body.
  */
-import type { MembershipRole } from "@meetcopilot/shared";
+import type {
+  MembershipRole,
+  Company,
+  CompanySummary,
+  Contact,
+  ContactSummary,
+  CompanyProduct,
+  ProductPersonLink,
+  ProductPersonRole,
+  CompanyNews,
+  CompanyLocation,
+  CompanyFunding,
+  CompanyTech,
+  CompanyDepartment,
+  Deal,
+  Note,
+  NoteType,
+  NoteEntityType,
+  FieldProvenance,
+  AccountStatus,
+  CrawlMode,
+  CrawlTargetType,
+  CrawlJobStatus,
+} from "@meetcopilot/shared";
 
 /** REST base URL (the "cloud path"); env-driven per API_CONTRACT §0. */
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8787";
@@ -130,9 +153,197 @@ export function apiMe(): Promise<MeResponse> {
 }
 
 /**
- * Liveness probe. NOTE: not defined in API_CONTRACT §1 — assumed `GET /api/health → { ok }`.
- * Flagged as a contract gap; adjust once the server route is frozen.
+ * Liveness probe (API_CONTRACT §1, v1.1). `GET /api/health → { ok:true }` (unauthenticated).
  */
 export function apiHealth(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>("/api/health", { auth: false });
+}
+
+// ── CRM shared shapes (API_CONTRACT §2/§3) ──────────────────────
+
+/** Paginated list envelope (`?page=&pageSize=` → `{ items, total }`). */
+export interface Paged<T> {
+  items: T[];
+  total: number;
+}
+
+/** GET /api/crm/companies/:id — full Company plus rollup counts. */
+export type CompanyDetail = Company & {
+  counts: { contacts: number; products: number; news: number; deals: number };
+};
+
+export interface CompanyListParams {
+  query?: string;
+  status?: AccountStatus | "";
+  page?: number;
+  pageSize?: number;
+}
+
+/** GET /api/research/jobs/:id — job status (API_CONTRACT §3). */
+export interface ResearchJob {
+  id: string;
+  targetType: CrawlTargetType;
+  targetId: string;
+  mode: CrawlMode;
+  status: CrawlJobStatus;
+  fieldsFilled?: number;
+  sources?: string[];
+  error?: string;
+  startedAt?: number;
+  finishedAt?: number;
+}
+
+export interface GroundResult {
+  answer: string;
+  citations: { title: string; url: string }[];
+}
+
+function qs(params: Record<string, string | number | undefined>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === "") continue;
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+  }
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+
+// ── Companies (API_CONTRACT §2) ─────────────────────────────────
+export function listCompanies(p: CompanyListParams = {}): Promise<Paged<CompanySummary>> {
+  return request<Paged<CompanySummary>>(
+    `/api/crm/companies${qs({ query: p.query, status: p.status, page: p.page, pageSize: p.pageSize })}`,
+  );
+}
+export function createCompany(input: { name: string; domain?: string; websiteUrl?: string }): Promise<Company> {
+  return request<Company>("/api/crm/companies", { method: "POST", body: input });
+}
+export function getCompany(id: string): Promise<CompanyDetail> {
+  return request<CompanyDetail>(`/api/crm/companies/${id}`);
+}
+/** PATCH = 細填 (human override); server writes filled_by='human' provenance for each changed field. */
+export function updateCompany(id: string, patch: Partial<Company>): Promise<Company> {
+  return request<Company>(`/api/crm/companies/${id}`, { method: "PATCH", body: patch });
+}
+export function deleteCompany(id: string): Promise<void> {
+  return request<void>(`/api/crm/companies/${id}`, { method: "DELETE" });
+}
+export function getCompanyNews(id: string): Promise<CompanyNews[]> {
+  return request<CompanyNews[]>(`/api/crm/companies/${id}/news`);
+}
+export function getCompanyLocations(id: string): Promise<CompanyLocation[]> {
+  return request<CompanyLocation[]>(`/api/crm/companies/${id}/locations`);
+}
+export function getCompanyFunding(id: string): Promise<CompanyFunding[]> {
+  return request<CompanyFunding[]>(`/api/crm/companies/${id}/funding`);
+}
+export function getCompanyTech(id: string): Promise<CompanyTech[]> {
+  return request<CompanyTech[]>(`/api/crm/companies/${id}/tech`);
+}
+export function getCompanyDepartments(id: string): Promise<CompanyDepartment[]> {
+  return request<CompanyDepartment[]>(`/api/crm/companies/${id}/departments`);
+}
+
+// ── Contacts (API_CONTRACT §2) ──────────────────────────────────
+export function listContacts(companyId: string): Promise<ContactSummary[]> {
+  return request<ContactSummary[]>(`/api/crm/companies/${companyId}/contacts`);
+}
+export function createContact(companyId: string, input: { fullName: string; title?: string }): Promise<Contact> {
+  return request<Contact>(`/api/crm/companies/${companyId}/contacts`, { method: "POST", body: input });
+}
+export function getContact(id: string): Promise<Contact> {
+  return request<Contact>(`/api/crm/contacts/${id}`);
+}
+export function updateContact(id: string, patch: Partial<Contact>): Promise<Contact> {
+  return request<Contact>(`/api/crm/contacts/${id}`, { method: "PATCH", body: patch });
+}
+export function deleteContact(id: string): Promise<void> {
+  return request<void>(`/api/crm/contacts/${id}`, { method: "DELETE" });
+}
+
+// ── Company products (deep profile) (API_CONTRACT §2) ───────────
+export function listProducts(companyId: string): Promise<CompanyProduct[]> {
+  return request<CompanyProduct[]>(`/api/crm/companies/${companyId}/products`);
+}
+export function createProduct(companyId: string, input: { name: string }): Promise<CompanyProduct> {
+  return request<CompanyProduct>(`/api/crm/companies/${companyId}/products`, { method: "POST", body: input });
+}
+export function getProduct(id: string): Promise<CompanyProduct> {
+  return request<CompanyProduct>(`/api/crm/products/${id}`);
+}
+export function updateProduct(id: string, patch: Partial<CompanyProduct>): Promise<CompanyProduct> {
+  return request<CompanyProduct>(`/api/crm/products/${id}`, { method: "PATCH", body: patch });
+}
+export function deleteProduct(id: string): Promise<void> {
+  return request<void>(`/api/crm/products/${id}`, { method: "DELETE" });
+}
+export function getProductPeople(id: string): Promise<ProductPersonLink[]> {
+  return request<ProductPersonLink[]>(`/api/crm/products/${id}/people`);
+}
+export function addProductPerson(
+  id: string,
+  input: { contactId: string; role: ProductPersonRole; titleOnProduct?: string },
+): Promise<ProductPersonLink> {
+  return request<ProductPersonLink>(`/api/crm/products/${id}/people`, { method: "POST", body: input });
+}
+export function removeProductPerson(id: string, contactId: string): Promise<void> {
+  return request<void>(`/api/crm/products/${id}/people`, { method: "DELETE", body: { contactId } });
+}
+
+// ── Deals (API_CONTRACT §2) ─────────────────────────────────────
+// NOTE: §2 lists `CRUD /api/crm/deals` without a documented company filter; the detail
+// Deals tab needs a per-company view, so we pass `?companyId=`. Flagged as a contract
+// assumption for the backend agent to confirm/freeze.
+export function listDeals(companyId: string): Promise<Paged<Deal>> {
+  return request<Paged<Deal>>(`/api/crm/deals${qs({ companyId })}`);
+}
+
+// ── Notes (API_CONTRACT §2) ─────────────────────────────────────
+export function listNotes(entityType: NoteEntityType, entityId: string): Promise<Note[]> {
+  return request<Note[]>(`/api/crm/notes${qs({ entityType, entityId })}`);
+}
+export function createNote(input: {
+  entityType: NoteEntityType;
+  entityId: string;
+  body: string;
+  noteType?: NoteType;
+  pinned?: 0 | 1;
+}): Promise<Note> {
+  return request<Note>("/api/crm/notes", { method: "POST", body: input });
+}
+export function updateNote(id: string, patch: Partial<Pick<Note, "body" | "noteType" | "pinned">>): Promise<Note> {
+  return request<Note>(`/api/crm/notes/${id}`, { method: "PATCH", body: patch });
+}
+export function deleteNote(id: string): Promise<void> {
+  return request<void>(`/api/crm/notes/${id}`, { method: "DELETE" });
+}
+
+// ── Provenance (「確認/細填」data source) (API_CONTRACT §2) ──────
+export function getProvenance(entityType: string, entityId: string): Promise<FieldProvenance[]> {
+  return request<FieldProvenance[]>(`/api/crm/provenance${qs({ entityType, entityId })}`);
+}
+/** 確認: mark a field verified=1 (value unchanged). 細填 = PATCH the entity instead. */
+export function confirmProvenance(input: {
+  entityType: string;
+  entityId: string;
+  fieldName: string;
+}): Promise<void> {
+  return request<void>("/api/crm/provenance/confirm", { method: "POST", body: input });
+}
+
+// ── Research engine (enrich + grounding) (API_CONTRACT §3) ──────
+export function enrich(input: {
+  targetType: CrawlTargetType;
+  targetId: string;
+  mode: CrawlMode;
+  url?: string;
+}): Promise<{ jobId: string }> {
+  return request<{ jobId: string }>("/api/research/enrich", { method: "POST", body: input });
+}
+export function getResearchJob(id: string): Promise<ResearchJob> {
+  return request<ResearchJob>(`/api/research/jobs/${id}`);
+}
+export function listResearchJobs(targetId: string): Promise<ResearchJob[]> {
+  return request<ResearchJob[]>(`/api/research/jobs${qs({ targetId })}`);
+}
+export function ground(input: { query: string; companyId?: string; meetingId?: string }): Promise<GroundResult> {
+  return request<GroundResult>("/api/research/ground", { method: "POST", body: input });
 }

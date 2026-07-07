@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "smoke": "node scripts/smoke-auth.mjs"
+    "smoke": "node scripts/smoke-auth.mjs",
+    "seed": "node scripts/seed-demo.mjs"
   },
   "dependencies": {
     "@google/genai": "^2",
@@ -20,6 +21,9 @@
     "express": "^4",
     "jsonwebtoken": "^9",
     "openai": "^4",
+    "pdf-parse": "^1",
+    "playwright": "^1",
+    "undici": "^8.7.0",
     "ws": "^8"
   },
   "devDependencies": {

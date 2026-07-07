@@ -1,0 +1,10 @@
+{
+  "//": "Build 專用（tsc -b）：emit 到 dist/ 需 rootDir。以 project reference 引入 shared，其 .d.ts 由被參照的 composite 專案先建置（tsc -b 自動排序），供 crm emit 時解析——避免把 shared src 併入 crm rootDir。Typecheck 走 tsconfig.json（noEmit，零建置順序）。",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [{ "path": "../shared" }],
+  "include": ["src"]
+}

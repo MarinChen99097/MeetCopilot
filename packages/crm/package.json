@@ -16,11 +16,12 @@
     "migrations"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -b tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
+    "@meetcopilot/shared": "*",
     "better-sqlite3": "^11.8.0"
   },
   "devDependencies": {

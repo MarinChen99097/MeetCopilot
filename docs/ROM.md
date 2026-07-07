@@ -36,6 +36,16 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-07 23:30 | M1 驗收裁決（6/7 PASS，修 crawler 懸掛）＋接縫決策採納
+- **誰決定**: Fable（依 B5 fresh-context 驗收證據裁決）
+- **決策**:
+  1. **M1 驗收通過並入庫**：B5 fresh-context 7 項驗收 6 PASS（typecheck 四 workspace 綠、crm vitest 22/22 含跨 org cosine 隔離/upsert 值+provenance 同 tx/human 覆寫 supersede/confirm/信任守則、29 表遷移、真 server CRM 路由冒煙含細填→provenance supersede、SSRF 兩路擋內網+雲端 metadata、auth shim 已移除、CRM 前端 11 路由 next build 綠）。
+  2. **1 項 PARTIAL 修正**：crawler `browser.close()` 在此機懸掛→enrich job 卡 `running`。**派 Opus 修**：close race deadline＋SIGKILL 強殺、整體 crawl deadline、job 失敗一律落 `failed`（見 L13）。此為真 bug（生產也會漏進程/卡 job），非僅環境問題。
+  3. **接縫決策採納**（B0/B2/B3/B4 提報）：(a) crm build 拆 `tsconfig.json`(noEmit typecheck)＋`tsconfig.build.json`(tsc -b emit，shared composite)——沿用 apps/server 既證模式，typecheck 零建置順序；(b) 只有 CRM_SCHEMA 有 CHECK 的欄位變 string-literal union，註解型清單保持 string 讓爬蟲不被擋；(c) `crawl_jobs` 經 DbPort 由 research 自管、不進 repo 接縫（M1 可接受，日後要再升 `CrawlJobStore`）；(d) 契約補 deals list `?companyId=` filter（前端 Deals tab 需要，已入契約＋修）；(e) provenance wire 欄位 camelCase（B5 證實 badge 對齊）。
+  4. **誠實 gap（需使用者的 key 才能全關）**：Gemini 抽取未驗（B5 環境無 GEMINI_API_KEY）——爬蟲 render＋SSRF 已證，但「爬蟲把 CRM 欄位填出來」要有 key 才能實測。**S4 spike 判定：SSRF 穩、爬蟲 render 可行、抽取待 key**。
+- **考慮過的替代**: 把 crawler 懸掛當純環境問題不修（否——生產同樣會漏進程/卡 job，必修）；build 標準化成全 dist（否——維持 M0 的 src-paths typecheck＋dist runtime，成本較低）。
+- **影響**: apps/server crawler/jobs/deals（修）、API_CONTRACT deals filter、LESSONS L12/L13、M1 全量程式碼 commit。**使用者行動項**：把 GEMINI_API_KEY 放進 `apps/server/.env`，我再跑一次真爬蟲把 S4 抽取那半關掉。
+
 ### 2026-07-07 21:50 | SaaS 成品化（決策 20）＋M0 驗收通過＋契約 v1.1
 - **誰決定**: 使用者（成品定調＋四項答覆）＋Fable（部署形態與契約批准）
 - **決策**:

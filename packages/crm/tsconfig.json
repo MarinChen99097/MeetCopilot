@@ -1,8 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
+  "//": "Typecheck 專用（zero build-ordering）：如 apps/server，noEmit + 不設 rootDir，讓 base 'paths' 把 @meetcopilot/shared 解析到 source 而不觸發 TS6059/TS6305。實體 dist 由 tsconfig.build.json（tsc -b）產出。",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "dist"
+    "noEmit": true
   },
   "include": ["src"]
 }

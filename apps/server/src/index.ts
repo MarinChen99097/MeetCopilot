@@ -8,6 +8,9 @@ import http from "node:http";
 import { loadConfig } from "./config.js";
 import { initCrm } from "./crm.js";
 import { createAuthRouter } from "./auth/index.js";
+import { authRequired } from "./auth/jwt.js";
+import { createCrmRouter } from "./crm-routes/index.js";
+import { createResearchRouter } from "./research/routes.js";
 import { attachWs } from "./ws.js";
 
 async function main(): Promise<void> {
@@ -47,6 +50,12 @@ async function main(): Promise<void> {
   });
 
   app.use("/api/auth", createAuthRouter(core, config.jwtSecret));
+
+  // CRM routes (API_CONTRACT §2) — all require a valid Bearer token; tenant scope from req.auth.orgId.
+  app.use("/api/crm", authRequired(config.jwtSecret), createCrmRouter(core));
+
+  // Research engine (API_CONTRACT §3) — Bearer auth applied inside the router; tenant scope from req.auth.orgId.
+  app.use("/api/research", createResearchRouter(core, config, config.jwtSecret));
 
   // 404 for unmatched /api routes (keep {error} contract instead of Express default HTML).
   app.use("/api", (_req, res) => {

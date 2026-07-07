@@ -68,6 +68,18 @@
 - 影響檔案：`JUDGMENT_RUBRICS.md` R6（已有原則，本條為實例）。
 - （v2 註：插入位置已改為一律 append 到尾端〔決策 13〕，本條的「設計錯誤要由使用者拍板」教訓仍成立，插入位置的具體行為以 v2 為準。）
 
+## L12 Windows 平行 npm install → 套件半解壓損毀（2026-07-07）
+- 情境：M0/M1 工作流多個 agent 在同一 `node_modules` 上並行跑 `npm install`。
+- 踩了什麼：套件被寫到一半（症狀＝`.d.ts` 在、`.js` 不見，如 google-auth-library 缺 20 檔、caniuse-lite 缺 24 檔），且**單純重跑 `npm install` 修不好**（它不修「已存在但不完整」的套件）→ server 開不了、`next build` 掛。疑防毒/檔案鎖介入解壓。
+- 正確做法：(1) 派工守則已有「同機平行 agent 勿同時 `npm install`」——由**單一 Verify agent 統一裝一次**；(2) 一旦出現「半解壓」症狀，**`rm -rf node_modules && npm install` 全清重裝**，別做針對性修補（B4 針對性修補只是繞過、根因還在）。
+- 影響檔案：`DIAGNOSIS.md`（次要浪費節可加一條）、`MODEL_DISPATCH.md` 平行派工守則（已有勿並行 install，補「清裝優先於修補」）。
+
+## L13 Playwright 在此機 `browser.close()` 懸掛 → 背景 job 卡死（2026-07-07）
+- 情境：M1 研究引擎的 Playwright 爬蟲，`finally { await browser.close() }`。
+- 踩了什麼：`browser.close()` 在此 Windows 機**永不 resolve**（>8s，root cause＝優雅關閉/子進程終止，疑防毒），連帶 `crawl()` 的 finally 卡住 → enrich 的 crawl_job 永遠停在 `running`。程式**沒有逾時/強殺兜底**就繼承了這個懸掛。
+- 正確做法：任何外部子進程（Playwright/瀏覽器/未來的 ffmpeg 等）的關閉都要 **race 一個 deadline＋強殺 fallback**（`Promise.race([close(), timeout]); process()?.kill('SIGKILL')`）；長任務 job 要有**整體 deadline**，且失敗一律落 `status='failed'`（絕不留 `running`）。這是「外部進程不可信、一定要能被我方逾時掐斷」的通則。
+- 影響檔案：`apps/server/src/research/crawler.ts`（已修）、`DIAGNOSIS.md`。
+
 ## L11【正面校準】指揮官不下場＋sonnet/high 實測有效（2026-07-04）
 - 情境：全程「主對話只交辦＋收結論，實作/修正/簡化/審查全派 sonnet subagent」蓋完整個 app。
 - 踩了什麼：非踩雷，是校準。原 MODEL_DISPATCH 調度表標「未實測、信心中低」。

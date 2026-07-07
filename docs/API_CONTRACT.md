@@ -50,7 +50,7 @@
 | POST / DELETE | `/api/crm/products/:id/people` | `{contactId, role, titleOnProduct?}`；DELETE body `{contactId}` |
 
 ### 商機／筆記
-| CRUD | `/api/crm/deals`、`/api/crm/deals/:id` | `Deal`（stage enum 見 CRM_SCHEMA §6）＋`/api/crm/deals/:id/contacts`（buying committee join） |
+| CRUD | `/api/crm/deals?companyId=&stage=&page=&pageSize=`、`/api/crm/deals/:id` | `Deal`（stage enum 見 CRM_SCHEMA §6）；list 支援 **`?companyId=`**（公司 Deals 分頁用，org-scoped）＋`/api/crm/deals/:id/contacts`（buying committee join） |
 | GET/POST | `/api/crm/notes?entityType=&entityId=` | `Note{id,entityType,entityId,body,noteType,pinned,createdAt}` |
 | PATCH/DELETE | `/api/crm/notes/:id` | |
 

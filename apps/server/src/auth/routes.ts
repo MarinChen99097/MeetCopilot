@@ -11,7 +11,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import bcrypt from "bcryptjs";
-import type { CrmCore, Role } from "@meetcopilot/crm";
+import type { CrmCore } from "@meetcopilot/crm";
 import { authRequired, issueToken } from "./jwt.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -21,28 +21,6 @@ type Json = Record<string, unknown>;
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
-}
-
-/** Minimal membership row shape for the login user→org shim (see note below). */
-interface MembershipRow {
-  org_id: string;
-  role: Role;
-}
-
-/**
- * SEAM GAP (flag for A2/commander): login must resolve a user's org+role from userId alone, but the
- * frozen MembershipRepository (packages/crm/src/ports.ts) only exposes addMembership + roleOf(orgId,userId)
- * — there is no findByUser / primaryOrg lookup. As a temporary M0 shim we read via the exposed DbPort.
- * This is the ONLY spot in the server that touches SQL directly; it should be promoted to
- * `MembershipRepository.findPrimaryOrgOf(userId): Promise<{orgId, role} | null>` so the "nothing bypasses
- * the repo layer" CRM invariant (CRM_SCHEMA §11) holds. Ordering by rowid picks the first (owner) row.
- */
-async function findPrimaryMembership(core: CrmCore, userId: string): Promise<MembershipRow | null> {
-  const row = await core.db.get<MembershipRow>(
-    "SELECT org_id, role FROM memberships WHERE user_id = ? ORDER BY rowid ASC LIMIT 1",
-    [userId],
-  );
-  return row ?? null;
 }
 
 export function createAuthRouter(core: CrmCore, jwtSecret: string): Router {
@@ -125,13 +103,14 @@ export function createAuthRouter(core: CrmCore, jwtSecret: string): Router {
       return;
     }
 
-    const membership = await findPrimaryMembership(core, user.id);
+    // Resolve org+role via the repo (M1_CONTRACT §1 seam-gap fix): no direct SQL in the server.
+    const membership = await core.memberships.findPrimaryOrgOf(user.id);
     if (!membership) {
       res.status(403).json({ error: "user has no organization membership" });
       return;
     }
 
-    const org = await core.orgs.findById(membership.org_id);
+    const org = await core.orgs.findById(membership.orgId);
     if (!org) {
       res.status(403).json({ error: "organization not found" });
       return;
@@ -139,7 +118,7 @@ export function createAuthRouter(core: CrmCore, jwtSecret: string): Router {
 
     const token = issueToken(jwtSecret, {
       userId: user.id,
-      orgId: membership.org_id,
+      orgId: membership.orgId,
       role: membership.role,
     });
     res.json({

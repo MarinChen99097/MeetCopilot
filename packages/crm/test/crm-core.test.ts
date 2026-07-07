@@ -37,7 +37,8 @@ describe("migrate", () => {
       "SELECT version FROM schema_migrations ORDER BY version",
       [],
     );
-    expect(applied.map((r) => r.version)).toEqual([1]);
+    // 001-006（B0 凍結全 schema）；idempotency＝二次 migrate 不重複套用、版本集不成長。
+    expect(applied.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
 

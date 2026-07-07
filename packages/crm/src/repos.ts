@@ -132,4 +132,16 @@ export class SqliteMembershipRepository implements MembershipRepository {
     );
     return row ? row.role : null;
   }
+
+  /**
+   * 回使用者最早加入的 org（memberships.created_at ASC 第一筆）。M1_CONTRACT §1。
+   * 全域查詢（不收 orgId）：auth/routes.ts 的 findPrimaryMembership direct-SQL shim 改呼叫此方法。
+   */
+  async findPrimaryOrgOf(userId: string): Promise<{ orgId: string; role: Role } | null> {
+    const row = await this.db.get<{ org_id: string; role: Role }>(
+      "SELECT org_id, role FROM memberships WHERE user_id = ? ORDER BY created_at ASC LIMIT 1",
+      [userId],
+    );
+    return row ? { orgId: row.org_id, role: row.role } : null;
+  }
 }

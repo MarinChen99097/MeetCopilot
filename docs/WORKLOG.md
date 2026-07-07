@@ -60,3 +60,17 @@
 - **已知未消**（M1 要處理）：login 的 direct-SQL shim（升級 `MembershipRepository.findPrimaryOrgOf` 後移除）；better-sqlite3 在 Node 22 需 `npm rebuild`（要進 setup 文件或 postinstall）；server 尚無 build script（tsx dev / noEmit typecheck，之後上 project references）；並行 npm install 在 Windows 有檔案鎖競態（單獨重試可過——派工守則補一條「同機平行 agent 勿同時 npm install」）。
 - **下一步**：M1（CRM 全 schema＋研究引擎＋**CRM 成品前端**）。使用者前置：GCP 專案＋帳單＋網域（M5 上線用，不擋 M1–M4）。
 - **狀態**：M0 完成並 commit；三線並行的前置（M1）就緒可開工。
+
+## 2026-07-07 session（同日續・M1 CRM 核心＋研究引擎＋CRM 成品前端）
+
+- **接縫先凍結**（Fable，`docs/M1_CONTRACT.md`）：11 repository 方法簽名、研究引擎 4 介面、provenance 細填/確認程式落點。
+- **工作流 6 Opus agent**（B0 seam → B1 repos ∥ B2 routes ∥ B3 research ∥ B4 前端 → B5 驗收）：
+  - B0 凍全 domain 型別＋migration 002–006（29 表）；B1 全 11 repo＋22/22 vitest；B2 CRM 全路由＋移除 auth direct-SQL shim（改 findPrimaryOrgOf）；B3 研究引擎（SSRF 抽取＋Playwright 爬蟲＋Gemini 抽取＋grounding＋crawl_job）＝S4 spike；B4 CRM 成品前端（/crm＋/crm/[id] 八 tabs＋provenance 徽章/確認/細填＋登入，next build 11 路由綠）。
+- **B5 fresh-context 驗收 6/7 PASS**：typecheck 四綠、crm 22/22（跨 org cosine 隔離/upsert 值+provenance 同 tx/human supersede/confirm/信任守則）、29 表遷移、真 server CRM 冒煙（細填→provenance supersede 用 raw SQL 驗）、SSRF 兩路擋內網+雲端 metadata、shim 已除、前端 build 綠。
+- **1 項 PARTIAL → 已修**：crawler `browser.close()` 此機懸掛→job 卡 `running`（真 bug）。派 Opus 修：close deadline race＋SIGKILL、整體 crawl deadline、job 失敗落 `failed`（L13）。
+- **S4 spike 判定**：SSRF 穩、爬蟲 render 可行、**Gemini 抽取待 key**（B5 環境無 GEMINI_API_KEY）。
+- **接縫決策採納**：crm build 拆 typecheck/emit tsconfig；CHECK 欄才做 union；crawl_jobs 經 DbPort 自管；契約補 deals `?companyId=`；provenance wire camelCase。
+- **踩雷入冊**：L12（Windows 平行 install 半解壓→清裝優先）、L13（外部進程 close 要 deadline+強殺）。
+- **使用者行動項**：把 GEMINI_API_KEY 放 `apps/server/.env`，我再跑真爬蟲關掉 S4 抽取那半。GCP/網域/OpenAI 驗證仍是 M5 前置。
+- **下一步**：M2/M3/M4 三線並行可開工（契約已凍、M1 核心就緒）。
+- **狀態**：M1 完成（含 crawler 修）；待 commit。

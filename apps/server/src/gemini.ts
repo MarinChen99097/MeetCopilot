@@ -22,10 +22,36 @@ export interface GenerateJsonOptions {
   attempts?: number;
 }
 
+/** 一則 grounding 引用（Google Search grounding 的來源）。 */
+export interface GroundingCitation {
+  title: string;
+  url: string;
+}
+
+/** grounded 生成結果（開放研究即答；API_CONTRACT §3 POST /api/research/ground）。 */
+export interface GroundedResult {
+  answer: string;
+  citations: GroundingCitation[];
+}
+
+export interface GenerateGroundedOptions {
+  model?: string;
+  system?: string;
+  prompt: string;
+  attempts?: number;
+}
+
 export interface GeminiClient {
   isConfigured(): boolean;
   generateJson<T>(opts: GenerateJsonOptions): Promise<T>;
+  /** Google Search grounding：回答 + 引用來源（GroundingProvider 用）。 */
+  generateGrounded(opts: GenerateGroundedOptions): Promise<GroundedResult>;
   embed(text: string): Promise<number[]>;
+}
+
+/** @google/genai 的 groundingMetadata 子形狀（跨版本寬鬆取用，避免型別耦合）。 */
+interface GroundingChunkLoose {
+  web?: { uri?: string; title?: string };
 }
 
 async function withRetry<T>(fn: () => Promise<T>, attempts: number, label: string): Promise<T> {
@@ -94,6 +120,41 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
         },
         attempts,
         "generateJson",
+      );
+    },
+
+    async generateGrounded(opts: GenerateGroundedOptions): Promise<GroundedResult> {
+      const ai = client();
+      const model = opts.model ?? cfg.textModel;
+      const attempts = opts.attempts ?? 2;
+      return withRetry<GroundedResult>(
+        async () => {
+          const response = await ai.models.generateContent({
+            model,
+            contents: opts.prompt,
+            config: {
+              systemInstruction: opts.system,
+              tools: [{ googleSearch: {} }],
+            },
+          });
+          const answer = response.text;
+          if (!answer) throw new Error("empty Gemini grounded response");
+          const chunks =
+            (response.candidates?.[0]?.groundingMetadata?.groundingChunks as
+              | GroundingChunkLoose[]
+              | undefined) ?? [];
+          const seen = new Set<string>();
+          const citations: GroundingCitation[] = [];
+          for (const c of chunks) {
+            const url = c.web?.uri;
+            if (!url || seen.has(url)) continue;
+            seen.add(url);
+            citations.push({ title: c.web?.title ?? url, url });
+          }
+          return { answer, citations };
+        },
+        attempts,
+        "generateGrounded",
       );
     },
 

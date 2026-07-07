@@ -34,6 +34,20 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-07 23:35 | M1 CRM 核心＋研究引擎＋CRM 成品前端（工作流 6 agent；指揮官代記一組）
+- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
+- **類型**: feat
+- **檔案**: `packages/shared/src/crm-types.ts`（全 domain 實體＋輸入型別）；`packages/crm/src/{ports,core,mappers,provenance-write,update-apply,child-upsert,repos-prospect,repos-pipeline,repos-retrieval}.ts`＋`migrations/002-006*.sql`＋`tsconfig.build.json`＋測試；`apps/server/src/crm-routes/*`（8 檔）＋`research/*`（7 檔：extract SSRF/crawler Playwright/extractor/grounding/jobs/routes）＋auth shim 移除；`apps/web` `/crm`＋`/crm/[id]`＋`(auth)` 登入註冊＋`components/crm/*`（11 tsx）＋lib/api CRM client
+- **改了什麼**: M1 全量。CRM 15+ 表（含對方產品深檔）＋11 repository（org-scoped、upsertFromCrawl 值+provenance 同 tx、cosine 白名單檢索、細填/確認 provenance 語意）；研究引擎（SSRF-safe 抽取＋Playwright 渲染爬蟲＋Gemini 結構化抽取＋grounding＋crawl_job 編排）；CRM 成品前端（清單/詳情八 tabs/provenance 徽章+確認+細填/persona 卡/enrich 進度/登入）。crm build 拆 typecheck/emit 兩 tsconfig。
+- **為什麼**: M1 里程碑。B5 fresh-context 驗收 6/7 PASS（詳見 ROM 2026-07-07 23:30）；1 項 crawler 懸掛已修（見下筆）。
+
+### 2026-07-07 23:55 | 修 crawler browser.close() 懸掛＋有界 teardown
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/research/crawler.ts`
+- **改了什麼**: 改 `chromium.launchServer()`+`connect()`（`Browser` 無 public `process()`，`BrowserServer` 才有可強殺 handle）。teardown：`browser.close()` race 5s → `server.kill()` 強殺底層 Chromium；`crawl()` 整場包 deadline race（quick 45s／detailed 90s）throw 明確錯。**保證 crawl() 一定 settle、永不 hang**。deals `?companyId=` 確認早已支援（route+DealFilter+repo），未改。
+- **為什麼**: B5 揪出 `browser.close()` 此機永久卡→enrich job 卡 `running`（L13）；外部子進程關閉必須有逾時+強殺兜底。typecheck 全綠。
+
 ### 2026-07-07 21:40 | M0 地基全量落地（工作流 5 agent；指揮官代記一組）
 - **工作區**: repo 根＋packages/shared＋packages/crm＋apps/server＋apps/web
 - **類型**: feat

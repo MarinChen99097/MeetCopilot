@@ -1,0 +1,1 @@
+{"root":["./src/child-upsert.ts","./src/core.ts","./src/crm.test.ts","./src/index.ts","./src/mappers.ts","./src/migrate.ts","./src/ports.ts","./src/provenance-write.ts","./src/repos-pipeline.ts","./src/repos-prospect.ts","./src/repos-retrieval.ts","./src/repos.ts","./src/sqlite-db.ts","./src/update-apply.ts","./src/uuid.ts"],"version":"5.9.3"}
