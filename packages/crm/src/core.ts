@@ -19,6 +19,8 @@ import {
   SqliteEmbeddingRepository,
   SqliteProfileCardRepository,
 } from "./repos-retrieval.js";
+import { SqliteTrainingRepository } from "./repos-training.js";
+import { SqliteDeckRepository } from "./repos-decks.js";
 
 /** 開啟 SQLite（`:memory:` 或檔案路徑）並回傳組裝好的 CrmCore。呼叫端負責 `await core.migrate()`。 */
 export async function createCrmCore(dbPath: string): Promise<CrmCore> {
@@ -39,6 +41,10 @@ export async function createCrmCore(dbPath: string): Promise<CrmCore> {
     provenance: new SqliteProvenanceRepository(port),
     embeddings: new SqliteEmbeddingRepository(port),
     profileCards: new SqliteProfileCardRepository(port),
+    // ── M2：DynamicSlide repo（007_decks.sql；appendSlide/updateSlide 守 I1）──
+    decks: new SqliteDeckRepository(port),
+    // ── M4：訓練 repo（008_training.sql）──
+    training: new SqliteTrainingRepository(port),
     migrate: () => runMigrations(raw),
     close,
   };

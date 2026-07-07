@@ -93,7 +93,7 @@ MeetCopilot_v2/
 |---|---|---|---|
 | **S1** ✅ **PASS（2026-07-07 結案）** | 雙帳號擷取 Meet 分頁音訊 | **使用者以 Brave/Win11＋真實雙帳號 Meet 實測 9 項全 PASS**（分頁音軌 1 條、錄放回聽正常、AudioContext@16k OK）——會議模型地基成立，M3 開工 gate 已開。殘項：Window-surface 備援可得性未測（非阻斷，之後順測） | ~~回頭重議~~（未觸發） |
 | **S2** | Gemini 分段轉寫中英混合會議音訊 | ASR 品質/延遲可用；下游 LLM 能從逐字稿推斷 speaker（presenter/client）。**需真實音訊素材**（請使用者提供/錄一段中英混合對話，agent 不能自造人聲驗品質） | 換 Google STT v2（AsrProvider 換 impl） |
-| **S3** | Gemini Live 語音對練 | ephemeral token 瀏覽器直連、persona system prompt、打斷、逐字稿；>15min 用 compression+resumption。**連線/token/轉寫可由 agent 自驗；語音對練體驗（打斷、自然度）需使用者實際開口驗收** | 退回 ASR+文字LLM+TTS 拼裝（train 抽象層留好） |
+| **S3** ✅ **PASS（2026-07-08，機械面）** | Gemini Live 語音對練 | **實測 @google/genai v2.10.0：server `ai.authTokens.create`（需 `apiVersion:'v1alpha'`）→ 瀏覽器 token 直連 `gemini-3.1-flash-live-preview` → 收到 30 個 PCM 音訊 chunk（242KB）＋繁中 output transcription，clean close**。gotcha：`ai.authTokens`（非 `ai.tokens`）＋v1alpha。**待使用者驗**：真實開口打斷體感、live 音訊 inputTranscription、>15min resumption；**待驗風險**：persona systemInstruction 是否真被 `liveConnectConstraints` 鎖進 token（否則會 persona-less，第一次真跑要確認） | 退 ASR+文字LLM+TTS 拼裝 |
 | **S4** ✅ **PASS（2026-07-08 關閉）** | Playwright 爬蟲 + SSRF | **實測 CyberPower 台灣站（zh-TW）端到端填出 industry/description/legalName＋5 產品，繁中無幻覺、一筆公司無重複**；SSRF 兩路擋內網+雲端 metadata、browser.close 有界不懸掛、job 到 done。抽取模型分流 3.5-flash（flash-lite 不穩，L15）。殘：quick 單頁產品細節較淺、detailed 子頁可補 | ~~退純 grounding~~（未觸發） |
 | **S5** | OpenAI 生圖實測 | **前置：OpenAI 組織驗證＋查帳號 tier 配額**。`gpt-image-2` 繁中 in-image 用我們自己的銷售字串實測；`1536x864` low/medium **實測延遲與品質**（社群數字離散，要自己量）；moderation 拒絕時的 fallback 行為；（另議）`gpt-image-1-mini` 是否夠格當會中快速選配 | 退 Gemini 備選（§C）或只做背景圖+CSS 疊層 |
 

@@ -20,3 +20,5 @@ export {
   SqliteEmbeddingRepository,
   SqliteProfileCardRepository,
 } from "./repos-retrieval.js";
+export { SqliteTrainingRepository } from "./repos-training.js";
+export { SqliteDeckRepository, I1ViolationError, DeckNotFoundError } from "./repos-decks.js";

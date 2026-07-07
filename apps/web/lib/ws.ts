@@ -18,8 +18,21 @@ export interface WsConnection {
   sendAudio(frame: ArrayBuffer): void;
   /** Subscribe to typed server→client messages; returns an unsubscribe fn. */
   on(listener: (message: ServerMessage) => void): () => void;
+  /** Current socket readiness (mirrors WebSocket.readyState constants). */
+  readyState(): number;
   /** Close the socket (no auto-reconnect at this layer). */
   close(): void;
+}
+
+/**
+ * Optional socket-lifecycle callbacks. The base primitive does NOT reconnect; callers that need
+ * reconnect/backoff (M3 /copilot, /hud) layer it on top by re-`connect`-ing on `onClose`.
+ * All optional so existing type-only / M0 usage is unaffected.
+ */
+export interface WsLifecycle {
+  onOpen?: () => void;
+  onClose?: (ev: CloseEvent) => void;
+  onError?: () => void;
 }
 
 /** Convert an http(s) API base into its ws(s) origin. */
@@ -31,7 +44,13 @@ function toWsOrigin(apiBase: string): string {
  * Open a WS connection to `${apiBase}${WS_PATH}?token&meetingId&role`.
  * `apiBase` is the REST base (e.g. NEXT_PUBLIC_API_BASE); scheme is auto-mapped http→ws / https→wss.
  */
-export function connect(apiBase: string, token: string, meetingId: string, role: WsRole): WsConnection {
+export function connect(
+  apiBase: string,
+  token: string,
+  meetingId: string,
+  role: WsRole,
+  lifecycle?: WsLifecycle,
+): WsConnection {
   const url = new URL(`${toWsOrigin(apiBase)}${WS_PATH}`);
   url.searchParams.set("token", token);
   url.searchParams.set("meetingId", meetingId);
@@ -52,6 +71,10 @@ export function connect(apiBase: string, token: string, meetingId: string, role:
     for (const l of listeners) l(parsed);
   });
 
+  if (lifecycle?.onOpen) ws.addEventListener("open", () => lifecycle.onOpen?.());
+  if (lifecycle?.onClose) ws.addEventListener("close", (ev) => lifecycle.onClose?.(ev as CloseEvent));
+  if (lifecycle?.onError) ws.addEventListener("error", () => lifecycle.onError?.());
+
   return {
     send(message: ClientMessage): void {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
@@ -62,6 +85,9 @@ export function connect(apiBase: string, token: string, meetingId: string, role:
     on(listener: (message: ServerMessage) => void): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    readyState(): number {
+      return ws.readyState;
     },
     close(): void {
       listeners.clear();

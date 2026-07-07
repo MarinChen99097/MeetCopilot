@@ -1,10 +1,17 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
 import { logout } from "@/lib/api";
 import { AuthGuard, useMe } from "@/components/auth/AuthGuard";
 import { ToastProvider } from "@/components/ui/Toast";
+
+/**
+ * Authed workbench surfaces reachable from the chrome. present/copilot/hud are DELIBERATELY excluded —
+ * they must inherit zero copilot chrome (I3) and are reached from the meeting flow, not the topbar.
+ */
+const NAV_SURFACES = ["crm", "studio", "train"] as const;
 
 /**
  * AppShell — authed CRM chrome: ToastProvider + AuthGuard + topbar (brand/org/user/logout).
@@ -29,6 +36,7 @@ const ROLE_LABEL: Record<string, string> = { owner: "擁有者", admin: "管理�
 function TopBar() {
   const me = useMe();
   const router = useRouter();
+  const t = useTranslations();
 
   function onLogout() {
     logout();
@@ -41,6 +49,13 @@ function TopBar() {
         <Link href="/crm" className="mc-topbar__brand">
           MeetCopilot
         </Link>
+        <nav className="mc-topbar__nav" aria-label={t("home.surfaces")}>
+          {NAV_SURFACES.map((s) => (
+            <Link key={s} href={`/${s}`} className="mc-topbar__navlink">
+              {t(`${s}.title`)}
+            </Link>
+          ))}
+        </nav>
         {me ? <span className="mc-topbar__org">{me.org.name}</span> : null}
       </div>
       <div className="mc-topbar__right">

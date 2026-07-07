@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@google/genai": "^2.10.0",
     "@meetcopilot/shared": "*",
     "next": "^15.1.0",
     "next-intl": "^4.0.0",

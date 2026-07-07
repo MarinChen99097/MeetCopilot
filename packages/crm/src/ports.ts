@@ -51,6 +51,21 @@ import type {
   NewEmbedding,
   ProfileCard,
   NewProfileCard,
+  // ── M2 Deck / DynamicSlide（B0 凍結；DeckRepository 實作＝M2 build agent）──
+  Deck,
+  DeckSummary,
+  DeckSlide,
+  NewDeck,
+  ImageJob,
+  NewImageJob,
+  ImageJobUpdate,
+  SlideSpec,
+  // ── M4 語音模擬訓練（B0 凍結；TrainingRepository 實作＝M4 build agent）──
+  TrainSession,
+  NewTrainSession,
+  TrainTurn,
+  TrainReport,
+  NewTrainReport,
 } from "@meetcopilot/shared";
 
 /** 成員角色（memberships.role，CRM_SCHEMA §2）。結構等同 @meetcopilot/shared 的 MembershipRole。 */
@@ -299,6 +314,46 @@ export interface ProfileCardRepository {
 }
 
 // ─────────────────────────────────────────────────────────────
+// M2 Deck / DynamicSlide 存取（007_decks.sql；M234_CONTRACT §M2）
+// 實作＝M2 build agent（core.ts 目前為 throwing stub）。
+// I1（append-only）鐵律：appendSlide 只加到尾端；updateSlide 僅允許 idx > committedIndex——
+//   guard（idx ≤ committedIndex → 409）在 route/realtime 層，repo 只負責寫入。image_jobs 亦掛此 repo（deck-scoped）。
+// ─────────────────────────────────────────────────────────────
+export interface DeckRepository {
+  // ── decks ──
+  create(orgId: string, input: NewDeck): Promise<Deck>; // generate/import 可一次帶入整份 slides
+  list(orgId: string): Promise<DeckSummary[]>;
+  findById(orgId: string, id: string): Promise<Deck | null>;
+  /** deck 頭 + 依 idx 排序的完整 slides（GET /api/decks/:id 用）。 */
+  findWithSlides(orgId: string, id: string): Promise<{ deck: Deck; slides: DeckSlide[] } | null>;
+  delete(orgId: string, id: string): Promise<void>;
+  /** present 的 page_commit 推進 committed_index（單調遞增；I1 guard 依它）。 */
+  setCommittedIndex(orgId: string, deckId: string, index: number): Promise<void>;
+  // ── slides（append-only I1）──
+  appendSlide(orgId: string, deckId: string, spec: SlideSpec): Promise<DeckSlide>; // idx = max(idx)+1
+  updateSlide(orgId: string, deckId: string, idx: number, spec: SlideSpec): Promise<DeckSlide>; // 會前/pending 編輯
+  // ── image_jobs（pre-meeting AI 生圖）──
+  createImageJob(orgId: string, input: NewImageJob): Promise<ImageJob>;
+  findImageJob(orgId: string, id: string): Promise<ImageJob | null>;
+  updateImageJob(orgId: string, id: string, patch: ImageJobUpdate): Promise<ImageJob>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// M4 語音模擬訓練 存取（008_training.sql；M234_CONTRACT §M4）
+// 實作＝M4 build agent（core.ts 目前為 throwing stub）。
+// ─────────────────────────────────────────────────────────────
+export interface TrainingRepository {
+  createSession(orgId: string, input: NewTrainSession): Promise<TrainSession>;
+  findSession(orgId: string, id: string): Promise<TrainSession | null>;
+  saveTranscript(orgId: string, sessionId: string, turns: TrainTurn[]): Promise<void>;
+  /** 設 ended_at（掛斷/結束）。 */
+  finishSession(orgId: string, sessionId: string): Promise<void>;
+  /** finish 觸發評分後寫入報告，回 reportId。 */
+  createReport(orgId: string, input: NewTrainReport): Promise<{ reportId: string }>;
+  findReport(orgId: string, reportId: string): Promise<TrainReport | null>;
+}
+
+// ─────────────────────────────────────────────────────────────
 // CrmCore — A2 組裝好的核心（db + repositories + 生命週期）
 // A3 的 server 只依賴此介面拿到 repositories，不碰 DbPort/SQL。
 // ─────────────────────────────────────────────────────────────
@@ -318,6 +373,9 @@ export interface CrmCore {
   provenance: ProvenanceRepository;
   embeddings: EmbeddingRepository;
   profileCards: ProfileCardRepository;
+  // ── M2/M4（B0 凍結介面；core.ts 目前為 throwing stub，build agent 實作）──
+  decks: DeckRepository;
+  training: TrainingRepository;
   /** 套用 /migrations/NNN_*.sql（schema_migrations runner，CRM_SCHEMA §11 尾）。 */
   migrate(): Promise<void>;
   /** 關閉底層連線（測試/優雅關機）。 */

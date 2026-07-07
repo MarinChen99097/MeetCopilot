@@ -36,6 +36,21 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 03:35 | M2/M3/M4 三線全 PASS＋S3 spike 過＋carry-forward 風險
+- **誰決定**: Fable（依三線 fresh-context 驗收裁決）
+- **決策**:
+  1. **三線驗收全 PASS，入庫**：M2 DynamicSlide（live 測：生成 6 頁 0 空白/pptx 111KB 往返/gpt-image-2 背景圖 1.9MB/refused fallback/I1 攻擊測 409/I3 零-HUD grep 淨/build 綠/CRM 31 測試）、M3 會中副駕（9/9：meeting→wsToken/三角色連線/訊號→hud info_card 且跨 org 不洩/presenter-only 攻擊拒/ACCEPT append I1/present 不收 HUD I3/SessionRuntime 清理/12 路由 build）、M4 語音模擬（真 token mint v1alpha/persona 逐欄過 verified 閘、crawler-only 被拒 400/四維評分/rows 寫入/build 綠/socket 有界/跨 org 隔離）。
+  2. **S3 spike PASS（機械面）**：Gemini Live 全鏈路實測（authTokens.create→token 直連→模型音訊+繁中逐字稿）。關鍵事實入 API_FINDINGS：`ai.authTokens`（非 tokens）＋`apiVersion:'v1alpha'`。
+- **carry-forward 風險（不擋入庫，交 /code-review 或首次真跑處理）**:
+  a. **persona-lock 未驗**（最高價值）：startSession 為安全不回傳 systemInstruction、靠 `liveConnectConstraints` 鎖進 token；若鎖無效 AI 會 persona-less。第一次真 /train 要確認。
+  b. **全域 JSON body 2MB**：wizard 帶 logoDataUri+refImageDataUris 可能 413——要嘛升上限、要嘛圖走 multipart。
+  c. **theme.bg 可能是 url()/gradient**（生圖背景存這）：pptx-exporter/SlideRenderer 要容忍非純色。
+  d. **npm audit 8 個漏洞**（1 critical/1 high，多為 pdf-parse/pptxgenjs 傳遞依賴）——待 triage。
+  e. **dist 需重建**：shared/crm 的 `dist/` 早於 M2 decks repo，runtime 靠 dist→部署/dev 要 `npm run build`（gitignored）。
+  f. 孤兒 `apps/server/src/ws.ts`（M0 attachWs）已成死碼，整合時刪。
+- **語音體驗＝待使用者**：真開口打斷、>15min resumption 需真人+麥克風（同 S1 模式）。
+- **影響**: M2/M3/M4 全量程式碼 commit；ARCHITECTURE spike S3/里程碑；接著 /code-review（使用者指定）處理 carry-forward + 找新問題。
+
 ### 2026-07-08 01:35 | S4 spike 正式 PASS＋抽取模型分流決策
 - **誰決定**: Fable（依 CyberPower 台灣站實測證據裁決）
 - **決策**:

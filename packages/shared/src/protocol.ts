@@ -44,6 +44,18 @@ export interface InfoCard {
 /** 研究 job 狀態（server→client `research_status`；對齊 API_CONTRACT §3 job 狀態）。 */
 export type ResearchJobStatus = "queued" | "running" | "done" | "failed";
 
+/**
+ * 待批准的補充頁建議（server→client `suggestion` 的 payload；批准佇列）。
+ * 具名型別供 HUD 元件、PatchService.suggest 回傳共用（結構＝§6 suggestion 內聯物件，單一真相）。
+ * I2：只有 accept/edit 會 append 進 deck；reject 或逾時（expiresAt）＝discarded。
+ */
+export interface Suggestion {
+  id: string;
+  slide: SlideSpec;
+  reason: string;
+  expiresAt: number; // epoch ms；逾時自動 discard
+}
+
 // ── Client → Server（JSON）── API_CONTRACT §6 ──────────────
 export type ClientMessage =
   | { type: "hello"; role: WsRole }
@@ -64,11 +76,7 @@ export type ServerMessage =
   | { type: "transcript"; segment: TranscriptSegment }
   | { type: "signals"; items: SignalItem[] }
   | { type: "info_card"; card: InfoCard } // hud
-  | {
-      // hud（批准佇列）
-      type: "suggestion";
-      suggestion: { id: string; slide: SlideSpec; reason: string; expiresAt: number };
-    }
+  | { type: "suggestion"; suggestion: Suggestion } // hud（批准佇列）
   | { type: "suggestion_result"; suggestionId: string; status: "applied" | "discarded"; newSlideIndex?: number } // hud
   | { type: "deck_update"; op: { kind: "APPEND"; slide: SlideSpec }; index: number } // present（批准後 append 到尾端）
   | { type: "research_status"; jobId: string; status: ResearchJobStatus; remainingQuota: number } // hud

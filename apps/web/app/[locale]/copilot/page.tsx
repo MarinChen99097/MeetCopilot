@@ -1,9 +1,13 @@
-import { getTranslations, setRequestLocale } from "next-intl/server";
-import { Placeholder } from "@/components/Placeholder";
+import { setRequestLocale } from "next-intl/server";
+import { CopilotView } from "@/components/copilot/CopilotView";
 
+/**
+ * /copilot — listener/capture surface (account B, Chrome/Edge desktop). Renders NO app chrome
+ * (no topbar) on purpose: this surface is reached from the meeting flow, and this browser tab is
+ * never screen-shared. Real capture pipeline + WS live in the client component.
+ */
 export default async function CopilotPage({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
   setRequestLocale(locale);
-  const t = await getTranslations();
-  return <Placeholder title={t("copilot.title")} description={t("copilot.desc")} tag={t("designPending")} />;
+  return <CopilotView />;
 }

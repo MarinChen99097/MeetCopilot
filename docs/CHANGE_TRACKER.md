@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 03:30 | M2 DynamicSlide＋M3 會中副駕＋M4 語音模擬（三線並行，11 agent；指揮官代記）
+- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
+- **類型**: feat
+- **檔案**: shared `deck.ts`/`train.ts`/`protocol.ts`（Suggestion）；crm `migrations/007_decks.sql`/`008_training.sql`＋`repos-decks.ts`/`repos-training.ts`＋ports/core；server `generation/`＋`decks/`＋`decks-routes/`（M2）、`realtime/`＋`asr/`＋`analysis/`＋`meetings-routes`（M3）、`train/`（M4）；web `studio`/`present`/`copilot`/`hud`/`train` 路由＋`components/{studio,present,copilot,hud,train}`＋`lib/{api,ws,train/liveClient}`
+- **改了什麼**: 三產品線。M2＝deck 生成（借 v1 生成器+QA，分析用 3.5-flash）+append-only 改造引擎（I1）+生圖 job（gpt-image-2 pre-meeting+refused fallback）+pptx 匯出+/studio wizard+/present 零 HUD 舞台（I3）。M3＝WS 三角色（capture/hud/present，音訊 binary）+SessionRuntime（含清理）+ASR/分析/檢索白名單/patch-service（I2 presenter-only+I1 append）+/copilot 擷取端（zero-track 守衛）+/hud 第二裝置。M4＝Gemini Live ephemeral token 直連（persona 逐欄過 verified 閘）+課後四維評分+/train 語音對練（有界 socket）。
+- **為什麼**: M2/M3/M4 里程碑。三線 fresh-context 驗收**全 PASS**（M2 live 測生成+pptx+生圖；M3 9/9 含 presenter 攻擊測+I1/I3;M4 真 token mint+per-field 閘+評分）。詳見 ROM 2026-07-08 03:35。
+
 ### 2026-07-08 01:30 | 修爬蟲抽取品質＋去重＋抽取模型升級（S4 關閉）
 - **工作區**: apps/server＋packages/crm
 - **類型**: fix

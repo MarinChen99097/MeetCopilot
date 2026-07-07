@@ -74,3 +74,16 @@
 - **使用者行動項**：把 GEMINI_API_KEY 放 `apps/server/.env`，我再跑真爬蟲關掉 S4 抽取那半。GCP/網域/OpenAI 驗證仍是 M5 前置。
 - **下一步**：M2/M3/M4 三線並行可開工（契約已凍、M1 核心就緒）。
 - **狀態**：M1 完成（含 crawler 修）；待 commit。
+
+## 2026-07-08 session（M2/M3/M4 三線並行＋S3 spike）
+
+- **接縫先凍**（Fable，`docs/M234_CONTRACT.md`）：三線共用型別/migration 007-008/web client/service 介面。
+- **工作流 11 Opus agent**（seam+S3 → 六路 build → 三線 verify）：
+  - **S3 spike PASS**：Gemini Live 全鏈路實測（`ai.authTokens.create` v1alpha → token 直連 `gemini-3.1-flash-live-preview` → 30 音訊 chunk+繁中逐字稿）。gotcha 入 API_FINDINGS。
+  - **M2 DynamicSlide PASS**（live）：生成 6 頁 0 空白、pptx 111KB 往返、gpt-image-2 背景圖、refused fallback、I1 攻擊測 409、I3 零-HUD、31 測試。
+  - **M3 會中副駕 PASS**（9/9）：WS 三角色、訊號→hud info_card（CRM 白名單+跨 org 不洩）、presenter-only 攻擊拒、ACCEPT append（I1）、present 不收 HUD（I3）、SessionRuntime 清理、12 路由 build。
+  - **M4 語音模擬 PASS**（機械面）：真 ephemeral token、persona 逐欄過 verified 閘、四維評分、socket 有界、跨 org 隔離。
+- **carry-forward（交 /code-review 或首跑）**：persona-lock 未驗（最高）、JSON body 2MB 上限、theme.bg 非純色相容、npm audit 8 漏洞、dist 需重建、孤兒 ws.ts 刪。
+- **待使用者驗**：語音真開口打斷體感、>15min resumption（同 S1 模式）。
+- **下一步**：commit 三線 → **/code-review（使用者指定）** → 修 confirmed findings。
+- **狀態**：M0/M1/M2/M3/M4 全部 build 完成且逐線驗收 PASS；三 spike（S1/S3/S4）過；待 commit＋code-review。

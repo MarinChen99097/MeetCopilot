@@ -37,8 +37,8 @@ describe("migrate", () => {
       "SELECT version FROM schema_migrations ORDER BY version",
       [],
     );
-    // 001-006（B0 凍結全 schema）；idempotency＝二次 migrate 不重複套用、版本集不成長。
-    expect(applied.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    // 001-008（含 M2 007_decks、M4 008_training）；idempotency＝二次 migrate 不重複套用、版本集不成長。
+    expect(applied.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 });
 

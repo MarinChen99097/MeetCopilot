@@ -11,7 +11,12 @@ import { createAuthRouter } from "./auth/index.js";
 import { authRequired } from "./auth/jwt.js";
 import { createCrmRouter } from "./crm-routes/index.js";
 import { createResearchRouter } from "./research/routes.js";
-import { attachWs } from "./ws.js";
+import { createTrainRouter } from "./train/routes.js";
+import { createGeminiClient } from "./gemini.js";
+import { RealtimeHub } from "./realtime/hub.js";
+import { attachRealtimeWs } from "./realtime/ws-server.js";
+import { createMeetingsRouter } from "./realtime/meetings-routes.js";
+import { createDecksRouter } from "./decks-routes/index.js";
 
 async function main(): Promise<void> {
   const config = loadConfig(); // exits(1) on missing/placeholder JWT_SECRET
@@ -57,6 +62,19 @@ async function main(): Promise<void> {
   // Research engine (API_CONTRACT §3) — Bearer auth applied inside the router; tenant scope from req.auth.orgId.
   app.use("/api/research", createResearchRouter(core, config, config.jwtSecret));
 
+  // Train / voice simulation (API_CONTRACT §7) — Bearer auth inside the router; ephemeral Live token minted here,
+  // but voice audio goes browser-direct to Gemini Live (never through this server).
+  app.use("/api/train", createTrainRouter(core, config, config.jwtSecret));
+
+  // Meetings + realtime copilot (API_CONTRACT §5/§6). The RealtimeHub is the per-process orchestration center
+  // (session registry, ASR/analysis/orchestrator wiring, I1/I2/I3 enforcement); shared by the HTTP router and WS.
+  const realtimeHub = new RealtimeHub(core, config, createGeminiClient(config.gemini));
+  app.use("/api/meetings", createMeetingsRouter(realtimeHub, config.jwtSecret, config.port));
+
+  // Decks / DynamicSlide (API_CONTRACT §4): /decks/*, /image-jobs/:id, /extract-url, /extract-pdf.
+  // Bearer auth here; tenant scope from req.auth.orgId. Disjoint paths from the routers above.
+  app.use("/api", authRequired(config.jwtSecret), createDecksRouter(core, config));
+
   // 404 for unmatched /api routes (keep {error} contract instead of Express default HTML).
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "not found" });
@@ -81,7 +99,7 @@ async function main(): Promise<void> {
   );
 
   const server = http.createServer(app);
-  attachWs(server);
+  attachRealtimeWs(server, realtimeHub, config.jwtSecret);
 
   server.listen(config.port, () => {
     console.log(`[server] listening on :${config.port}`);

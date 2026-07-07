@@ -29,6 +29,23 @@ import type {
   CrawlMode,
   CrawlTargetType,
   CrawlJobStatus,
+  // ── M2 Decks (§4) ──
+  Deck,
+  DeckSummary,
+  DeckView,
+  GenerateDeckInput,
+  ImageKind,
+  ImageJobView,
+  SlideSpec,
+  // ── M3 realtime seam types (§5/§6) ──
+  SignalItem,
+  TranscriptSegment,
+  // ── M4 Train (§7) ──
+  PersonaOption,
+  StartTrainSessionResult,
+  TrainDifficulty,
+  TrainReport,
+  TrainTurn,
 } from "@meetcopilot/shared";
 
 /** REST base URL (the "cloud path"); env-driven per API_CONTRACT §0. */
@@ -71,14 +88,28 @@ interface RequestOptions {
   auth?: boolean;
 }
 
+/** Bearer header for the current token (empty when logged out). Shared by JSON/multipart/blob calls. */
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** Parse a non-2xx response's `{ error }` body (best-effort) and throw ApiError. Single error path. */
+async function failFrom(res: Response): Promise<never> {
+  let errBody: { error?: string } = {};
+  try {
+    errBody = (await res.json()) as { error?: string };
+  } catch {
+    // non-JSON error body: leave empty; ApiError falls back to `HTTP <status>`
+  }
+  throw new ApiError(res.status, errBody);
+}
+
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, auth = true } = opts;
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (auth) {
-    const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-  }
+  if (auth) Object.assign(headers, authHeaders());
 
   let res: Response;
   try {
@@ -91,18 +122,33 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     throw new ApiError(0, { error: "network request failed" });
   }
 
-  if (!res.ok) {
-    let errBody: { error?: string } = {};
-    try {
-      errBody = (await res.json()) as { error?: string };
-    } catch {
-      // non-JSON error body: leave errBody empty; ApiError falls back to `HTTP <status>`
-    }
-    throw new ApiError(res.status, errBody);
-  }
-
+  if (!res.ok) return failFrom(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Multipart POST (file upload; browser sets the boundary Content-Type). Always Bearer. */
+async function requestForm<T>(path: string, form: FormData): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { method: "POST", headers: authHeaders(), body: form });
+  } catch {
+    throw new ApiError(0, { error: "network request failed" });
+  }
+  if (!res.ok) return failFrom(res);
+  return (await res.json()) as T;
+}
+
+/** GET a binary file (e.g. .pptx export). Bearer auth means we cannot use a plain <a href>. */
+async function requestBlob(path: string): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+  } catch {
+    throw new ApiError(0, { error: "network request failed" });
+  }
+  if (!res.ok) return failFrom(res);
+  return res.blob();
 }
 
 // ── Contract types (API_CONTRACT §1) ────────────────────────────
@@ -346,4 +392,123 @@ export function listResearchJobs(targetId: string): Promise<ResearchJob[]> {
 }
 export function ground(input: { query: string; companyId?: string; meetingId?: string }): Promise<GroundResult> {
   return request<GroundResult>("/api/research/ground", { method: "POST", body: input });
+}
+
+// ── Decks / DynamicSlide (API_CONTRACT §4) ──────────────────────
+// Long tasks (image generation) use the job pattern: POST → 202 { jobId }, GET polls.
+export function listDecks(): Promise<Paged<DeckSummary>> {
+  return request<Paged<DeckSummary>>("/api/decks");
+}
+/** Wizard generate (sync — may be slow; caller shows a loading state). companyId enables CRM grounding. */
+export function generateDeck(input: GenerateDeckInput): Promise<Deck> {
+  return request<Deck>("/api/decks/generate", { method: "POST", body: input });
+}
+/** Import a .pptx/.pdf → Deck (multipart). */
+export function importDeck(file: File): Promise<Deck> {
+  const form = new FormData();
+  form.append("file", file);
+  return requestForm<Deck>("/api/decks/import", form);
+}
+export function getDeck(id: string): Promise<DeckView> {
+  return request<DeckView>(`/api/decks/${id}`);
+}
+/**
+ * Edit a slide (pre-meeting; live = pending region only, else 409 per I1).
+ * Returns void — the caller already holds the SlideSpec it sent; surface a 409 as the "already-played" error state.
+ */
+export function patchSlide(deckId: string, index: number, slide: SlideSpec): Promise<void> {
+  return request<void>(`/api/decks/${deckId}/slides/${index}`, { method: "PATCH", body: { slide } });
+}
+/** Enqueue a pre-meeting AI image (OpenAI gpt-image-2, ~10–80s) → 202 { jobId }. */
+export function enqueueImageJob(
+  deckId: string,
+  input: { slideIndex: number; kind: ImageKind; prompt?: string },
+): Promise<{ jobId: string }> {
+  return request<{ jobId: string }>(`/api/decks/${deckId}/image-jobs`, { method: "POST", body: input });
+}
+/** Poll an image job. status='refused' ⇒ moderation blocked ⇒ frontend shows fallback gradient. */
+export function getImageJob(jobId: string): Promise<ImageJobView> {
+  return request<ImageJobView>(`/api/image-jobs/${jobId}`);
+}
+/** Download the deck as .pptx (RFC5987 filename). Returns a Blob (Bearer auth precludes <a href>). */
+export function exportDeckPptx(id: string): Promise<Blob> {
+  return requestBlob(`/api/decks/${id}/export.pptx`);
+}
+/** Wizard grounding: fetch readable text from a URL (SSRF-guarded server-side). */
+export function extractUrl(url: string): Promise<{ title?: string; text: string }> {
+  return request<{ title?: string; text: string }>("/api/extract-url", { method: "POST", body: { url } });
+}
+/** Wizard grounding: extract text from an uploaded PDF (multipart). */
+export function extractPdf(file: File): Promise<{ text: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  return requestForm<{ text: string }>("/api/extract-pdf", form);
+}
+
+// ── Meetings / live session (API_CONTRACT §5) ───────────────────
+
+/** Meeting reference (POST /api/meetings result + list rows). Full domain lands with M3. */
+export interface MeetingRef {
+  id: string;
+  title?: string;
+  companyId?: string;
+  dealId?: string;
+  deckId?: string;
+  status?: string;
+  createdAt?: number;
+}
+/** POST /api/meetings result: the meeting + short-lived WS credentials (role-bound wsToken). */
+export interface CreateMeetingResult {
+  meeting: MeetingRef;
+  wsUrl: string;
+  wsToken: string;
+}
+/** GET /api/meetings/:id — post-meeting review. */
+export interface MeetingDetail {
+  meeting: MeetingRef;
+  signals: SignalItem[];
+  transcript: TranscriptSegment[];
+  actions: unknown[];
+}
+export function createMeeting(input: {
+  title: string;
+  companyId?: string;
+  dealId?: string;
+  deckId?: string;
+}): Promise<CreateMeetingResult> {
+  return request<CreateMeetingResult>("/api/meetings", { method: "POST", body: input });
+}
+export function getMeeting(id: string): Promise<MeetingDetail> {
+  return request<MeetingDetail>(`/api/meetings/${id}`);
+}
+export function endMeeting(id: string): Promise<{ summary?: string }> {
+  return request<{ summary?: string }>(`/api/meetings/${id}/end`, { method: "POST" });
+}
+export function listMeetings(): Promise<Paged<MeetingRef>> {
+  return request<Paged<MeetingRef>>("/api/meetings");
+}
+
+// ── Train / voice simulation (API_CONTRACT §7) ──────────────────
+/** Only contacts whose persona fields pass the verified gate are returned (trust rule). */
+export function listPersonas(companyId?: string): Promise<PersonaOption[]> {
+  return request<PersonaOption[]>(`/api/train/personas${qs({ companyId })}`);
+}
+/** Start a session → ephemeralToken to connect the browser DIRECTLY to Gemini Live (audio never hits our server). */
+export function startTrainSession(input: {
+  contactId: string;
+  dealId?: string;
+  difficulty?: TrainDifficulty;
+}): Promise<StartTrainSessionResult> {
+  return request<StartTrainSessionResult>("/api/train/sessions", { method: "POST", body: input });
+}
+/** Upload the two-way transcript (during / at end of practice). */
+export function saveTrainTranscript(sessionId: string, turns: TrainTurn[]): Promise<void> {
+  return request<void>(`/api/train/sessions/${sessionId}/transcript`, { method: "POST", body: { turns } });
+}
+/** Finish → triggers scoring → { reportId }. */
+export function finishTrainSession(sessionId: string): Promise<{ reportId: string }> {
+  return request<{ reportId: string }>(`/api/train/sessions/${sessionId}/finish`, { method: "POST" });
+}
+export function getTrainReport(reportId: string): Promise<TrainReport> {
+  return request<TrainReport>(`/api/train/reports/${reportId}`);
 }
