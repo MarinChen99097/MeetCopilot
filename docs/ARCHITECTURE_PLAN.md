@@ -20,7 +20,7 @@
 | AI 生圖 | **OpenAI `gpt-image-2`**（openai npm；背景與整頁同一模型、quality 顯式 low/medium/high；`1536x864` 原生 16:9） | **一律 pre-meeting**（實證延遲 ~80s 級，會中不可行；§F）；被擋 fallback 漸層；`ImageProvider` 抽象、Gemini 留備選（§C）；**前置：OpenAI 組織驗證** |
 | 研究/爬蟲 | Gemini Search grounding + Playwright(+stealth) 自建爬蟲 + v1 SSRF-safe 抽取器 | SSRF 檢查掛在首次 fetch（§PRODUCT_SPEC 核心） |
 | Auth | 自建 JWT（沿用 v1，JWT_SECRET fail-fast） | |
-| 打包 | 先 `npm run dev` 本機跑；架構留雲端路 | 不寫死 localhost |
+| 部署（決策 20：SaaS 成品） | **GCP 單一 Compute Engine VM＋Docker Compose**（server 容器含 Playwright deps、web 容器、Caddy 反代自動 TLS）；SQLite 在持久磁碟＋每日 snapshot；邀請制無計費（org.plan 留鉤子）。量大再遷 Cloud SQL Postgres | Cloud Run 檔案系統短暫不適合 SQLite——別部署到 Cloud Run。開發仍 `npm run dev` 本機 |
 
 **環境**：Windows 11 + PowerShell 5.1（`&&` 不可用）+ Bash 工具。寫檔一律 Write/Edit（PS 5.1 UTF-16 會亂碼）。v2 已 git init（主要備份）。
 
@@ -104,7 +104,8 @@ MeetCopilot_v2/
 ## 6. 里程碑（M0→M5，含驗收條件）
 
 > 驗收條件 = 「宣稱完成前，派 fresh-context agent 做 read-back 或跑測試」通過的可測項（硬規則 5：驗證不自驗）。
-> **順序**：M0→M1 是序列地基；**M2/M3/M4 是三條並行線**——編號只是索引不是先後，三線都在 M1 完成＋契約凍結後同時開工（M4 語音模擬只依賴 CRM，決策 5 明定可提早）；M5 收整合。並行派工照 TASK_TEMPLATES 的契約鎖定守則（v1 L5 教訓：平行 agent 契約漂移）。
+> **順序**：M0→M1 是序列地基；**M2/M3/M4 是三條並行線**——編號只是索引不是先後，三線都在 M1 完成＋契約凍結後同時開工（M4 語音模擬只依賴 CRM，決策 5 明定可提早）；M5 收整合＋上線。並行派工照 TASK_TEMPLATES 的契約鎖定守則（v1 L5 教訓：平行 agent 契約漂移）。
+> **前端＝成品**（決策 20）：每條線的範圍都含該 surface 的**生產級前端**（設計規格＝`FRONTEND_DESIGN_PROMPTS.md` 對應 PROMPT＋`API_CONTRACT.md`；agent 直接實作，不做佔位、不等原型）。M0 的佔位頁只是骨架期產物，M1 起逐一替換。
 
 ### M0 — 地基
 **範圍**：monorepo（workspaces）、packages/shared 契約（slide-spec append-only、protocol、signals、crm domain types、trust-rule 純函式）、packages/crm（DbPort、migration runner + schema_migrations、base repository org-scoping）、auth（JWT + org/membership，含 fail-fast）、i18n 骨架、gemini client、.env(GEMINI_API_KEY) + config。**平行跑 S1、S3、S4。**
@@ -119,7 +120,7 @@ MeetCopilot_v2/
 - **S3 → gate M4 開工**（敗則退 ASR＋文字 LLM＋TTS 拼裝）。
 
 ### M1 — CRM ＋ 研究引擎（新核心）
-**範圍**：CRM 全 schema（CRM_SCHEMA §4–8）+ repositories（含 `upsertFromCrawl` 值+provenance 同 tx、`findByDomain` dedupe）；provenance「確認/細填」寫入語意；研究引擎（grounding + Playwright 爬蟲 + SSRF 首次 fetch 檢查 + crawl_jobs）；embeddings + profile_cards + JS cosine 檢索；CRM 前端（清單/詳情/確認細填/enrich 觸發）。
+**範圍**：CRM 全 schema（CRM_SCHEMA §4–8）+ repositories（含 `upsertFromCrawl` 值+provenance 同 tx、`findByDomain` dedupe；**補 `MembershipRepository.findPrimaryOrgOf(userId)` 並移除 auth 的 direct-SQL shim**——M0 驗收揪出的 seam gap）；**CRM 前端做成品 UI**（設計規格＝FRONTEND_DESIGN_PROMPTS PROMPT 0+1，agent 直接實作，不是佔位）；provenance「確認/細填」寫入語意；研究引擎（grounding + Playwright 爬蟲 + SSRF 首次 fetch 檢查 + crawl_jobs）；embeddings + profile_cards + JS cosine 檢索；CRM 前端（清單/詳情/確認細填/enrich 觸發）。
 **驗收**：
 - 給一個對方公司網域 → 爬蟲填出 companies + contacts 多欄 + provenance rows（filled_by=crawler + source_url），UI 顯示可「確認/細填」。
 - SSRF：內網/雲端 metadata（169.254.169.254、100.100.100.200）被擋、外網通（fresh agent 實測，如 v1）。
@@ -149,8 +150,8 @@ MeetCopilot_v2/
 - 評分報告涵蓋異議處理/需求發現/成交訊號（用逐字稿，fresh agent 檢查合理性）。
 - 只用 verified/會議衍生 persona 欄位（不幻想爬蟲猜測——查 seed builder 只讀 verified）。
 
-### M5 — 整合、隱私強化、成本、審查
-**範圍**：三線整合冒煙（會前 CRM→模擬訓練→會中副駕+DynamicSlide→會後回寫 CRM 全鏈路）、PII 遮蔽、TTL、成本記帳（Gemini usage 冪等，借 v1）、CSP/sanitize、/code-review + /simplify。
+### M5 — 整合、隱私強化、成本、審查、**上線 GCP**
+**範圍**：三線整合冒煙（會前 CRM→模擬訓練→會中副駕+DynamicSlide→會後回寫 CRM 全鏈路）、PII 遮蔽、TTL、成本記帳（Gemini usage 冪等，借 v1）、CSP/sanitize、**生產強化**（rate limiting、結構化 log、健康檢查、邀請制成員管理 UI）、**GCP 部署**（GCE VM＋Docker Compose＋Caddy TLS＋磁碟 snapshot 備份＋網域；使用者前置：GCP 專案＋帳單＋網域）、/code-review + /simplify。
 **驗收**：
 - 全鏈路 e2e：建公司→爬蟲填→確認→(選)對練→會中擷取假音訊→訊號→新頁批准 append→會後訊號回寫 contact objections（經批准）。
 - code-review 多鏡頭對抗式（含 SSRF、authz、org 隔離、I1/I2/I3 未削弱、Live token 不洩、生圖 fallback）findings 全修。

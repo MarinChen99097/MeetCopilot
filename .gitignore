@@ -12,6 +12,8 @@ build/
 # db (local SQLite)
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 # logs / os
 *.log

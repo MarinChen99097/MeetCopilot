@@ -1,0 +1,10 @@
+{
+  "//": "apps/server typechecks with noEmit (base 'paths' map @meetcopilot/* to source, so no build-order dep on packages; running is via tsx which honours the same paths). Declarations/rootDir clashes only bite on emit, which we never do here.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "allowJs": false
+  },
+  "include": ["src"]
+}

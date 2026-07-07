@@ -1,0 +1,27 @@
+{
+  "//": "Standalone (does not extend tsconfig.base.json) so Next's required compilerOptions (jsx, next plugin, dom lib) stay isolated. Two path maps: '@/*' for app-internal imports, and '@meetcopilot/shared' pointing at package SOURCE so `tsc --noEmit` is green with no build ordering (shared/dist is gitignored/absent in M0). At runtime Next resolves the same package via transpilePackages + the workspace symlink.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "ES2022"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"],
+      "@meetcopilot/shared": ["../../packages/shared/src/index.ts"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}

@@ -36,6 +36,16 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-07 21:50 | SaaS 成品化（決策 20）＋M0 驗收通過＋契約 v1.1
+- **誰決定**: 使用者（成品定調＋四項答覆）＋Fable（部署形態與契約批准）
+- **決策**:
+  1. **使用者定調：要上線營運的 SaaS 成品，不是 demo**。四答：DB 維持 SQLite 起步／部署 **GCP**／計費先不做（邀請制）／**前端成品全由我方 agent 設計＋實作**（Claude Design prompt 包降為設計規格與使用者參考，不擋工）。
+  2. **Fable 部署形態裁決**：SQLite×GCP ⇒ 單一 GCE VM＋持久磁碟＋Docker Compose（server 含 Playwright、web、Caddy TLS）＋每日 snapshot；明令**不部署 Cloud Run**（短暫檔案系統毀 SQLite）；量大遷 Cloud SQL Postgres。
+  3. **M0 驗收通過**（A5 fresh-context 6/6 PASS），程式碼入庫。
+  4. **契約 v1.1 批准**（M0 揪出的缺口）：/api/health 入約、me 子形狀、ContactSummary 補 id/companyId/fullName、音訊 binary frame＝raw PCM16 LE 16k mono 無標頭（server 到達時間戳）、research_status enum、ping→session_state。另批准：crm 套件不依賴 shared（持久層不該依賴線上契約包，A1 的分層判斷正確）；login 的 direct-SQL shim 限期到 M1（升級 `MembershipRepository.findPrimaryOrgOf`）。
+- **考慮過的替代**: 部署選 Vercel+Railway+Neon（Fable 原推薦，使用者選 GCP）；DB 直上 Postgres（Fable 原推薦，使用者選維持 SQLite——已點破 GCP 形態代價並入冊）。
+- **影響**: 00-DECISIONS 決策 20、ARCHITECTURE_PLAN（部署 row/M1/M5/前端成品註記）、API_CONTRACT v1.1、.gitignore WAL 側檔、M0 全量程式碼 commit。使用者前置：GCP 專案＋帳單＋網域；後續 M1 開工。
+
 ### 2026-07-07 18:10 | S1 結案＋開工分工＋API 契約 v1.0 凍結
 - **誰決定**: 使用者（S1 事實＋分工）＋Fable（契約設計）
 - **決策**:

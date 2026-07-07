@@ -1,0 +1,32 @@
+{
+  "designPending": "設計對接中",
+  "home": {
+    "title": "MeetCopilot",
+    "subtitle": "CRM 核心 × DynamicSlide × 會中副駕 × 模擬訓練",
+    "surfaces": "介面"
+  },
+  "crm": {
+    "title": "CRM 管理",
+    "desc": "公司與主管情報、確認/細填 provenance、觸發研究引擎 enrich 與爬蟲狀態。"
+  },
+  "studio": {
+    "title": "DynamicSlide 編輯",
+    "desc": "三段式簡報生成精靈、投影片編輯、pptx 匯出、會前 AI 生圖。"
+  },
+  "present": {
+    "title": "簡報舞台",
+    "desc": "乾淨的投影片播放視圖。"
+  },
+  "copilot": {
+    "title": "會中副駕擷取端",
+    "desc": "開始聆聽並擷取會議分頁音訊、送出即時分析。"
+  },
+  "hud": {
+    "title": "HUD",
+    "desc": "即時建議、研究卡與逐字稿；接受/略過與深查。"
+  },
+  "train": {
+    "title": "模擬訓練",
+    "desc": "選擇主管 persona、語音對練、課後評分。"
+  }
+}

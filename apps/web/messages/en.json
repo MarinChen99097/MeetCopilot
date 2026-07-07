@@ -1,0 +1,32 @@
+{
+  "designPending": "Design integration in progress",
+  "home": {
+    "title": "MeetCopilot",
+    "subtitle": "CRM core × DynamicSlide × in-meeting copilot × simulation training",
+    "surfaces": "Surfaces"
+  },
+  "crm": {
+    "title": "CRM",
+    "desc": "Company and contact intelligence, confirm/fill provenance, trigger research enrich and crawl status."
+  },
+  "studio": {
+    "title": "DynamicSlide Studio",
+    "desc": "Three-step deck generation wizard, slide editing, pptx export, pre-meeting AI image generation."
+  },
+  "present": {
+    "title": "Slide Stage",
+    "desc": "A clean slide presentation view."
+  },
+  "copilot": {
+    "title": "In-Meeting Copilot Capture",
+    "desc": "Start listening, capture the meeting tab audio, and stream it for live analysis."
+  },
+  "hud": {
+    "title": "HUD",
+    "desc": "Live suggestions, research cards, and transcript; accept/skip and deep research."
+  },
+  "train": {
+    "title": "Simulation Training",
+    "desc": "Pick a contact persona, run a voice roleplay, get a post-session score."
+  }
+}

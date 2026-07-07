@@ -1,4 +1,8 @@
-# API 契約（前端 ↔ 後端的唯一交界；凍結版 v1.0，2026-07-07）
+# API 契約（前端 ↔ 後端的唯一交界；凍結版 **v1.1**，2026-07-07）
+
+> v1.1 批准紀錄（M0 實作揪出的缺口，指揮官批准補進契約；實作已符）：
+> `GET /api/health`（免認證）入約；`me` 子形狀明定；`ContactSummary` 補 `id/companyId/fullName`；
+> §6 音訊 binary frame 位元組佈局明定；`research_status.status`＝§3 job status enum；ping 的回應＝`session_state`（無 pong 訊息）。
 
 > **地位**：平行開發的契約凍結檔（CLAUDE.md 硬規則 6）。前端（使用者以 Claude Design 設計）與後端（Opus agent 實作）都以本檔為準；
 > 任何一方要改契約 → 先改本檔＋記 ROM，再改碼。TS 型別的實作放 `packages/shared`（實作必須與本檔一致；漂移＝bug）。
@@ -18,7 +22,8 @@
 |---|---|---|
 | POST | `/api/auth/register` | `{email,password,displayName,orgName}` → `{token, user:{id,email,displayName}, org:{id,name}}` |
 | POST | `/api/auth/login` | `{email,password}` → 同上 |
-| GET | `/api/auth/me` | → `{user, org, role:'owner'\|'admin'\|'member'}` |
+| GET | `/api/auth/me` | → `{user:{id,email,displayName}, org:{id,name}, role:'owner'\|'admin'\|'member'}` |
+| GET | `/api/health` | 免認證 → `{ok:true}`（ops/監控用） |
 
 ## 2. CRM
 
@@ -33,7 +38,7 @@
 | GET | `/api/crm/companies/:id/news` `/locations` `/funding` `/tech` `/departments` | 各子表陣列 |
 
 ### 人物（主管）
-| GET | `/api/crm/companies/:id/contacts` | `ContactSummary[]`（含 `title,seniority,decisionPower?,verifiedStatus,photoUrl?`） |
+| GET | `/api/crm/companies/:id/contacts` | `ContactSummary[]`＝`{id, companyId, fullName, title?, seniority?, decisionPower?, verifiedStatus, photoUrl?}` |
 | POST | `/api/crm/companies/:id/contacts` | `{fullName, title?}` → `Contact` |
 | GET / PATCH / DELETE | `/api/crm/contacts/:id` | PATCH＝細填語意同上 |
 
@@ -82,7 +87,7 @@
 
 ## 6. WS 協定（`/ws?token=<wsToken>&meetingId=&role=`；role＝`capture`｜`hud`｜`present`）
 
-**傳輸**：音訊用 **binary frame**（16-bit PCM 16kHz mono，~250ms/frame，直接丟 ArrayBuffer）；其餘 JSON text frame。
+**傳輸**：音訊用 **binary frame**——**raw 16-bit little-endian PCM、16kHz、mono、無標頭**（直接丟 ArrayBuffer，~100–250ms/frame）；時間戳由 server 以到達時間標記（每場會議單一 capture 連線，勿多路混傳）。其餘 JSON text frame。`ping` 的回應＝`session_state`（協定無 pong）。`research_status.status`＝`'queued'|'running'|'done'|'failed'`（同 §3）。
 **授權**：`suggestion_action`、`page_commit` 只接受 presenter 的連線（server 驗 wsToken 身分；攻擊者憑證必須被拒）。
 
 ### Client → Server（JSON）

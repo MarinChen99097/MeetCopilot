@@ -1,0 +1,26 @@
+{
+  "//": "Shared TS base for every workspace. moduleResolution 'bundler' works for both tsc --noEmit library typechecks and Next.js 15 App Router; module 'ESNext' lets Node 22 (apps/server) and Next consume emitted ESM.",
+  "//paths": "TS 5.x resolves baseUrl/paths relative to THIS file's dir (repo root). Mapping package names to source lets every workspace typecheck with zero build ordering (M0: install + typecheck green). Emitted code still imports the real published entry via package.json exports.",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@meetcopilot/shared": ["packages/shared/src/index.ts"],
+      "@meetcopilot/crm": ["packages/crm/src/index.ts"]
+    },
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true
+  }
+}

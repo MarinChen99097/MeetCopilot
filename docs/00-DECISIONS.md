@@ -69,6 +69,7 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 17. **引入 ezpagesite 的 code-tracker 制度**：實體＝ezpagesite 的 **CHANGE_TRACKER**（強制變更日誌：每次改程式檔立刻追加一筆、錨點插入、>500 行打包），移植時加「工作區」欄位。（**已落地**：`docs/CHANGE_TRACKER.md`＋CLAUDE.md 硬規則。）
 18. **CRM 對方產品深檔**：CRM 欄位要能「完整介紹一家公司的產品」含細節與開發人——新增 `company_products`（規格/功能/定價/技術棧/整合/路線圖）、`company_product_people`（產品↔人：developer/PM/owner…）、`company_departments`（部門/主管/人數），接上 embedding 檢索與爬蟲填欄。（**已落地**：CRM_SCHEMA「對方產品深檔」節。）
 19. **建立 ROM 決策總帳**（2026-07-07 追加）：記錄使用者或 Claude 的**所有決策**——比 memory 更大更雜、不精簡、帶脈絡與替代方案；每 500 行歸檔 `rom_archives/ROM_NNN.md`（序號命名），ROM.md 頂部維護每檔簡介的歸檔目錄。與本檔分工：本檔＝蒸餾後前提（衝突時為準）、ROM＝全量帳。（**已落地**：`docs/ROM.md`＋CLAUDE.md 硬規則 9。）
+20. **SaaS 成品化**（2026-07-07 追加）：目標是**上線營運的 SaaS 成品，不是 demo**。四項細部拍板——(a) **資料庫維持 SQLite 起步**（repo 層已隔離，量大再遷 Postgres）；(b) **部署 GCP**；(c) **計費先不做，邀請制**（org.plan 欄位留鉤子，要收費再接 Stripe）；(d) **前端成品全由我方 agent 設計＋實作**（Claude Design prompt 包轉為「設計規格」供 agent 與使用者參考，前端進度不等原型）。**技術現實（Fable 點破）**：SQLite×GCP 的可行形態＝**單一 Compute Engine VM＋持久磁碟**（Docker Compose：server 含 Playwright、web、Caddy 自動 TLS；每日磁碟 snapshot 備份）——Cloud Run 檔案系統短暫、放不了 SQLite；未來量大 → Cloud SQL Postgres（不動業務碼）。**使用者前置**：開 GCP 專案＋帳單帳戶、準備網域。
 
 ## 研究回填（2026-07-06 工作流查證，詳見 `research/API_FINDINGS.md`）
 

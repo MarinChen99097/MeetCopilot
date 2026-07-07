@@ -1,0 +1,110 @@
+/* MeetCopilot v2 base styles — no Tailwind (ARCHITECTURE §1). Dark navy palette carried over from v1.
+   Real per-surface design lands later (from the user's Claude Design work); this is only the frame. */
+
+:root {
+  --mc-bg: #0b1220;
+  --mc-card: #18233b;
+  --mc-card-hover: #1f2d4d;
+  --mc-border: #263252;
+  --mc-accent: #22d3ee;
+  --mc-accent-contrast: #06222b;
+  --mc-text: #e6ebf5;
+  --mc-text-muted: #96a2c2;
+  --mc-danger: #f87171;
+  --mc-radius: 10px;
+  --mc-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei",
+    Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--mc-bg);
+  color: var(--mc-text);
+  font-family: var(--mc-font);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--mc-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font-family: inherit;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+/* ── Minimal placeholder scaffolding (M0 only) ──────────────── */
+
+.mc-placeholder {
+  min-height: 100vh;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 48px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mc-placeholder h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.mc-placeholder p {
+  margin: 0;
+  color: var(--mc-text-muted);
+}
+
+.mc-tag {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--mc-border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--mc-text-muted);
+}
+
+.mc-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.mc-nav a {
+  padding: 8px 14px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+  background: var(--mc-card);
+}
+
+/* Neutral slide stage (/present) — deliberately unstyled beyond a clean dark canvas (I3). */
+.mc-stage {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mc-bg);
+  color: var(--mc-text-muted);
+}

@@ -49,3 +49,14 @@
 - **落地**：`docs/ROM.md`（規則＋歸檔目錄表＋`<!-- ROM_BELOW -->` 錨點；寫入/歸檔機制同 CHANGE_TRACKER；與 00-DECISIONS 分工＝蒸餾 vs 全量、衝突時 00-DECISIONS 為準；查詢三段式）＋`docs/rom_archives/` 目錄；**回填 6 筆初始帳**（建立 ROM 自身／四項新指示 15–18 含 Fable 執行層取捨／Fable-Opus 分工／審查修正批／v2 pivot 全套／v1 時期摘要）。CLAUDE.md 硬規則 9＋路由表；00-DECISIONS 第 19 項；HANDOFF.html 決策表/目錄/文件索引同步為 19 項並刷新桌面副本。
 - **驗證**：Opus fresh-context read-back 15 項全 ✓（含 CLAUDE.md 仍 65 行 ≤150、HANDOFF 無外部資源）。
 - **狀態**：制度三件套齊（WORKLOG 進度／CHANGE_TRACKER 程式變更／ROM 決策）。仍未動產品程式碼。
+
+## 2026-07-07 session（同日續・S1 結案→契約凍結→M0 落地→SaaS 成品化）
+
+- **S1 spike PASS 結案**：使用者確認 capture-test 那輪即真實雙帳號 Meet（Brave/Win11 9 項全 PASS）——會議模型地基成立。
+- **API 契約 v1.0 凍結**（Fable 親自，`docs/API_CONTRACT.md`）：Auth/CRM（確認=verify、細填=PATCH+human provenance）/研究 job/Decks+生圖 job/Meetings/WS 三角色（capture/hud/present，音訊 binary）/Train（ephemeral 直連 Live）。→ **v1.1**：M0 揪出缺口批准入約（health、me 子形狀、ContactSummary、音訊 frame 佈局＝raw PCM16 LE 16k mono 無標頭、research_status enum、ping→session_state）。
+- **前端設計 prompt 包交付**（Opus，`docs/FRONTEND_DESIGN_PROMPTS.md` 539 行＋桌面副本）：PROMPT 0–6，fresh-context 逐欄位比對契約**零偏差**。
+- **M0 全量落地**（工作流 5 Opus：A1 骨架+shared → A2 crm ∥ A3 server ∥ A4 web → A5 驗收）：**A5 fresh-context 6/6 PASS**——typecheck 四 workspace 全綠、crm vitest 7/7（含跨 org 攻擊斷言、tx 回滾）、真 server 冒煙（register/login/me、dup 409、跨 org 隔離）、JWT fail-fast exit 1、契約零漂移（PatchOp=append-only 保 I1）、/present 無副駕詞彙（I3）。已修 .gitignore WAL 側檔後 commit。
+- **使用者定調（決策 20）：SaaS 成品，不是 demo**。四答：SQLite 維持／**GCP**／邀請制免計費／**前端成品全由我方 agent 做**（prompt 包降為設計規格）。Fable 裁決部署形態：**GCE 單 VM＋持久磁碟＋Docker Compose＋Caddy TLS＋snapshot**（Cloud Run 不能放 SQLite）；量大遷 Cloud SQL。
+- **已知未消**（M1 要處理）：login 的 direct-SQL shim（升級 `MembershipRepository.findPrimaryOrgOf` 後移除）；better-sqlite3 在 Node 22 需 `npm rebuild`（要進 setup 文件或 postinstall）；server 尚無 build script（tsx dev / noEmit typecheck，之後上 project references）；並行 npm install 在 Windows 有檔案鎖競態（單獨重試可過——派工守則補一條「同機平行 agent 勿同時 npm install」）。
+- **下一步**：M1（CRM 全 schema＋研究引擎＋**CRM 成品前端**）。使用者前置：GCP 專案＋帳單＋網域（M5 上線用，不擋 M1–M4）。
+- **狀態**：M0 完成並 commit；三線並行的前置（M1）就緒可開工。
