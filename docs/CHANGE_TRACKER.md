@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 09:40 | 訊號→CRM 批准回寫端點（M5 flywheel 收尾，關閉唯一 PARTIAL）
+- **工作區**: apps/server＋packages/crm＋apps/web
+- **類型**: feat
+- **檔案**: 新 `apps/server/src/realtime/writeback-service.ts`＋`writeback.test.ts`；改 `packages/crm/src/ports.ts`(ByUser 加 optional sourceType/sourceDetail)＋`update-apply.ts`(§7 provenance)＋`realtime/meeting-store.ts`(findSignal)＋`meetings-routes.ts`(路由)＋`index.ts`＋`apps/web/lib/api.ts`＋`docs/API_CONTRACT.md §5`
+- **改了什麼**: `POST /api/meetings/:meetingId/signals/:signalId/writeback {targetType,targetId,field,value}`——會後把批准的訊號寫回 contact/deal。array 欄 append、scalar set，欄位白名單（非清單 400）；signal 須屬該 meeting+org、target 同 org（否則 404）。provenance 走既有 update 路徑但覆寫 `source_type='meeting'`＋`source_detail=meetingId`＋`filled_by='human'`＋`verified=1`（CRM_SCHEMA §7）。ByUser 加**兩個 optional 欄**（向後相容：舊呼叫者 undefined→回退 'manual'，既有細填測試不變）。
+- **為什麼**: M5 整合驗收唯一 PARTIAL（訊號 review-only、缺回寫端點）→ PRODUCT_SPEC 的「會後回寫 CRM」flywheel 現在接起來。typecheck 綠、writeback 3/3＋crm 43＋realtime 20 測試無回歸。**至此 M5 9/9、整個產品 M0–M5 完成。**
+
 ### 2026-07-08 09:00 | M5 整合／隱私／生產強化／邀請／部署產物（7 agent；指揮官代記）
 - **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web＋repo 根（部署）
 - **類型**: feat

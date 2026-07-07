@@ -4,24 +4,31 @@
  *   GET  /api/meetings/:id        → {meeting, signals, transcript, actions}   (post-meeting review)
  *   POST /api/meetings/:id/end    → {summary?}
  *   GET  /api/meetings?page=&pageSize= → {items, total}
+ *   POST /api/meetings/:meetingId/signals/:signalId/writeback
+ *        {targetType,targetId,field,value} → {target}   (approval-gated meeting-signal → CRM writeback, §7)
  *
  * POST mints a short-lived, role-bindable wsToken (ws-token.ts) and registers the live meeting↔deck/company/deal
  * binding with the RealtimeHub so the WS runtime can be materialized on first connect. The creator is recorded as
  * the meeting's presenter (I2: presenter authority is later checked by identity at the WS layer).
  */
 import { Router, type Request, type Response } from "express";
+import type { CrmCore } from "@meetcopilot/crm";
 import { authRequired } from "../auth/jwt.js";
 import { mintWsToken } from "./ws-token.js";
 import type { RealtimeHub } from "./hub.js";
+import { MeetingWritebackService, type WritebackInput } from "./writeback-service.js";
 import { SERVER_DEFAULT_PORT, WS_PATH } from "@meetcopilot/shared";
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
 }
 
-export function createMeetingsRouter(hub: RealtimeHub, jwtSecret: string, port: number): Router {
+export function createMeetingsRouter(hub: RealtimeHub, core: CrmCore, jwtSecret: string, port: number): Router {
   const router = Router();
   router.use(authRequired(jwtSecret));
+
+  // Approval-gated meeting-signal → CRM writeback (CRM_SCHEMA §7). Reuses hub.store for signal ownership.
+  const writeback = new MeetingWritebackService(core, hub.store);
 
   const wsBase = (process.env.WS_PUBLIC_BASE ?? `ws://localhost:${port || SERVER_DEFAULT_PORT}`).replace(/\/$/, "");
 
@@ -92,6 +99,32 @@ export function createMeetingsRouter(hub: RealtimeHub, jwtSecret: string, port: 
       hub.store.transcript(orgId, id),
     ]);
     res.json({ meeting, signals, transcript, actions: [] });
+  });
+
+  // POST /api/meetings/:meetingId/signals/:signalId/writeback  (approval-gated meeting-signal → CRM writeback)
+  // Auth+org from JWT (req.auth); the signal must belong to this org+meeting; field allowlist + provenance §7.
+  router.post("/:meetingId/signals/:signalId/writeback", async (req: Request, res: Response) => {
+    const { orgId, userId } = req.auth!;
+    const meetingId = req.params.meetingId!;
+    const signalId = req.params.signalId!;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const input: WritebackInput = {
+      targetType: body.targetType as WritebackInput["targetType"],
+      targetId: body.targetId as string,
+      field: body.field as string,
+      value: body.value,
+    };
+    try {
+      const result = await writeback.apply({ orgId, userId }, meetingId, signalId, input);
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error });
+        return;
+      }
+      res.json({ target: result.target });
+    } catch (err) {
+      console.error("[meetings] writeback failed:", err);
+      res.status(500).json({ error: "could not write back signal" });
+    }
   });
 
   // POST /api/meetings/:id/end

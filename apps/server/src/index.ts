@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   // Meetings + realtime copilot (API_CONTRACT §5/§6). The RealtimeHub is the per-process orchestration center
   // (session registry, ASR/analysis/orchestrator wiring, I1/I2/I3 enforcement); shared by the HTTP router and WS.
   const realtimeHub = new RealtimeHub(core, config, createGeminiClient(config.gemini), meter);
-  app.use("/api/meetings", createMeetingsRouter(realtimeHub, config.jwtSecret, config.port));
+  app.use("/api/meetings", createMeetingsRouter(realtimeHub, core, config.jwtSecret, config.port));
 
   // Decks / DynamicSlide (API_CONTRACT §4): /decks/*, /image-jobs/:id, /extract-url, /extract-pdf.
   // Bearer auth here; tenant scope from req.auth.orgId. Disjoint paths from the routers above.

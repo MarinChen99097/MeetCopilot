@@ -189,6 +189,14 @@ export interface Paged<T> {
 /** 細填/確認的操作者背書（provenance filled_by='human' 的來源）。 */
 export interface ByUser {
   userId: string;
+  /**
+   * Provenance 來源覆寫（皆可選，向後相容）。預設 update() 記 `source_type='manual'`（UI 細填），
+   * `source_detail` 為 NULL。會後訊號**批准回寫**（CRM_SCHEMA §7）改帶 `sourceType='meeting'` ＋
+   * `sourceDetail=<meetingId>`，使副駕/trainer 能辨識該值源自會議且可追出處。既有呼叫端只傳 `{userId}`，
+   * 兩欄留 undefined → 行為與過去完全一致。
+   */
+  sourceType?: string;
+  sourceDetail?: string;
 }
 /** 公司清單過濾。 */
 export interface CompanyFilter {

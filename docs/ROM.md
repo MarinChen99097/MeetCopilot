@@ -45,6 +45,11 @@
 - **使用者前置（唯一未完＝上線）**: GCP 專案/帳單/網域/DNS、OpenAI 組織驗證、換強 JWT_SECRET，照 `docs/DEPLOY.md` 跑（我不跑 gcloud）。
 - **影響**: M5 全量 commit；ARCHITECTURE 里程碑 M5；接著補訊號回寫。**至此 MeetCopilot v2 為 M0–M5 完整成品，只差使用者上線＋真語音驗。**
 
+### 2026-07-08 09:42 | 訊號→CRM 回寫端點補上，M5 PARTIAL 關閉（9/9）
+- **誰決定**: Fable（M5 收尾）
+- **決策**: 補 `POST /meetings/:id/signals/:signalId/writeback`，讓會後批准的訊號帶 `source_type='meeting'` provenance 回寫 contact/deal（PRODUCT_SPEC flywheel）。ByUser 介面加 optional sourceType/sourceDetail（向後相容）。M5 整合驗收由 8/9 → **9/9**。
+- **影響**: 產品 M0–M5 全部功能完成；契約 §5 更新；commit。剩：使用者上線（DEPLOY.md）＋真語音驗＋（carry-forward）串流成本記帳。
+
 ### 2026-07-08 06:05 | /code-review 收尾：7 confirmed 全修＋SSRF 回歸攔截
 - **誰決定**: Fable（依審查證據＋回歸驗證裁決）
 - **決策**:

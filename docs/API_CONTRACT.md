@@ -84,6 +84,11 @@
 | GET | `/api/meetings/:id` | 會後檢視：`{meeting, signals:Signal[], transcript:Segment[], actions}` |
 | POST | `/api/meetings/:id/end` | 結束 session → `{summary?}` |
 | GET | `/api/meetings` | 歷史清單 |
+| POST | `/api/meetings/:meetingId/signals/:signalId/writeback` | **批准回寫**（會後訊號 → CRM，PRODUCT_SPEC 飛輪）：`{targetType:'contact'\|'deal', targetId, field, value}` → `{target}`（更新後的 Contact/Deal）。`value`＝人核准值（可由訊號建議編輯）。signal 必須屬於該 `meetingId`＋org（否則 404）；target 亦須在同 org。array 欄 **append**、scalar 欄 **set**。provenance 依 CRM_SCHEMA §7 記 `filled_by='human'`＋`source_type='meeting'`＋`source_detail=<meetingId>`＋`verified=1`，並 supersede 該欄舊 provenance。錯誤：400（非法/未允許 field）、404（meeting/signal/target 不存在或不屬本 org） |
+
+> **writeback `field` 白名單**（camelCase 域欄位名＝provenance `fieldName`；非清單內 → 400）：
+> `contact`：`objectionsRaised`／`painPoints`／`knownPriorities`／`hotButtons`（array，append）、`decisionPower`／`communicationStyle`（scalar，set）；
+> `deal`：`riskFlags`（array，append）、`nextStep`／`pain`（scalar，set）。
 
 ## 6. WS 協定（`/ws?token=<wsToken>&meetingId=&role=`；role＝`capture`｜`hud`｜`present`）
 

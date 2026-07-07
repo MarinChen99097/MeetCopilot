@@ -166,6 +166,23 @@ export class MeetingStore {
     }));
   }
 
+  /**
+   * A single signal, scoped to (org, meeting). Returns null if the signal doesn't exist OR belongs to a
+   * different meeting/org — the approval-gated writeback (CRM_SCHEMA §7) uses this so an org can never write
+   * back a signal it doesn't own (cross-tenant guard).
+   */
+  async findSignal(
+    orgId: string,
+    meetingId: string,
+    signalId: string,
+  ): Promise<{ id: string; type: string; label: string | null } | null> {
+    const row = await this.db.get<{ id: string; type: string; label: string | null }>(
+      `SELECT id, type, label FROM meeting_signals WHERE id = ? AND org_id = ? AND meeting_id = ?`,
+      [signalId, orgId, meetingId],
+    );
+    return row ?? null;
+  }
+
   async signals(orgId: string, meetingId: string): Promise<SignalItem[]> {
     const rows = await this.db.all<SignalRow>(
       `SELECT id, type, label, confidence FROM meeting_signals

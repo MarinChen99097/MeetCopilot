@@ -4,7 +4,7 @@
  *  (2) 對每個被改欄位插一列 provenance `filled_by='human', verified=1`（隱含權威），舊列 superseded。
  * Company/Contact/CompanyProduct/Deal 的 update() 共用本函式（entityType 各異）。
  */
-import type { DbPort } from "./ports.js";
+import type { DbPort, ByUser } from "./ports.js";
 import type { NewProvenance } from "@meetcopilot/shared";
 import { patchToRecord, updateRow, type FieldDef } from "./mappers.js";
 import { recordProvenanceRows } from "./provenance-write.js";
@@ -28,7 +28,7 @@ export async function applyHumanUpdate(
   id: string,
   patch: Record<string, unknown>,
   defs: FieldDef[],
-  by: { userId: string },
+  by: ByUser,
   opts: HumanUpdateOpts = {},
 ): Promise<void> {
   await db.tx(async () => {
@@ -48,7 +48,9 @@ export async function applyHumanUpdate(
         fieldName: d.key,
         valueSnapshot: snapshot(d, patch[d.key]),
         filledBy: "human",
-        sourceType: "manual",
+        // 預設 UI 細填＝'manual'；批准回寫時呼叫端覆寫為 'meeting' + sourceDetail=meetingId（CRM_SCHEMA §7）。
+        sourceType: by.sourceType ?? "manual",
+        sourceDetail: by.sourceDetail,
         verified: 1,
         verifiedBy: by.userId,
         verifiedAt: now,

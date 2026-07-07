@@ -491,6 +491,21 @@ export function endMeeting(id: string): Promise<{ summary?: string }> {
 export function listMeetings(): Promise<Paged<MeetingRef>> {
   return request<Paged<MeetingRef>>("/api/meetings");
 }
+/**
+ * Approval-gated meeting-signal → CRM writeback (API_CONTRACT §5; CRM_SCHEMA §7). `value` is the human-approved
+ * value (may be edited from the signal's suggestion): array fields append it, scalar fields set it. Server stamps
+ * provenance filled_by='human' + source_type='meeting' + source_detail=meetingId + verified=1.
+ */
+export function writebackSignal(
+  meetingId: string,
+  signalId: string,
+  input: { targetType: "contact" | "deal"; targetId: string; field: string; value: unknown },
+): Promise<{ target: Contact | Deal }> {
+  return request<{ target: Contact | Deal }>(
+    `/api/meetings/${meetingId}/signals/${signalId}/writeback`,
+    { method: "POST", body: input },
+  );
+}
 
 // ── Train / voice simulation (API_CONTRACT §7) ──────────────────
 /** Only contacts whose persona fields pass the verified gate are returned (trust rule). */
