@@ -42,3 +42,10 @@
   - **交接 HTML（已交付）**：`docs/HANDOFF.html`（636 行、零外部資源、零 JS、繁中、列印友善）——12 節：30 秒版/會議模型圖/18 決策/技術架構/CRM/研究引擎/里程碑+spike/風險/現在就能做的三件事/文件索引。**桌面副本：`C:/Users/Martin/Desktop/MeetCopilot_v2_規劃交接.html`**。
 - **給使用者的三個行動項**：(1) 各裝置開 `tools/capture-test.html` 實測並填矩陣；(2) OpenAI console 完成組織驗證＋查 tier 配額；(3) 備兩個 Google 帳號約 S1 測試 Meet。
 - **狀態**：計畫書含四項新指示全部定稿；仍未動產品程式碼。
+
+## 2026-07-07 session（同日續・建立 ROM 決策總帳，決策 19）
+
+- **使用者指示**：CHANGE_TRACKER 之外再加一個 **ROM**——記錄使用者或 Claude 下的**所有決策**；不是 memory 那種要精簡的，是「更大更雜」的帳本；每 500 行歸檔、歸檔以**序號**命名、要有**目錄**記每個歸檔的簡介供快速查詢。
+- **落地**：`docs/ROM.md`（規則＋歸檔目錄表＋`<!-- ROM_BELOW -->` 錨點；寫入/歸檔機制同 CHANGE_TRACKER；與 00-DECISIONS 分工＝蒸餾 vs 全量、衝突時 00-DECISIONS 為準；查詢三段式）＋`docs/rom_archives/` 目錄；**回填 6 筆初始帳**（建立 ROM 自身／四項新指示 15–18 含 Fable 執行層取捨／Fable-Opus 分工／審查修正批／v2 pivot 全套／v1 時期摘要）。CLAUDE.md 硬規則 9＋路由表；00-DECISIONS 第 19 項；HANDOFF.html 決策表/目錄/文件索引同步為 19 項並刷新桌面副本。
+- **驗證**：Opus fresh-context read-back 15 項全 ✓（含 CLAUDE.md 仍 65 行 ≤150、HANDOFF 無外部資源）。
+- **狀態**：制度三件套齊（WORKLOG 進度／CHANGE_TRACKER 程式變更／ROM 決策）。仍未動產品程式碼。

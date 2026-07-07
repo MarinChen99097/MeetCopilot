@@ -68,6 +68,7 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 16. **擷取相容性測試工具先行**：`tools/capture-test.html`（單檔、雙擊可開、免安裝）——使用者要親測「各裝置 × 各開會軟體（Meet/Zoom/Teams…）」的分頁/視窗音訊擷取配合度；此工具是 S1 spike 的載具，M0 前就交付。（**已交付**：tools/capture-test.html＋tools/README.md 矩陣範本。）
 17. **引入 ezpagesite 的 code-tracker 制度**：實體＝ezpagesite 的 **CHANGE_TRACKER**（強制變更日誌：每次改程式檔立刻追加一筆、錨點插入、>500 行打包），移植時加「工作區」欄位。（**已落地**：`docs/CHANGE_TRACKER.md`＋CLAUDE.md 硬規則。）
 18. **CRM 對方產品深檔**：CRM 欄位要能「完整介紹一家公司的產品」含細節與開發人——新增 `company_products`（規格/功能/定價/技術棧/整合/路線圖）、`company_product_people`（產品↔人：developer/PM/owner…）、`company_departments`（部門/主管/人數），接上 embedding 檢索與爬蟲填欄。（**已落地**：CRM_SCHEMA「對方產品深檔」節。）
+19. **建立 ROM 決策總帳**（2026-07-07 追加）：記錄使用者或 Claude 的**所有決策**——比 memory 更大更雜、不精簡、帶脈絡與替代方案；每 500 行歸檔 `rom_archives/ROM_NNN.md`（序號命名），ROM.md 頂部維護每檔簡介的歸檔目錄。與本檔分工：本檔＝蒸餾後前提（衝突時為準）、ROM＝全量帳。（**已落地**：`docs/ROM.md`＋CLAUDE.md 硬規則 9。）
 
 ## 研究回填（2026-07-06 工作流查證，詳見 `research/API_FINDINGS.md`）
 

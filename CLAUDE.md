@@ -34,6 +34,7 @@
 | 交辦任務給 subagent 前 | `docs/TASK_TEMPLATES.md`（照模板；含平行契約鎖定守則） |
 | 改本檔或 docs/ 制度檔 | `docs/MAINTENANCE.md`（先看許可權） |
 | **改了任何程式碼之後** | `docs/CHANGE_TRACKER.md`（**強制**：立刻追加變更紀錄，規則見該檔） |
+| **下了任何決策之後**（使用者或 Claude） | `docs/ROM.md`（**強制**：決策總帳，可長可雜；500 行歸檔＋目錄簡介） |
 | 踩坑/環境陷阱 | `docs/DIAGNOSIS.md`＋把新教訓寫 `docs/LESSONS.md` |
 | 接手新 session、想了解全局 | `docs/LETTER_TO_FUTURE_SESSIONS.md` |
 | 想借 v1 的碼 | 讀 `c:/Users/Martin/Desktop/MeetCopilot/apps/server/src`（參考件；借＝在 v2 重寫對齊新契約） |
@@ -48,6 +49,7 @@
 6. **平行派工先鎖契約**（v1 L5 教訓）：並行 agent 前把共用契約凍結，各 agent 只實作不改契約，整合時驗一致。
 7. **授權用攻擊者憑證測**（v1 教訓）：I2/authz 用非 presenter / 跨 org 憑證測被拒。
 8. **程式碼變更必記 CHANGE_TRACKER**（決策 17）：每次 Edit/Write 程式檔後**立刻**照 `docs/CHANGE_TRACKER.md` 追加一筆（錨點插入、嚴禁 Write 覆寫、>500 行打包）。
+9. **決策必記 ROM**（決策 19）：使用者或 Claude 下的**任何決策**（含否決、預設值選擇）當下照 `docs/ROM.md` 追加——不精簡、帶脈絡與替代方案；500 行歸檔到 `rom_archives/ROM_NNN.md` 並在目錄寫簡介。
 
 ## 環境速記
 

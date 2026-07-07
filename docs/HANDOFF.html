@@ -225,7 +225,7 @@
     <ol>
       <li><a href="#s1">這是什麼（30 秒版）</a></li>
       <li><a href="#s2">會議運作模型</a></li>
-      <li><a href="#s3">18 項已拍板決策</a></li>
+      <li><a href="#s3">19 項已拍板決策</a></li>
       <li><a href="#s4">技術架構</a></li>
       <li><a href="#s5">CRM 資料模型</a></li>
       <li><a href="#s6">研究引擎</a></li>
@@ -321,10 +321,10 @@
     </div>
   </section>
 
-  <!-- 4. 18 項決策 -->
+  <!-- 4. 19 項決策 -->
   <section id="s3">
-    <h2 class="sec"><span class="num">3</span>18 項已拍板決策</h2>
-    <p class="sec-sub">來源＝2026-07-06 與使用者討論拍板（14 項）＋2026-07-07 補充（15–18）。這些視為既定前提，不重問。</p>
+    <h2 class="sec"><span class="num">3</span>19 項已拍板決策</h2>
+    <p class="sec-sub">來源＝2026-07-06 與使用者討論拍板（14 項）＋2026-07-07 補充（15–19）。這些視為既定前提，不重問。</p>
     <div class="table-scroll">
       <table>
         <thead><tr><th style="width:44px">#</th><th style="width:210px">決策</th><th>一句話說明</th></tr></thead>
@@ -347,6 +347,7 @@
           <tr><td class="cnum">16</td><td>擷取相容性測試工具先行 <span class="pill new">補充</span></td><td><code>tools/capture-test.html</code>（單檔、雙擊可開、免安裝）——親測各裝置×開會軟體的分頁音訊擷取；S1 spike 的載具，M0 前交付。</td></tr>
           <tr><td class="cnum">17</td><td>引入 code-tracker 制度 <span class="pill new">補充</span></td><td>移植 ezpagesite 的 CHANGE_TRACKER：每次改程式檔立刻追加一筆變更紀錄（錨點插入、>500 行打包）。</td></tr>
           <tr><td class="cnum">18</td><td>CRM 對方產品深檔 <span class="pill new">補充</span></td><td>新增 <code>company_products</code>（規格/定價/技術棧/整合/路線圖）、<code>company_product_people</code>（產品↔人）、<code>company_departments</code>（部門/主管）。</td></tr>
+          <tr><td class="cnum">19</td><td>ROM 決策總帳 <span class="pill new">補充</span></td><td>使用者或 Claude 的<strong>所有決策</strong>全量記錄（不精簡、含脈絡與被否決的替代方案）；每 500 行歸檔 <code>rom_archives/ROM_NNN.md</code>（序號命名）＋目錄簡介供快速查詢。</td></tr>
         </tbody>
       </table>
     </div>
@@ -599,13 +600,14 @@
       <table>
         <thead><tr><th style="width:300px">檔案</th><th>用途</th></tr></thead>
         <tbody>
-          <tr><td><code>docs/00-DECISIONS.md</code></td><td><strong>唯一真相來源</strong>——已拍板決策（14＋15–18）、會議模型、研究回填校準。</td></tr>
+          <tr><td><code>docs/00-DECISIONS.md</code></td><td><strong>唯一真相來源</strong>——已拍板決策（14＋15–19）、會議模型、研究回填校準。</td></tr>
           <tr><td><code>docs/PRODUCT_SPEC.md</code></td><td>產品規格——一核心三消費端怎麼運作、流程、不變量、延遲預算、平台約束。</td></tr>
           <tr><td><code>docs/ARCHITECTURE_PLAN.md</code></td><td>架構與里程碑計畫書——技術棧、monorepo、模組地圖、M0–M5＋驗收、spike、風險。</td></tr>
           <tr><td><code>docs/CRM_SCHEMA.md</code></td><td>CRM 資料 schema——全 DDL、repository/DbPort、provenance 信任層、embedding 檢索、爬蟲能/不能填。</td></tr>
           <tr><td><code>docs/research/API_FINDINGS.md</code></td><td>API 事實（不能猜）——Gemini Live/生圖/OpenAI 的 model ID、限制、延遲、價格、擷取相容性。</td></tr>
           <tr><td><code>docs/research/EZPAGESITE_CRAWLER.md</code></td><td>ezpagesite「從網址匯入」爬蟲的原版實作地圖（借碼參考）。</td></tr>
           <tr><td><code>docs/CHANGE_TRACKER.md</code></td><td>強制變更日誌——每次改程式檔立刻追加一筆（決策 17）。</td></tr>
+          <tr><td><code>docs/ROM.md</code></td><td>決策總帳——使用者或 Claude 的所有決策全量記錄（不精簡、含脈絡與替代方案）；500 行歸檔至 <code>rom_archives/ROM_NNN.md</code>＋目錄簡介（決策 19）。</td></tr>
           <tr><td><code>docs/MODEL_DISPATCH.md</code></td><td>派 subagent、選模型、驗證工作的調度規則。</td></tr>
           <tr><td><code>docs/JUDGMENT_RUBRICS.md</code></td><td>判斷準則——升級？完成了嗎？該問使用者嗎？</td></tr>
           <tr><td><code>docs/TASK_TEMPLATES.md</code></td><td>交辦 subagent 的模板（含平行契約鎖定守則）。</td></tr>
