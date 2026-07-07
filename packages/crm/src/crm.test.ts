@@ -142,6 +142,31 @@ describe("upsertFromCrawl", () => {
     const news = await core.companyChildren.listNews(ORG, first.id);
     expect(news.length).toBe(1);
   });
+
+  it("opts.targetId updates the named domain-less row and backfills its domain (no duplicate)", async () => {
+    // Reproduces the enrich duplicate bug: a company created with NO domain (only name+websiteUrl).
+    const target = await core.companies.create(ORG, { name: "Ghost", websiteUrl: "https://ghost.org" });
+    expect(target.domain).toBeUndefined();
+
+    // Enrich resolves domain from the URL host but the target row still has domain=NULL. Without targetId
+    // the domain-dedupe would miss it and INSERT a second row; with targetId it must hit THIS row.
+    const result = await core.companies.upsertFromCrawl(ORG, "ghost.org", payload("Publishing"), {
+      targetId: target.id,
+    });
+    expect(result.id).toBe(target.id);
+    expect(result.industry).toBe("Publishing");
+    expect(result.domain).toBe("ghost.org"); // backfilled so future domain-dedupe works too
+
+    // Exactly one company — no duplicate.
+    const all = await core.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM companies WHERE org_id = ?", [ORG]);
+    expect(all[0]?.n).toBe(1);
+
+    // A second enrich (re-run) still updates the same row, never creates a second.
+    const rerun = await core.companies.upsertFromCrawl(ORG, "ghost.org", payload("SaaS"), { targetId: target.id });
+    expect(rerun.id).toBe(target.id);
+    const after = await core.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM companies WHERE org_id = ?", [ORG]);
+    expect(after[0]?.n).toBe(1);
+  });
 });
 
 describe("update() human-override provenance", () => {

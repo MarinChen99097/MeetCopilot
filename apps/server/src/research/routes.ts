@@ -45,7 +45,7 @@ export interface ResearchRouterDeps {
 export function createResearchRouter(core: CrmCore, config: AppConfig, jwtSecret: string, deps: ResearchRouterDeps = {}): Router {
   const gemini = createGeminiClient(config.gemini);
   const crawler = deps.crawler ?? createCrawlProvider();
-  const extractor = deps.extractor ?? createCrawlExtractor(gemini);
+  const extractor = deps.extractor ?? createCrawlExtractor(gemini, config.gemini.extractModel);
   const grounding = deps.grounding ?? createGroundingProvider(gemini);
   const jobs = createCrawlJobStore(core.db);
   const orchestrator = deps.orchestrator ?? createResearchOrchestrator({ core, crawler, extractor, jobs });

@@ -36,6 +36,16 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 01:35 | S4 spike 正式 PASS＋抽取模型分流決策
+- **誰決定**: Fable（依 CyberPower 台灣站實測證據裁決）
+- **決策**:
+  1. **S4 spike 全數關閉（PASS）**：真實爬蟲端到端把**豐富 CRM 欄位**填出來已證實——重驗 `https://www.cyberpower.com/tw/zh`（使用者指定、繁中 B2B）：一筆公司（無重複、domain 回填）、industry/description/legalName（碩天科技股份有限公司＝CyberPower 真實台灣法人）＋5 個產品，`filled_by='crawler'`＋source_url，繁中乾淨無幻覺。加上先前已證的 SSRF 穩、browser.close 有界不懸掛、job 到 done。→ 研究引擎（M1 核心）真正可用。
+  2. **抽取模型分流**（決策）：爬蟲結構化抽取用 `GEMINI_EXTRACT_MODEL=gemini-3.5-flash`，一般文字/生成維持 `gemini-3.1-flash-lite`。因 flash-lite 對「爬頁文字→CRM 結構化欄位」不穩（JSON 坍縮/runaway/偷懶，見 L15）——按任務難度配模型，不是一把模型打天下。
+- **脈絡與理由**: 使用者要成品，S4 的價值不是「水管通」而是「真的填得出資料」；ghost.org 只填 2 欄暴露 flash-lite 抽取不穩，換 3.5-flash＋CyberPower 實測才真正過關。
+- **考慮過的替代**: 全線升 3.5-flash（否——一般文字 flash-lite 夠用又便宜，只有抽取需要）；維持 flash-lite 靠重試（否——它吐的是合法 JSON，重試也救不了）。
+- **未消小限（誠實）**: 產品的 description/keyFeatures 常只有 oneLiner（quick 單頁）、近似產品名可能重複（child dedupe 為精確名比對）——detailed 模式爬子頁可補；M1 可接受。
+- **影響**: apps/server research/gemini/config、packages/crm upsertFromCrawl、.env(.example) 加 GEMINI_EXTRACT_MODEL、API_FINDINGS §E、ARCHITECTURE_PLAN .env、LESSONS L15。**M1 研究引擎驗收完成 → M2/M3/M4 三線可開工**。
+
 ### 2026-07-08 00:20 | .env 祕鑰唯一真相＝apps/server/.env（不再自動同步）
 - **誰決定**: 使用者（「以 server 為主」「原本最外層的 .env 我刪掉了」）＋Fable（守則）
 - **決策**: `apps/server/.env` 是所有 API key 的唯一落點；根 `.env` 已由使用者刪除。**永久停用**先前「root→server 自動同步」腳本（它造成使用者新填的 OpenAI key 被舊值覆蓋、因 gitignored 無法復原，見 L14）。往後 Claude 對 .env 一律**唯讀、遮蔽檢查**，需要 key 請使用者直接編該檔。

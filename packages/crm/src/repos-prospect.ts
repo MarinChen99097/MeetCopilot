@@ -10,6 +10,7 @@ import type {
   CompanyProductRepository,
   CompanyChildRepository,
   CompanyFilter,
+  CrawlUpsertOptions,
   Page,
   Paged,
   ByUser,
@@ -194,21 +195,65 @@ export class SqliteCompanyRepository implements CompanyRepository {
     await this.db.run("DELETE FROM companies WHERE org_id = ? AND id = ?", [orgId, id]);
   }
 
-  async upsertFromCrawl(orgId: string, domain: string, crawled: CrawlPayload): Promise<Company> {
+  async upsertFromCrawl(
+    orgId: string,
+    domain: string,
+    crawled: CrawlPayload,
+    opts: CrawlUpsertOptions = {},
+  ): Promise<Company> {
     const companyId = await this.db.tx(async () => {
       const now = Date.now();
-      const existing = await this.db.get<{ id: string }>(
-        "SELECT id FROM companies WHERE org_id = ? AND domain = ?",
-        [orgId, domain],
-      );
+      const hasDomain = typeof domain === "string" && domain.length > 0;
+
+      // 1) enrich 指名了既有列 id → 優先以 id 命中該列（避免 domain=NULL 時 domain-dedupe 落空而新建重複列）。
+      let existing: { id: string; domain: string | null } | undefined;
+      if (opts.targetId) {
+        existing = await this.db.get<{ id: string; domain: string | null }>(
+          "SELECT id, domain FROM companies WHERE org_id = ? AND id = ?",
+          [orgId, opts.targetId],
+        );
+      }
+      // 2) 沒指名或指名列不存在 → 退回 domain-dedupe（僅在 domain 非空時；空 domain 不當 dedupe key）。
+      if (!existing && hasDomain) {
+        existing = await this.db.get<{ id: string; domain: string | null }>(
+          "SELECT id, domain FROM companies WHERE org_id = ? AND domain = ?",
+          [orgId, domain],
+        );
+      }
+
       let id: string;
       if (existing) {
         id = existing.id;
+        // 命中列尚無 domain 且此次有 domain：回填 domain（前提是沒有別列已占用該 domain，避免 UNIQUE(org_id,domain) 衝突）。
+        if (hasDomain && !existing.domain) {
+          const clash = await this.db.get<{ id: string }>(
+            "SELECT id FROM companies WHERE org_id = ? AND domain = ? AND id != ?",
+            [orgId, domain, id],
+          );
+          if (!clash) {
+            await this.db.run("UPDATE companies SET domain = ?, updated_at = ? WHERE org_id = ? AND id = ?", [
+              domain,
+              now,
+              orgId,
+              id,
+            ]);
+          }
+        }
       } else {
         id = uuidv7();
+        // 空 domain 存 NULL（非空字串，避免多列同吃 domain='' 觸發 UNIQUE 衝突）。
         await this.db.run(
           "INSERT INTO companies (id, org_id, name, domain, source, verified_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-          [id, orgId, crawled.company.name ?? domain, domain, crawled.company.source ?? "crawler", "none", now, now],
+          [
+            id,
+            orgId,
+            crawled.company.name ?? (hasDomain ? domain : "(unknown company)"),
+            hasDomain ? domain : null,
+            crawled.company.source ?? "crawler",
+            "none",
+            now,
+            now,
+          ],
         );
       }
 

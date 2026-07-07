@@ -106,7 +106,8 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
         if (targetType === "company") {
           const payload: CrawlPayload = await extractor.toCompany(raw);
           const upsertDomain = domain ?? payload.company.domain ?? domainFromUrl(raw.finalUrl ?? url) ?? "";
-          await core.companies.upsertFromCrawl(orgId, upsertDomain, payload);
+          // 指名 targetId：upsert 以 id 命中 enrich 的目標列（缺 domain 就回填），保證更新既有列、不新建重複列。
+          await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId: args.targetId });
           fieldsFilled = payload.provenance.length;
         } else {
           // 主管 target：抽出的第一位（best-effort，M1）寫回其公司下。

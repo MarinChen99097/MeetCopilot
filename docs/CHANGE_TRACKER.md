@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 01:30 | 修爬蟲抽取品質＋去重＋抽取模型升級（S4 關閉）
+- **工作區**: apps/server＋packages/crm
+- **類型**: fix
+- **檔案**: `apps/server/src/research/{extractor,orchestrator}.ts`、`apps/server/src/{gemini,config}.ts`、`packages/crm/src/{ports,repos-prospect}.ts`、`.env.example`
+- **改了什麼**: (1) **去重**：`upsertFromCrawl` 加 `CrawlUpsertOptions{targetId?}`，repo 改「先按 id 解析→domain fallback（domain 空則跳過）→insert」＋回填 target 的 domain（防 UNIQUE 撞）；orchestrator 傳 targetId。(2) **抽取品質**：extractor prompt 指令化（hero/feature 文案即 description、tagline 只放短標語、語言忠實 zh-TW）、schema 移除 websiteUrl/domain（爬蟲自己有）、`required:[name,description,industry]` 逼填、`cleanUrl()` 去尾標點（修逗號）。(3) **模型**：新增 `GEMINI_EXTRACT_MODEL`（預設 `gemini-3.5-flash`）只給抽取用；gemini.ts 加 `maxOutputTokens` 上限（runaway fail-fast）＋`stripJsonFences`。
+- **為什麼**: B5/DB 揪出「爬完只填 name+websiteUrl、還重複建公司」。根因＝flash-lite 對此抽取不穩（JSON 坍縮/runaway/偷懶，見 L15），非爬文字或 prompt 問題。**重驗 CyberPower 台灣站（zh-TW）：一筆公司（domain 回填 cyberpower.com）、8 欄 crawler 值（industry「不斷電系統與電源管理」/description/legalName 碩天科技）＋5 產品，繁中乾淨無幻覺**。typecheck 綠、crm 23/23（加 targetId 去重回歸測試）。
+
 ### 2026-07-07 23:35 | M1 CRM 核心＋研究引擎＋CRM 成品前端（工作流 6 agent；指揮官代記一組）
 - **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
 - **類型**: feat

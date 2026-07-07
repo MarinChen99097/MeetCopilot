@@ -150,6 +150,7 @@ for (const part of res.candidates![0].content!.parts!)
 - `gemini-3.1-flash-lite`（文字/分析/生成主力）：**VERIFIED-in-v1**——v1 於 2026-07-05 對實際可用模型清單查證 API ID、並在生產流程實測（生成 0 空白頁）。v2 wiring 時以 models.list 再確認一次即可。
 - `gemini-embedding-001`（embedding）：同上，v1 實測可用（flash-lite 非 embedding 模型，不可混用）。
 - 兩者經 .env（`GEMINI_TEXT_MODEL`／`GEMINI_EMBED_MODEL`）可換，不寫死；生成品質不足時的升級路＝換 `gemini-3.5-flash`（.env 一行）。
+- **`gemini-3.5-flash`（`GEMINI_EXTRACT_MODEL`，研究引擎爬蟲抽取專用）**：**已實測必要**（2026-07-08）——`gemini-3.1-flash-lite` 對「爬頁文字→CRM 結構化欄位」這種較複雜的結構化抽取**不穩**：會在某欄位吐雜引號使 JSON 結構坍縮（仍是合法 JSON 故不觸發重試、欄位靜默掉光）、或陷入 283KB unterminated string 的 runaway、或偷懶把描述塞錯欄位。改用 `gemini-3.5-flash` 後 CyberPower 台灣站抽出 industry/description/legalName（碩天科技）＋5 個產品、繁中乾淨無幻覺。故抽取單獨升 3.5-flash、一般文字維持 flash-lite。搭配 `maxOutputTokens` 上限（runaway fail-fast）＋`stripJsonFences`。
 
 ## F. OpenAI 生圖（主力供應商，2026-07-07 使用者拍板＋同日查證；決策 15）
 

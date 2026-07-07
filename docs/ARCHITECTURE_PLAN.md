@@ -27,7 +27,7 @@
 **工具鏈約定（M0 就定死，弱模型不用猜）**：
 - 測試框架：**vitest**（各 workspace `npm run test`）；e2e 冒煙用 node 腳本（`scripts/smoke-*.mjs`）打真實 server。
 - 每個 workspace 的 npm scripts 統一命名：`dev`／`build`／`typecheck`（tsc --noEmit）／`test`；apps/server 另有 `migrate`（套 packages/crm 的 migrations）。根目錄聚合：`npm run typecheck --workspaces`。
-- **.env（apps/server，附 .env.example）**：`GEMINI_API_KEY`（必填）、`JWT_SECRET`（必填，缺值 fail-fast）、`PORT`（預設 8787）、`DB_PATH`（預設 `./data/meetcopilot.db`）、`GEMINI_TEXT_MODEL`（預設 `gemini-3.1-flash-lite`）、`GEMINI_EMBED_MODEL`（預設 `gemini-embedding-001`）、`GEMINI_LIVE_MODEL`（預設 `gemini-3.1-flash-live-preview`）、`OPENAI_API_KEY`（生圖必填）、`OPENAI_IMAGE_MODEL`（預設 `gpt-image-2`）、`OPENAI_IMAGE_SIZE`（預設 `1536x864`）、`OPENAI_IMAGE_QUALITY`（預設 `medium`）、`RESEARCH_AUTO_LIMIT_PER_MEETING`（預設 10）。web 端：`NEXT_PUBLIC_API_BASE`（預設 `http://localhost:8787`——經環境變數，**不寫死於程式碼**，這就是「雲端路」）。
+- **.env（apps/server，附 .env.example）**：`GEMINI_API_KEY`（必填）、`JWT_SECRET`（必填，缺值 fail-fast）、`PORT`（預設 8787）、`DB_PATH`（預設 `./data/meetcopilot.db`）、`GEMINI_TEXT_MODEL`（預設 `gemini-3.1-flash-lite`）、`GEMINI_EMBED_MODEL`（預設 `gemini-embedding-001`）、`GEMINI_LIVE_MODEL`（預設 `gemini-3.1-flash-live-preview`）、`GEMINI_EXTRACT_MODEL`（爬蟲抽取專用，預設 `gemini-3.5-flash`——flash-lite 對抽取不穩，見 LESSONS L15）、`OPENAI_API_KEY`（生圖必填）、`OPENAI_IMAGE_MODEL`（預設 `gpt-image-2`）、`OPENAI_IMAGE_SIZE`（預設 `1536x864`）、`OPENAI_IMAGE_QUALITY`（預設 `medium`）、`RESEARCH_AUTO_LIMIT_PER_MEETING`（預設 10）。web 端：`NEXT_PUBLIC_API_BASE`（預設 `http://localhost:8787`——經環境變數，**不寫死於程式碼**，這就是「雲端路」）。
 
 ---
 
@@ -94,7 +94,7 @@ MeetCopilot_v2/
 | **S1** ✅ **PASS（2026-07-07 結案）** | 雙帳號擷取 Meet 分頁音訊 | **使用者以 Brave/Win11＋真實雙帳號 Meet 實測 9 項全 PASS**（分頁音軌 1 條、錄放回聽正常、AudioContext@16k OK）——會議模型地基成立，M3 開工 gate 已開。殘項：Window-surface 備援可得性未測（非阻斷，之後順測） | ~~回頭重議~~（未觸發） |
 | **S2** | Gemini 分段轉寫中英混合會議音訊 | ASR 品質/延遲可用；下游 LLM 能從逐字稿推斷 speaker（presenter/client）。**需真實音訊素材**（請使用者提供/錄一段中英混合對話，agent 不能自造人聲驗品質） | 換 Google STT v2（AsrProvider 換 impl） |
 | **S3** | Gemini Live 語音對練 | ephemeral token 瀏覽器直連、persona system prompt、打斷、逐字稿；>15min 用 compression+resumption。**連線/token/轉寫可由 agent 自驗；語音對練體驗（打斷、自然度）需使用者實際開口驗收** | 退回 ASR+文字LLM+TTS 拼裝（train 抽象層留好） |
-| **S4** | Playwright 爬蟲 + SSRF | Playwright+stealth 渲染對方官網、子頁爬取、SSRF 檢查擋內網（含雲端 metadata）、外網通。**注意：Playwright 不走 undici，v1 的 DNS-pin 不直接適用**——落地手法＝導航前解析並驗證 IP＋`page.route()` 逐請求攔截驗證＋擋未驗 redirect；S4 要驗這套在真實網站不誤殺 | 退回純 grounding + v1 undici 單頁抽取（能力降但可用） |
+| **S4** ✅ **PASS（2026-07-08 關閉）** | Playwright 爬蟲 + SSRF | **實測 CyberPower 台灣站（zh-TW）端到端填出 industry/description/legalName＋5 產品，繁中無幻覺、一筆公司無重複**；SSRF 兩路擋內網+雲端 metadata、browser.close 有界不懸掛、job 到 done。抽取模型分流 3.5-flash（flash-lite 不穩，L15）。殘：quick 單頁產品細節較淺、detailed 子頁可補 | ~~退純 grounding~~（未觸發） |
 | **S5** | OpenAI 生圖實測 | **前置：OpenAI 組織驗證＋查帳號 tier 配額**。`gpt-image-2` 繁中 in-image 用我們自己的銷售字串實測；`1536x864` low/medium **實測延遲與品質**（社群數字離散，要自己量）；moderation 拒絕時的 fallback 行為；（另議）`gpt-image-1-mini` 是否夠格當會中快速選配 | 退 Gemini 備選（§C）或只做背景圖+CSS 疊層 |
 
 > 每個 spike 派 fresh-context agent 實測（read-back / 跑真 API），主線只收結論＋`檔案:行號`（指揮官不下場）。S1、S3 是最高風險（新能力），優先。

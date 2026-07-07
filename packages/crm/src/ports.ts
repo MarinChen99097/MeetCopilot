@@ -197,6 +197,15 @@ export interface EmbeddingSearchHit {
   score: number;
 }
 
+/** upsertFromCrawl 的可選定位參數。 */
+export interface CrawlUpsertOptions {
+  /**
+   * enrich 指名的既有列 id（來自 targetId）。給了就**優先以 id 命中該列**，避免既有列 domain 為 NULL 時
+   * domain-dedupe 找不到而新建重複列（M1 verify 的 duplicate bug）。命中後若該列尚無 domain，會用 domain 回填。
+   */
+  targetId?: string;
+}
+
 /** companies 存取（英雄表；含爬蟲 dedupe 與 upsertFromCrawl 值+provenance 同 tx）。 */
 export interface CompanyRepository {
   create(orgId: string, input: NewCompany): Promise<Company>;
@@ -205,7 +214,8 @@ export interface CompanyRepository {
   list(orgId: string, filter: CompanyFilter, page: Page): Promise<Paged<CompanySummary>>;
   update(orgId: string, id: string, patch: Partial<Company>, by: ByUser): Promise<Company>; // 細填：見 M1_CONTRACT §3
   delete(orgId: string, id: string): Promise<void>;
-  upsertFromCrawl(orgId: string, domain: string, crawled: CrawlPayload): Promise<Company>; // 值+provenance 同一 tx
+  // 值+provenance 同一 tx。opts.targetId＝enrich 指名的既有列（見 CrawlUpsertOptions）。
+  upsertFromCrawl(orgId: string, domain: string, crawled: CrawlPayload, opts?: CrawlUpsertOptions): Promise<Company>;
   counts(orgId: string, id: string): Promise<CompanyCounts>;
 }
 

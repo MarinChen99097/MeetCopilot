@@ -86,6 +86,12 @@
 - 正確做法：(1) `.env` 祕鑰檔**唯一真相＝server 實際讀的那個檔**（本專案＝`apps/server/.env`）；(2) **永不自動 sync/覆寫祕鑰檔**——要 key 就請使用者直接編輯該檔，我只做「遮蔽後的格式/長度/前綴檢查」，絕不寫值；(3) 需要多檔一致時，改讓程式載入單一來源（dotenv 指定路徑），不要用腳本搬祕鑰。
 - 影響檔案：（行為守則）任何 session 處理 .env 一律唯讀檢查；`apps/server/.env` 為 key 的唯一落點。
 
+## L15 flash-lite 對「複雜結構化抽取」不穩，抽取任務要升 3.5-flash（2026-07-08，實踩）
+- 情境：研究引擎爬頁文字→Gemini 結構化抽取成 CRM 欄位（union-superset schema）。
+- 踩了什麼：`gemini-3.1-flash-lite` 三種壞法——(1) 在某欄位吐雜引號（smart quote / 逸出 `\"`）使 JSON 結構**坍縮**，但**仍是合法 JSON** 故不觸發重試，後續欄位靜默掉光（症狀＝只填出 name＋半殘 websiteUrl、還帶尾逗號）；(2) 拿掉該欄位後陷入 **283KB unterminated string 的 runaway**，同樣重試磨數分鐘；(3) 偷懶把描述塞錯欄位。爬文字本身沒問題（抓到 4513 字）、prompt 也沒問題——是**模型能力**。
+- 正確做法：(1) 較複雜的結構化抽取用 `gemini-3.5-flash`（`GEMINI_EXTRACT_MODEL`），一般文字/生成維持 flash-lite——**分模型、按任務難度配**；(2) 結構化輸出一律設 `maxOutputTokens` 上限讓 runaway **fail-fast**（別無上限磨到逾時）；(3) `required` 標關鍵欄位逼模型填，別全 optional（optional 會被偷懶跳過）；(4) parse 前 `stripJsonFences`。
+- 影響檔案：`apps/server/src/{config,gemini,research/extractor}.ts`（已改）、`.env.example`、`API_FINDINGS §E`。與 v1 空白頁 bug（schema 定太鬆）互補：那次是 schema 問題、這次是模型問題，兩者都在「結構化輸出」這條路上。
+
 ## L11【正面校準】指揮官不下場＋sonnet/high 實測有效（2026-07-04）
 - 情境：全程「主對話只交辦＋收結論，實作/修正/簡化/審查全派 sonnet subagent」蓋完整個 app。
 - 踩了什麼：非踩雷，是校準。原 MODEL_DISPATCH 調度表標「未實測、信心中低」。

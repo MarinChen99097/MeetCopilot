@@ -21,6 +21,13 @@ const SERVER_ROOT = path.resolve(CURRENT_DIR, "..");
 export interface GeminiConfig {
   apiKey: string;
   textModel: string;
+  /**
+   * Model for structured crawl extraction (research engine). Defaults to the stronger `gemini-3.5-flash`
+   * (API_FINDINGS §「升級路」) rather than the general `textModel` (flash-lite): the lite model was verified
+   * UNRELIABLE for this task — it either mangled JSON / ran away into a multi-hundred-KB string, or
+   * hallucinated. `gemini-3.5-flash` extracts rich, faithful CRM fields (incl. zh-TW) and stays stable.
+   */
+  extractModel: string;
   embedModel: string;
   liveModel: string;
 }
@@ -92,6 +99,7 @@ export function loadConfig(): AppConfig {
     gemini: {
       apiKey: geminiApiKey,
       textModel: process.env.GEMINI_TEXT_MODEL ?? "gemini-3.1-flash-lite",
+      extractModel: process.env.GEMINI_EXTRACT_MODEL ?? "gemini-3.5-flash",
       embedModel: process.env.GEMINI_EMBED_MODEL ?? "gemini-embedding-001",
       liveModel: process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview",
     },

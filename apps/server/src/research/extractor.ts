@@ -41,8 +41,11 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
       properties: {
         name: { type: S.STRING },
         legalName: { type: S.STRING },
-        domain: { type: S.STRING },
-        websiteUrl: { type: S.STRING },
+        // NOTE: domain/websiteUrl are deliberately NOT requested from the model. The crawler already
+        // knows the canonical URL (raw.finalUrl) and we derive domain from it. Asking a text model to
+        // echo the URL is redundant AND was the exact corruption vector (M1 verify): the model emitted a
+        // stray quote right after ".../" — sometimes a smart quote, sometimes an escaped \" — which
+        // collapsed the whole object into the websiteUrl string and dropped industry/description/etc.
         logoUrl: { type: S.STRING },
         description: { type: S.STRING },
         tagline: { type: S.STRING },
@@ -72,6 +75,10 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         awards: { type: S.ARRAY, items: { type: S.STRING } },
         hiringSignals: { type: S.ARRAY, items: { type: S.STRING } },
       },
+      // Force the model to actually emit the high-value fields it otherwise skips. A company's own
+      // homepage always supports name+description+industry; without `required`, gemini fills the easy
+      // fields (name/tagline) + products[] and drops description/industry (observed on ghost.org & cyberpower.com).
+      required: ["name", "description", "industry"],
     },
     contacts: {
       type: S.ARRAY,
@@ -135,18 +142,39 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
 };
 
 const SYSTEM = [
-  "You extract B2B company intelligence from a prospect company's own website text for a sales CRM.",
-  "Only extract facts explicitly present in the provided page text. Do NOT invent, guess emails, or hallucinate.",
-  "If a field is unknown, omit it. Prefer the company's self-description over marketing fluff.",
-  "Return valid JSON matching the schema exactly.",
+  "You are a B2B sales-intelligence analyst. Read a prospect company's OWN website text and return a structured company profile as JSON for a sales CRM.",
+  "A marketing homepage's hero and feature sections ARE the company's self-description. Synthesize these company fields from that copy even when they are not explicitly labelled:",
+  "- `description`: 2-3 FULL sentences on WHAT the company does and for whom. REQUIRED whenever the page explains the business.",
+  "- `industry`: the product category / vertical as a short label (e.g. '不斷電系統 (UPS) 與電源管理' or 'Publishing & newsletter software'). REQUIRED whenever it can be inferred.",
+  "- `businessModel`: e.g. 'B2B hardware', 'B2B SaaS', 'open-source + hosted'.",
+  "- `tagline`: ONLY the site's short headline slogan (roughly <= 12 words). Do NOT put the full description in `tagline`.",
+  "- `productsOffered`: the product/service names.",
+  "For each product or major offering the site describes, add a `products[]` entry: `name`, a one-sentence `oneLiner`, a short `description`, and up to ~10 `keyFeatures` from the feature sections.",
+  "Also include, only when the text states them: HQ location, founded year, social links, key customers, and named people (as `contacts[]`).",
+  "Write the extracted text values in the SAME language as the page (e.g. Traditional Chinese if the page is in Chinese) — do not translate; quote the company's own wording. Field NAMES stay as in the schema.",
+  "Do NOT fabricate factual identifiers you cannot see in the text — emails, phone numbers, employee counts, revenue, or people. Keep each text value concise and never repeat text. Return ONLY valid JSON matching the schema.",
 ].join(" ");
 
 function buildPrompt(raw: RawCrawl): string {
-  const header = `Source site: ${raw.finalUrl ?? raw.url}\nPage title: ${raw.title ?? ""}\nMeta: ${raw.metaDescription ?? ""}\n`;
+  const header = `Source site: ${raw.finalUrl ?? raw.url}\nPage title: ${raw.title ?? ""}\nMeta description: ${raw.metaDescription ?? ""}\n`;
   const bodies = raw.pages
     .map((p, i) => `\n--- PAGE ${i + 1}: ${p.url} ---\n${p.text}`)
     .join("\n");
-  return (header + bodies).slice(0, MAX_PROMPT_CHARS);
+  const task =
+    "TASK: Read the website text below and produce a CONCISE company-profile JSON. " +
+    "Fill `description` and `industry` from what the page says the company does, even if not explicitly labelled. " +
+    "List each product/service the site describes under `products[]`. Use only facts from the text; keep values short and do not repeat yourself.\n\n";
+  return (task + header + bodies).slice(0, MAX_PROMPT_CHARS);
+}
+
+/**
+ * 清掉 URL 尾端的污染（逗號/分號/引號/括號/空白）。防「websiteUrl 帶尾逗號」這類 join/format 或模型污染
+ * （M1 verify 觀察到 "https://ghost.org/,"）。只動 URL 類欄位，不碰 description 等可含標點的自由文字。
+ */
+function cleanUrl(u: unknown): string | undefined {
+  if (typeof u !== "string") return undefined;
+  const trimmed = u.trim().replace(/[\s,;'"’“”)\]}]+$/u, "");
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /** 由抽出的 company 物件逐欄合成公司級 provenance（爬蟲來源）。 */
@@ -162,12 +190,14 @@ function companyProvenance(company: Partial<Company> | undefined, sourceUrl?: st
   return out;
 }
 
-export function createCrawlExtractor(gemini: GeminiClient): CrawlExtractor {
+export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string): CrawlExtractor {
   async function extract(raw: RawCrawl): Promise<ExtractedShape> {
     if (!gemini.isConfigured()) throw new Error("GEMINI_API_KEY not configured");
+    const prompt = buildPrompt(raw);
     return gemini.generateJson<ExtractedShape>({
+      model: extractModel,
       system: SYSTEM,
-      prompt: buildPrompt(raw),
+      prompt,
       schema: RESPONSE_SCHEMA,
     });
   }
@@ -175,8 +205,11 @@ export function createCrawlExtractor(gemini: GeminiClient): CrawlExtractor {
   return {
     async toCompany(raw: RawCrawl): Promise<CrawlPayload> {
       const ex = await extract(raw);
-      const sourceUrl = raw.finalUrl ?? raw.url;
+      const sourceUrl = cleanUrl(raw.finalUrl ?? raw.url) ?? (raw.finalUrl ?? raw.url);
       const company: Partial<Company> = ex.company ?? {};
+      // 正規化模型可能回傳的 URL 欄位（去尾端逗號等污染）。
+      company.websiteUrl = cleanUrl(company.websiteUrl);
+      company.logoUrl = cleanUrl(company.logoUrl) ?? company.logoUrl;
       // websiteUrl 缺就補上起始站，讓 upsert 有可寫的 domain 依據。
       if (!company.websiteUrl) company.websiteUrl = sourceUrl;
       return {

@@ -20,6 +20,12 @@ export interface GenerateJsonOptions {
   images?: { mimeType: string; data: string }[];
   /** Retry attempts (default 2). */
   attempts?: number;
+  /**
+   * Hard cap on output tokens (default 8192). Bounds cost/latency AND guards against degenerate
+   * runaway generation (a small model can loop into a multi-hundred-KB unterminated string → parse
+   * failure that otherwise grinds a background job for minutes). A rich company profile fits well under this.
+   */
+  maxOutputTokens?: number;
 }
 
 /** 一則 grounding 引用（Google Search grounding 的來源）。 */
@@ -52,6 +58,19 @@ export interface GeminiClient {
 /** @google/genai 的 groundingMetadata 子形狀（跨版本寬鬆取用，避免型別耦合）。 */
 interface GroundingChunkLoose {
   web?: { uri?: string; title?: string };
+}
+
+/**
+ * Strip a leading/trailing markdown code fence (```json … ```), which some models emit even under
+ * responseMimeType="application/json". Returns the inner JSON text; leaves already-clean text untouched.
+ */
+function stripJsonFences(text: string): string {
+  const t = text.trim();
+  if (!t.startsWith("```")) return t;
+  return t
+    .replace(/^```[a-zA-Z0-9]*\s*/, "") // opening fence + optional lang tag
+    .replace(/\s*```$/, "") // closing fence
+    .trim();
 }
 
 async function withRetry<T>(fn: () => Promise<T>, attempts: number, label: string): Promise<T> {
@@ -106,15 +125,17 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
               systemInstruction: opts.system,
               responseMimeType: "application/json",
               responseSchema: opts.schema as never,
+              maxOutputTokens: opts.maxOutputTokens ?? 8192,
             },
           });
           const text = response.text;
           if (!text) throw new Error("empty Gemini response");
+          const cleaned = stripJsonFences(text);
           try {
-            return JSON.parse(text) as T;
+            return JSON.parse(cleaned) as T;
           } catch (err) {
             throw new Error(
-              `Gemini JSON parse failed: ${(err as Error).message}; head: ${text.slice(0, 300)}`,
+              `Gemini JSON parse failed: ${(err as Error).message}; head: ${cleaned.slice(0, 300)}`,
             );
           }
         },
