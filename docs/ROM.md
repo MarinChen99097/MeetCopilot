@@ -36,6 +36,14 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 00:20 | .env 祕鑰唯一真相＝apps/server/.env（不再自動同步）
+- **誰決定**: 使用者（「以 server 為主」「原本最外層的 .env 我刪掉了」）＋Fable（守則）
+- **決策**: `apps/server/.env` 是所有 API key 的唯一落點；根 `.env` 已由使用者刪除。**永久停用**先前「root→server 自動同步」腳本（它造成使用者新填的 OpenAI key 被舊值覆蓋、因 gitignored 無法復原，見 L14）。往後 Claude 對 .env 一律**唯讀、遮蔽檢查**，需要 key 請使用者直接編該檔。
+- **脈絡與理由**: server config 讀 apps/server/.env；同步腳本是我救急寫的，反而毀了使用者資料。
+- **考慮過的替代**: 讓 server 也載入 root .env（否——使用者選擇單一 server 檔、刪 root，更乾淨）。
+- **現況（遮蔽驗證）**: GEMINI_API_KEY（AIza…，107 字元）、OPENAI_API_KEY（sk-proj-…，218 字元）格式皆正確；JWT_SECRET 為 dev 值（M5 上線需換真祕鑰）。
+- **影響**: LESSONS L14；S4 實跑爬蟲進行中（用此 .env）。
+
 ### 2026-07-07 23:30 | M1 驗收裁決（6/7 PASS，修 crawler 懸掛）＋接縫決策採納
 - **誰決定**: Fable（依 B5 fresh-context 驗收證據裁決）
 - **決策**:

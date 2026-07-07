@@ -80,6 +80,12 @@
 - 正確做法：任何外部子進程（Playwright/瀏覽器/未來的 ffmpeg 等）的關閉都要 **race 一個 deadline＋強殺 fallback**（`Promise.race([close(), timeout]); process()?.kill('SIGKILL')`）；長任務 job 要有**整體 deadline**，且失敗一律落 `status='failed'`（絕不留 `running`）。這是「外部進程不可信、一定要能被我方逾時掐斷」的通則。
 - 影響檔案：`apps/server/src/research/crawler.ts`（已修）、`DIAGNOSIS.md`。
 
+## L14 絕不自動覆寫使用者的 .env 祕鑰檔（2026-07-07，實踩・毀資料）
+- 情境：使用者的 GEMINI/OPENAI key 一度填在根 `.env`，但 server 讀 `apps/server/.env`。我寫了「把 root 非空值同步到 server」的腳本救急。
+- 踩了什麼：使用者之後**直接改 `apps/server/.env`** 填入新的 OpenAI key（255 字元），但根 `.env` 沒動（仍是舊的 54 字元）。我再跑一次同步腳本→**用舊的 root 值蓋掉使用者剛填的新值**，而 `.env` gitignored 無版控→**新 key 永久遺失**，只能請使用者重填。
+- 正確做法：(1) `.env` 祕鑰檔**唯一真相＝server 實際讀的那個檔**（本專案＝`apps/server/.env`）；(2) **永不自動 sync/覆寫祕鑰檔**——要 key 就請使用者直接編輯該檔，我只做「遮蔽後的格式/長度/前綴檢查」，絕不寫值；(3) 需要多檔一致時，改讓程式載入單一來源（dotenv 指定路徑），不要用腳本搬祕鑰。
+- 影響檔案：（行為守則）任何 session 處理 .env 一律唯讀檢查；`apps/server/.env` 為 key 的唯一落點。
+
 ## L11【正面校準】指揮官不下場＋sonnet/high 實測有效（2026-07-04）
 - 情境：全程「主對話只交辦＋收結論，實作/修正/簡化/審查全派 sonnet subagent」蓋完整個 app。
 - 踩了什麼：非踩雷，是校準。原 MODEL_DISPATCH 調度表標「未實測、信心中低」。
