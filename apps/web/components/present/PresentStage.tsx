@@ -28,6 +28,8 @@ export interface PresentStageProps {
 }
 
 const RECONNECT_MS = 2000;
+const RECONNECT_MAX_MS = 15000;
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   const [slides, setSlides] = useState<SlideSpec[]>([]);
@@ -135,42 +137,76 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
     }
   }, []);
 
-  // ── WS 連線（帶 session 憑證才開；斷線自動重連）────────────
+  // ── WS 連線（帶 session 憑證才開；真・斷線自動重連）────────────
+  // 用 lib/ws 的 lifecycle 回呼反映真實 socket 狀態：onOpen→綠點+重送 hello+重抓 deck（補齊斷線期間 append 的頁，
+  // 避免翻過舊尾端而空白）；onClose→退回 reconnecting 圓點並以退避重連（有上限，避免無限迴圈）。
   useEffect(() => {
     if (!meetingId || !token) {
       setLink("off");
       return;
     }
     closed.current = false;
+    let attempts = 0;
+
+    // (重)連上就重抓整份 deck，把斷線期間漏收的 deck_update（尾端 append）補齊；committedIndex 只增不減。
+    const refetchDeck = () => {
+      if (!deckId) return;
+      getDeck(deckId)
+        .then((view) => {
+          if (closed.current) return;
+          setSlides(view.slides);
+          if (view.deck.committedIndex > committed.current) committed.current = view.deck.committedIndex;
+        })
+        .catch(() => {});
+    };
+
+    const scheduleReconnect = () => {
+      if (closed.current || retry.current !== null) return;
+      if (attempts >= MAX_RECONNECT_ATTEMPTS) return; // 放棄自動重連；圓點停在 reconnecting，使用者可刷新
+      const backoff = Math.min(RECONNECT_MAX_MS, RECONNECT_MS * 2 ** attempts);
+      attempts += 1;
+      retry.current = window.setTimeout(() => {
+        retry.current = null;
+        open();
+      }, backoff);
+    };
 
     const open = () => {
       if (closed.current) return;
-      setLink((s) => (s === "open" ? s : s === "off" ? "connecting" : "reconnecting"));
-      const c = connect(API_BASE, token, meetingId, "present");
+      setLink((s) => (s === "off" ? "connecting" : "reconnecting"));
+      const c = connect(API_BASE, token, meetingId, "present", {
+        onOpen: () => {
+          if (closed.current) return;
+          attempts = 0;
+          setLink("open");
+          c.send({ type: "hello", role: "present" });
+          refetchDeck();
+        },
+        onClose: () => {
+          if (closed.current || conn.current !== c) return;
+          conn.current = null;
+          setLink("reconnecting");
+          scheduleReconnect();
+        },
+        // onError 之後瀏覽器必接著發 close → 交給 onClose 統一處理重連。
+        onError: () => {},
+      });
       conn.current = c;
       c.on(onMessage);
-      // WsConnection 不外露 socket 狀態；用一次 hello 觸發 server 回 session_state，並以計時器樂觀標記 open。
-      c.send({ type: "hello", role: "present" });
-      window.setTimeout(() => {
-        if (!closed.current && conn.current === c) setLink("open");
-      }, 300);
     };
 
     open();
 
-    // 保底重連：以固定間隔確認連線存在（WsConnection 未暴露 onclose，故用輕量守衛）。
-    retry.current = window.setInterval(() => {
-      if (closed.current) return;
-      // 若 socket 已被 GC/關閉，send 會是 no-op；此處僅維持 UI 提示，實際重連交由使用者刷新或下一次 hello。
-    }, RECONNECT_MS);
-
     return () => {
       closed.current = true;
-      if (retry.current !== null) window.clearInterval(retry.current);
+      if (retry.current !== null) {
+        window.clearTimeout(retry.current);
+        retry.current = null;
+      }
       conn.current?.close();
       conn.current = null;
     };
-  }, [meetingId, token, onMessage]);
+  }, [meetingId, token, deckId, onMessage]);
 
   // ── render：極簡舞台（僅投影片 + 頁碼 + 連線圓點）──────────
   if (!loaded) {

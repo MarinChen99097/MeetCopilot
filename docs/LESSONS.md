@@ -92,6 +92,12 @@
 - 正確做法：(1) 較複雜的結構化抽取用 `gemini-3.5-flash`（`GEMINI_EXTRACT_MODEL`），一般文字/生成維持 flash-lite——**分模型、按任務難度配**；(2) 結構化輸出一律設 `maxOutputTokens` 上限讓 runaway **fail-fast**（別無上限磨到逾時）；(3) `required` 標關鍵欄位逼模型填，別全 optional（optional 會被偷懶跳過）；(4) parse 前 `stripJsonFences`。
 - 影響檔案：`apps/server/src/{config,gemini,research/extractor}.ts`（已改）、`.env.example`、`API_FINDINGS §E`。與 v1 空白頁 bug（schema 定太鬆）互補：那次是 schema 問題、這次是模型問題，兩者都在「結構化輸出」這條路上。
 
+## L16 安全修正必須對「已證明可用的路徑」做回歸驗證（2026-07-08，實踩）
+- 情境：/code-review 抓到 Playwright 爬蟲 SSRF DNS-rebinding，修法用 `--host-resolver-rules` pin IP＋`MAP * ~NOTFOUND` fail-close 其餘 host。
+- 踩了什麼：fail-close 看似最安全，但**弄壞了近乎通用的 www↔apex 跨 host 重導**——`www.ghost.org` 302 到 apex `ghost.org`（不同 host），fail-close 讓 Chromium 解不到 apex→整個導航死。CyberPower 剛好單 host 沒中招，所以若只測「原本那個成功案例」會漏掉這個回歸。
+- 正確做法：(1) **安全修正後，一定要對「先前證明可用的功能」重跑**，而且**多測一個不同形狀的案例**（單 host vs www→apex），否則會把「安全修正」偷渡成「功能回歸」；(2) SSRF 於瀏覽器爬蟲的正解＝**只 pin 使用者提交的目標 host**（關主要 TOCTOU），其餘公網子資源 host 放行但由 per-request 守衛擋私網——不要 fail-close 全部 host（過度限制、破壞跨 host 重導與 CDN 子資源）。
+- 影響檔案：`apps/server/src/research/crawler.ts`（改回 pin-only）、`crawler-ssrf.test.ts`。與指揮官守則呼應：宣稱修好前派 fresh agent 對「會被弄壞的既有功能」重驗，不只驗「修的那個點」。
+
 ## L11【正面校準】指揮官不下場＋sonnet/high 實測有效（2026-07-04）
 - 情境：全程「主對話只交辦＋收結論，實作/修正/簡化/審查全派 sonnet subagent」蓋完整個 app。
 - 踩了什麼：非踩雷，是校準。原 MODEL_DISPATCH 調度表標「未實測、信心中低」。

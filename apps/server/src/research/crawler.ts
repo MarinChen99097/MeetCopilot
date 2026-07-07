@@ -3,16 +3,34 @@
  *
  * SSRF（S4 硬核）：undici 的 DNS-pin **對 Playwright 的網路堆疊不適用**（它走 Chromium 自己的 stack）。
  * 落地手法（借 docs/research/EZPAGESITE_CRAWLER.md「v2 必修的缺口」）：
- *  1. **導航前**：解析目標 host 的所有 IP，任一私網/保留 → 拒絕（resolveAndValidate，與 undici 路徑同一套判準）。
- *  2. **page.route('**\/*')** 攔截**每一個**子請求（含 redirect 觸發的新請求）：非 http/https 或 host 解析到私網 → route.abort()；
- *     否則 route.continue()。每個 host 的判定於本次 crawl 內快取（同時也對 DNS rebinding 起「決定一次就釘住」的緩解）。
- *  ⚠️ 殘留 TOCTOU：檢查用的 DNS 解析與 Chromium 實際連線的解析是兩次獨立解析，無法在 Playwright 內 pin IP。
- *     這是 S4 已知限制——Verify 應以 rebinding 測試探測；正式緩解需自帶 proxy/transport（M1 後）。
+ *  1. **導航前**：解析目標 host 的所有 IP，任一私網/保留 → 拒絕（resolveAndValidate，與 undici 路徑同一套判準），
+ *     並取回「已驗證的公網 IP」。
+ *  2. **把已驗證 IP pin 進 Chromium**：以 `--host-resolver-rules=MAP <host> <ip>` 啟動（**只 pin 目標 host**）——
+ *     Chromium 對起始 host 只會連到我們驗證過的那個 IP（關掉 DNS rebinding／TOCTOU：不再有第二次獨立解析）。
+ *     這也涵蓋 detailed 的同源子頁（同 host → 同 pin）。其餘 host 不 fail-close（見 3）。
+ *  3. **page.route('**\/*')** 仍逐一攔截每個子請求（含 redirect）做 SSRF 判定——其餘 host 的私網防線靠這層。
+ *  ⚠️ 取捨（2026-07-07 修正）：曾加 `MAP * ~NOTFOUND` fail-close 其餘 host，但這會讓常見的 www↔apex 跨 host 重導
+ *     （如 www.ghost.org→ghost.org）整個導航失敗（ERR_NAME_NOT_RESOLVED）——實測 ghost.org 被誤擋。改為只 pin
+ *     目標 host、其餘 host 交給步驟 3 的 page.route 逐請求 SSRF 閘（resolveAndValidate 擋私網）：使用者提供之目標
+ *     URL 的 TOCTOU 仍關閉（已 pin），而跨 host 頁面渲染／重導不再被誤擋。子資源 host 屬 route-guard 判定期防線。
  *
  * quick=單頁 text+meta；detailed=+ 子頁連結評分（最多 5，同源）+ 選配截圖。robust 逾時 + body 文字上限。
  */
 import { chromium, type Browser, type BrowserServer, type Route, type Request as PwRequest } from "playwright";
 import { isPrivateIp, resolveAndValidate } from "../import/extract.js";
+
+/**
+ * 建 Chromium `--host-resolver-rules` 值：**只把已驗證的目標 host pin 到它的公網 IP**（不 fail-close 其餘 host）。
+ * 這是 F4（DNS-rebinding TOCTOU）對「使用者提供之目標 URL」的核心：Chromium 不再對目標 host 做第二次獨立解析，
+ * 只會連到我們驗證過的 IP。其餘 host（跨站子資源／www↔apex 重導）交給 context.route 逐請求 SSRF 閘
+ * （resolveAndValidate 擋私網）——先前的 `,MAP * ~NOTFOUND` fail-closed 會讓常見的 www→apex 跨 host 重導
+ * （如 www.ghost.org→ghost.org）整個導航失敗（ERR_NAME_NOT_RESOLVED），故移除。
+ * IPv6 需加方括號（Chromium rule 的 replacement 以 host[:port] 解析）。匯出供單元測試斷言。
+ */
+export function hostResolverRules(host: string, ip: string, family: 4 | 6): string {
+  const target = family === 6 ? `[${ip}]` : ip;
+  return `MAP ${host} ${target}`;
+}
 
 const NAV_TIMEOUT_MS = 20_000; // 單頁導航預算
 const SETTLE_TIMEOUT_MS = 4_000; // networkidle 等待上限（超時不視為失敗）
@@ -169,7 +187,8 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
   if (start.protocol !== "http:" && start.protocol !== "https:") {
     throw new Error("只允許 http/https 網址");
   }
-  await resolveAndValidate(start.hostname); // 私網 → throw
+  // 私網 → throw；回傳已驗證的公網 IP，等下 pin 進 Chromium（堵死 rebinding：不再有第二次獨立解析）。
+  const validated = await resolveAndValidate(start.hostname);
 
   const deadline = Date.now() + deadlineMs;
   let server: BrowserServer | null = null;
@@ -177,7 +196,11 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
   const routeCache = new Map<string, Promise<boolean>>();
   try {
     // launchServer + connect：拿到 BrowserServer，teardown 才能 server.kill() 真正強殺（Browser 無 public process()）。
-    server = await chromium.launchServer({ headless: true, args: ["--no-sandbox"] });
+    // --host-resolver-rules：Chromium 只會把起始 host 連到我們驗證過的 IP（F4）；其餘 host 由 context.route 逐請求把關。
+    server = await chromium.launchServer({
+      headless: true,
+      args: ["--no-sandbox", `--host-resolver-rules=${hostResolverRules(start.hostname, validated.ip, validated.family)}`],
+    });
     browser = await chromium.connect(server.wsEndpoint());
     const context = await browser.newContext({
       userAgent: "MeetCopilot/0.1 (research-crawler)",

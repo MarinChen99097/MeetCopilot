@@ -58,6 +58,10 @@ export function TrainCall({
   const keySeq = useRef(0);
   const captionsEnd = useRef<HTMLDivElement | null>(null);
   const endedRef = useRef(false);
+  // Wall-clock anchors for the timer (F6): elapsed is derived from Date.now() - startedAt, never an
+  // incrementing counter, so a state-keyed interval clearing/rearming can't drop ticks. Frozen at endedAt.
+  const startedAtRef = useRef<number>(Date.now());
+  const endedAtRef = useRef<number | null>(null);
 
   // Boot the live client once. Teardown on unmount is guaranteed (bounded socket, L13).
   useEffect(() => {
@@ -80,12 +84,24 @@ export function TrainCall({
     return () => client.stop("ended");
   }, [session]);
 
-  // Wall-clock timer; freezes once the call is over.
+  // Freeze the clock once the call ends (record the end instant exactly once).
   useEffect(() => {
-    if (state === "ended" || state === "error") return;
-    const id = window.setInterval(() => setElapsed((s) => s + 1), 1000);
-    return () => window.clearInterval(id);
+    if ((state === "ended" || state === "error") && endedAtRef.current === null) {
+      endedAtRef.current = Date.now();
+      setElapsed(Math.floor((endedAtRef.current - startedAtRef.current) / 1000));
+    }
   }, [state]);
+
+  // Single wall-clock timer, independent of `state` (F6): recomputes elapsed from the start anchor each
+  // tick, so oscillating states (listening↔user-speaking) can never drop a pending tick. Stops growing
+  // once endedAtRef is set.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const end = endedAtRef.current ?? Date.now();
+      setElapsed(Math.floor((end - startedAtRef.current) / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Auto-scroll captions to the newest line.
   useEffect(() => {

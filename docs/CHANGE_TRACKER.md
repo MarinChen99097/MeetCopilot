@@ -34,6 +34,20 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 06:00 | /code-review 修 7 個確認 findings（含 1 critical 跨租戶）
+- **工作區**: apps/server＋apps/web
+- **類型**: fix
+- **檔案**: `apps/server/src/realtime/hub.ts`＋`realtime/hub-endmeeting-authz.test.ts`(新)、`research/crawler.ts`＋`research/crawler-ssrf.test.ts`(新)、`train/routes.ts`、`index.ts`；`apps/web/lib/train/liveClient.ts`、`components/present/PresentStage.tsx`、`components/train/TrainCall.tsx`、`components/studio/DeckWizard.tsx`
+- **改了什麼**:
+  - **F1 critical**：hub.endMeeting 破壞動作（disposeSession+關 socket）改成**擁有權 `ok` 通過才執行**（否則 org A 知道 meetingId 就能掐斷 org B 會議）。加跨租戶回歸測試（無防護則失敗、有則過）。
+  - F2：liveClient 重連失敗時重設 `reconnecting`＋指數退避重排（原本一次失敗就卡死 60 分）。
+  - F3：PresentStage 接真 ws open/close callback＋重連時 re-fetch deck＋狀態燈反映真連線（原註解騙人、斷線漏 append）。
+  - **F4 SSRF＋回歸修正**：Chromium `--host-resolver-rules=MAP host ip` pin 目標 host（關 DNS-rebinding TOCTOU）；**曾加 `MAP * ~NOTFOUND` fail-close 但實測弄壞 www→apex 跨 host 重導（ghost.org 掛）→ 改回只 pin 目標**，其餘 host 由 context.route 逐請求擋私網。CyberPower＋Ghost 重跑皆 done、SSRF 仍擋內網。
+  - F5：train routes 的 sendTrainError 不再 re-throw（Express4 async 拋錯會 hang）→ 未知錯一律回 500 {error}。
+  - F6：TrainCall 計時改 Date.now()-startedAt（原 state-keyed interval 漏 tick）。
+  - F7：/decks/generate JSON 上限 25mb（其餘維持 2mb）＋wizard 圖片 canvas 縮圖(≤1280px)＋參考圖上限 4（原真實照片會 413）。
+- **為什麼**: 多鏡頭對抗式 /code-review（12 raw→對抗 verify→7 confirmed）。typecheck 綠、server vitest 15 過（含 F1+F4 新測試）、crm 31、crawler-ssrf 5/5。SSRF fail-closed 回歸經真站重驗抓到並修正（見 L16）。
+
 ### 2026-07-08 03:30 | M2 DynamicSlide＋M3 會中副駕＋M4 語音模擬（三線並行，11 agent；指揮官代記）
 - **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
 - **類型**: feat

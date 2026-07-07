@@ -69,6 +69,9 @@ const PLAYBACK_SAMPLE_RATE = 24000;
 const DEFAULT_MAX_DURATION_MS = 60 * 60 * 1000;
 const SETUP_TIMEOUT_MS = 15000;
 const MAX_RECONNECTS = 5;
+/** Backoff between reconnect attempts (bounded; F2 re-arms the retry policy on every failed attempt). */
+const RECONNECT_BASE_BACKOFF_MS = 500;
+const RECONNECT_MAX_BACKOFF_MS = 8000;
 const USER_SPEAKING_HOLD_MS = 450;
 const MIC_LEVEL_THRESHOLD = 0.045;
 
@@ -161,6 +164,7 @@ export class TrainLiveClient {
   private userSpeakingTimer: ReturnType<typeof setTimeout> | null = null;
   private deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: TrainLiveOptions, callbacks: TrainLiveCallbacks) {
     this.opts = { ...options, maxDurationMs: options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS };
@@ -301,9 +305,12 @@ export class TrainLiveClient {
     const { GoogleGenAI, Modality } = mod;
     const ai = new GoogleGenAI({ apiKey: this.opts.ephemeralToken, httpOptions: { apiVersion: "v1alpha" } });
 
-    // Guard against a hung handshake (L13).
+    // Guard against a hung handshake (L13). A hung *reconnect* handshake retries (bounded); a hung *initial*
+    // handshake fails (nothing to resume — surfacing an error is the right UX).
     this.setupTimer = setTimeout(() => {
-      if (!this.session && !this.disposed) this.fail("連線逾時，請重試。");
+      if (this.session || this.disposed) return;
+      if (resumeHandle) this.onSocketDown();
+      else this.fail("連線逾時，請重試。");
     }, SETUP_TIMEOUT_MS);
 
     try {
@@ -322,6 +329,7 @@ export class TrainLiveClient {
             if (this.setupTimer) clearTimeout(this.setupTimer);
             this.setupTimer = null;
             this.reconnecting = false;
+            this.reconnects = 0; // recovered → refresh the retry budget for any future independent drop
             if (resumeHandle) this.cb.onResumed();
             this.setState("listening");
           },
@@ -331,6 +339,8 @@ export class TrainLiveClient {
         },
       });
     } catch {
+      // connect rejected before onopen (transient drop / failed reopen at goAway) — onSocketDown clears the
+      // in-flight `reconnecting` flag so the retry policy re-arms instead of wedging (F2).
       this.onSocketDown();
     }
   }
@@ -375,27 +385,49 @@ export class TrainLiveClient {
     const handle = m.sessionResumptionUpdate?.newHandle;
     if (handle && m.sessionResumptionUpdate?.resumable !== false) this.resumeHandle = handle;
     // goAway: server is about to drop us (≈15-min boundary). Pre-emptively resume for seamlessness.
-    if (m.goAway) this.reconnect();
+    if (m.goAway) this.scheduleReconnect();
   }
 
+  /** A connect attempt / live session ended without success. Clear in-flight state, then schedule a retry. */
   private onSocketDown(): void {
     if (this.disposed) return;
     if (this.setupTimer) {
       clearTimeout(this.setupTimer);
       this.setupTimer = null;
     }
-    this.reconnect();
+    this.session = null;
+    // F2: this attempt is over — ALWAYS clear `reconnecting` so scheduleReconnect isn't blocked by a stale
+    // in-flight flag (the wedge). The retry policy (MAX_RECONNECTS + backoff) then re-arms cleanly.
+    this.reconnecting = false;
+    this.scheduleReconnect();
   }
 
-  /** Seamless resumption: reuse the audio graph, reopen the session with the stored handle. */
-  private reconnect(): void {
-    if (this.disposed || this.reconnecting) return;
+  /** Bounded, backed-off retry scheduler (dedup via reconnecting + reconnectTimer). */
+  private scheduleReconnect(): void {
+    if (this.disposed || this.reconnecting || this.reconnectTimer) return;
     if (!this.resumeHandle || this.reconnects >= MAX_RECONNECTS) {
+      // No resume handle, or the retry budget is spent → give up (message if it never really connected).
       if (Date.now() - this.startedAt < 3000) this.fail("語音連線失敗，請稍後再試。");
       else this.stop("ended");
       return;
     }
+    this.setState("reconnecting");
+    const backoff = Math.min(RECONNECT_MAX_BACKOFF_MS, RECONNECT_BASE_BACKOFF_MS * 2 ** this.reconnects);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.doReconnect();
+    }, backoff);
+  }
+
+  /** Seamless resumption: reuse the audio graph, reopen the session with the stored handle. */
+  private doReconnect(): void {
+    if (this.disposed || this.reconnecting) return;
     const handle = this.resumeHandle;
+    if (!handle || this.reconnects >= MAX_RECONNECTS) {
+      if (Date.now() - this.startedAt < 3000) this.fail("語音連線失敗，請稍後再試。");
+      else this.stop("ended");
+      return;
+    }
     this.reconnecting = true;
     this.reconnects += 1;
     this.session = null;
@@ -436,12 +468,13 @@ export class TrainLiveClient {
   }
 
   private clearTimers(): void {
-    for (const t of [this.userSpeakingTimer, this.deadlineTimer, this.setupTimer]) {
+    for (const t of [this.userSpeakingTimer, this.deadlineTimer, this.setupTimer, this.reconnectTimer]) {
       if (t) clearTimeout(t);
     }
     this.userSpeakingTimer = null;
     this.deadlineTimer = null;
     this.setupTimer = null;
+    this.reconnectTimer = null;
   }
 
   private micErrorMessage(err: unknown): string {

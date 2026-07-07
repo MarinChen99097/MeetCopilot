@@ -36,6 +36,17 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 06:05 | /code-review 收尾：7 confirmed 全修＋SSRF 回歸攔截
+- **誰決定**: Fable（依審查證據＋回歸驗證裁決）
+- **決策**:
+  1. **多鏡頭對抗式 /code-review**（使用者指定；CodeRabbit CLI 未裝故自建，6 鏡頭 find→對抗 verify-to-refute）：12 raw findings，**5 個假陽性被 refuter 駁回、7 confirmed**（1 critical/5 warning/1 info）全修。
+  2. **F1 critical（跨租戶掐會議）務必修**：hub.endMeeting 破壞動作在擁有權檢查前無條件執行——多租戶隔離真漏洞，上線前攔到；加回歸測試。
+  3. **F4 SSRF 修法二次校準（關鍵）**：fail-closed `MAP * ~NOTFOUND` 雖最安全但實測**弄壞 www→apex 跨 host 重導**（ghost.org 掛，CyberPower 剛好沒中）→ 改回**只 pin 目標 host**、其餘公網 host 由 per-request 守衛擋私網。CyberPower＋Ghost 重跑皆填出豐富欄位、SSRF 仍擋內網。教訓 L16：安全修正必對既有可用功能＋不同形狀案例回歸。
+  4. carry-forward 一併處理：F7 wizard 圖片 413（server 25mb＋前端縮圖）、F2/F3 重連（train live＋/present）、F5 train 錯誤 hang、F6 計時。
+- **未修（審查未列為 confirmed，屬既知 carry-forward）**: persona-lock 是否真鎖進 token（需真 /train browser 連線確認，第一次真跑驗）；npm audit 傳遞依賴漏洞（待 M5 triage）；孤兒 ws.ts（可刪，非 bug）。
+- **考慮過的替代**: 保留 fail-closed（否——破壞多數真站）；不修 F1 因 meetingId 難猜（否——多租戶破壞動作必須守擁有權，不靠 id 難猜當防線）。
+- **影響**: apps/server hub/crawler/train/index＋2 新測試、apps/web liveClient/PresentStage/TrainCall/DeckWizard；LESSONS L16；commit。**M0–M4 全部完成且經對抗審查修正**。下一步＝M5（整合/隱私/成本/上線 GCP）＋使用者真跑驗語音/persona-lock。
+
 ### 2026-07-08 03:35 | M2/M3/M4 三線全 PASS＋S3 spike 過＋carry-forward 風險
 - **誰決定**: Fable（依三線 fresh-context 驗收裁決）
 - **決策**:

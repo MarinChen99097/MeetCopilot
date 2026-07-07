@@ -10,6 +10,54 @@ import {
 import { ApiError, extractPdf, extractUrl, generateDeck } from "@/lib/api";
 import { Spinner } from "@/components/ui/Spinner";
 
+// F7: real photos are 1.5–5MB (+33% as base64) and would blow past the request-body cap → 413. Downscale
+// on the client (canvas → JPEG) and cap the number of style refs, borrowing v1's ImageUpload approach.
+const MAX_REF_IMAGES = 4;
+const IMAGE_MAX_EDGE = 1280; // 長邊上限（px）
+const IMAGE_QUALITY = 0.82; // JPEG 品質
+
+/** 讀檔 → dataUri。 */
+function readAsDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("read failed"));
+    r.readAsDataURL(file);
+  });
+}
+
+/** dataUri → HTMLImageElement（讀原始尺寸並畫進 canvas）。 */
+function loadImage(dataUri: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("image decode failed"));
+    img.src = dataUri;
+  });
+}
+
+/** 讀檔 → 依長邊縮放 → 重新編碼成 JPEG dataUri。解碼失敗則退回原圖（後端仍有大小上限保底）。 */
+async function downscaleImage(file: File, maxEdge = IMAGE_MAX_EDGE, quality = IMAGE_QUALITY): Promise<string> {
+  const original = await readAsDataUri(file);
+  try {
+    const img = await loadImage(original);
+    const { width, height } = img;
+    if (!width || !height) return original;
+    const scale = Math.min(1, maxEdge / Math.max(width, height));
+    const targetW = Math.max(1, Math.round(width * scale));
+    const targetH = Math.max(1, Math.round(height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return original;
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+    return canvas.toDataURL("image/jpeg", quality);
+  } catch {
+    return original;
+  }
+}
+
 /**
  * DeckWizard — 三段 wizard 生成 deck（PROMPT 2）。
  * Step 1 方向與素材（含 從網址/PDF 匯入 → 灌 sourceText）；Step 2 受眾與風格（logo/參考圖/companyId）；Step 3 檢視生成。
@@ -74,15 +122,6 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
     setSourceText((prev) => (prev ? `${prev}\n\n${importPreview}` : importPreview));
     setImportPreview(null);
     setImportUrl("");
-  }
-
-  async function readAsDataUri(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(String(r.result));
-      r.onerror = () => reject(new Error("read failed"));
-      r.readAsDataURL(file);
-    });
   }
 
   async function doGenerate() {
@@ -250,27 +289,32 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
                   hidden
                   onChange={async (e) => {
                     const f = e.target.files?.[0];
-                    if (f) setLogoDataUri(await readAsDataUri(f));
                     e.target.value = "";
+                    if (f) setLogoDataUri(await downscaleImage(f));
                   }}
                 />
               </label>
-              <label className="mc-btn mc-btn--ghost mc-btn--sm mc-filebtn">
+              <label className={`mc-btn mc-btn--ghost mc-btn--sm mc-filebtn${refImageDataUris.length >= MAX_REF_IMAGES ? " is-disabled" : ""}`}>
                 加入參考圖
                 <input
                   type="file"
                   accept="image/*"
                   multiple
                   hidden
+                  disabled={refImageDataUris.length >= MAX_REF_IMAGES}
                   onChange={async (e) => {
-                    const files = Array.from(e.target.files ?? []);
-                    const uris = await Promise.all(files.map(readAsDataUri));
-                    setRefImageDataUris((prev) => [...prev, ...uris]);
+                    const picked = Array.from(e.target.files ?? []);
                     e.target.value = "";
+                    const room = MAX_REF_IMAGES - refImageDataUris.length;
+                    if (room <= 0) return;
+                    const uris = await Promise.all(picked.slice(0, room).map((f) => downscaleImage(f)));
+                    setRefImageDataUris((prev) => [...prev, ...uris].slice(0, MAX_REF_IMAGES));
                   }}
                 />
               </label>
-              {refImageDataUris.length ? <span className="mc-wizard__count">參考圖 {refImageDataUris.length} 張</span> : null}
+              {refImageDataUris.length ? (
+                <span className="mc-wizard__count">參考圖 {refImageDataUris.length} / {MAX_REF_IMAGES} 張</span>
+              ) : null}
             </div>
           </div>
         ) : null}

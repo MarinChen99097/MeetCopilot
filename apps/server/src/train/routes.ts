@@ -27,15 +27,21 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
 }
 
-/** TrainError → 狀態碼；其餘錯誤交給 index.ts 錯誤中介層（{error}）。 */
+/**
+ * TrainError → 狀態碼。未知錯誤（如 SQLITE_BUSY 等 DB 例外）**一律回 500 {error}**，不再 re-throw：
+ * 這些 handler 是裸 async function，Express 4 不會捕捉 handler 內拋出/rejected 的 promise——一 re-throw
+ * 就變 unhandledRejection，請求會一路掛到 socket timeout（F5）。永遠送出回應才不會 hang。
+ */
 function sendTrainError(res: Response, err: unknown): void {
+  if (res.headersSent) return;
   if (err instanceof TrainError) {
     const status =
       err.kind === "not_found" ? 404 : err.kind === "not_configured" ? 502 : 400;
     res.status(status).json({ error: err.message });
     return;
   }
-  throw err;
+  console.error("[train] unexpected error:", err);
+  res.status(500).json({ error: "internal error" });
 }
 
 /** 供測試/替換注入（預設由 config 現場組裝 minter/scorer/service）。 */

@@ -154,6 +154,10 @@ export class RealtimeHub implements BroadcastSink {
   /** End a meeting: mark completed, tear down the runtime, close its sockets. */
   async endMeeting(orgId: string, meetingId: string): Promise<boolean> {
     const ok = await this.store.end(orgId, meetingId);
+    // Ownership is proven ONLY by the org-scoped store.end. The rooms/sessions maps are keyed by meetingId
+    // alone, so tearing them down unconditionally would let an org-A caller kill org-B's live session by
+    // guessing its meetingId (cross-tenant DoS). Only tear down when this org actually owned & ended it.
+    if (!ok) return false;
     this.disposeSession(meetingId);
     const set = this.rooms.get(meetingId);
     if (set) {

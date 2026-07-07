@@ -48,6 +48,11 @@ async function main(): Promise<void> {
     next();
   });
 
+  // Multimodal deck generation posts a logo + a few style-ref photos as base64 JSON (a real photo is
+  // 1.5–5MB, +33% as base64), which blows past the default 2mb cap → 413. Give ONLY this route a higher
+  // cap; body-parser marks req._body after parsing, so the global 2mb parser below skips the already-parsed
+  // body. Every other route stays at 2mb. (Client also downscales before upload — see DeckWizard.)
+  app.use("/api/decks/generate", express.json({ limit: "25mb" }));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/api/health", (_req, res) => {
