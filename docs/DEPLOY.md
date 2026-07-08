@@ -18,8 +18,9 @@ gcloud run deploy meetcopilot-server --image=asia-east1-docker.pkg.dev/ezpagesit
   --region=asia-east1 --execution-environment=gen2 --min-instances=0 --max-instances=1 --cpu=2 --memory=4Gi \
   --add-cloudsql-instances=ezpagesite:asia-east1:meetcopilot-db \
   --set-secrets=JWT_SECRET=meetcopilot-jwt-secret:latest,GEMINI_API_KEY=meetcopilot-gemini-key:latest,OPENAI_API_KEY=meetcopilot-openai-key:latest,DATABASE_URL=meetcopilot-db-url:latest \
-  --set-env-vars=DB_DRIVER=pg,GEMINI_TEXT_MODEL=gemini-3.1-flash-lite,GEMINI_EXTRACT_MODEL=gemini-3.5-flash,GEMINI_EMBED_MODEL=gemini-embedding-001,GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview,OPENAI_IMAGE_MODEL=gpt-image-2,OPENAI_IMAGE_SIZE=1536x864,OPENAI_IMAGE_QUALITY=medium,RESEARCH_AUTO_LIMIT_PER_MEETING=10 \
+  --set-env-vars=DB_DRIVER=pg,WEB_ORIGIN=https://meetcopilot-web-54139295474.asia-east1.run.app,GEMINI_TEXT_MODEL=gemini-3.1-flash-lite,GEMINI_EXTRACT_MODEL=gemini-3.5-flash,GEMINI_EMBED_MODEL=gemini-embedding-001,GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview,OPENAI_IMAGE_MODEL=gpt-image-2,OPENAI_IMAGE_SIZE=1536x864,OPENAI_IMAGE_QUALITY=medium,RESEARCH_AUTO_LIMIT_PER_MEETING=10 \
   --allow-unauthenticated --timeout=3600 --session-affinity
+# ⚠ WEB_ORIGIN 必帶（server CORS 白名單）：漏了 → 前端跨來源被瀏覽器擋。自訂網域上線時改成該網域。
 # web（NEXT_PUBLIC_API_BASE 必須 build 時 bake，故走 cloudbuild-web.yaml）
 gcloud builds submit --config=cloudbuild-web.yaml --substitutions=_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app --region=asia-east1 .
 gcloud run deploy meetcopilot-web --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/web:latest \
