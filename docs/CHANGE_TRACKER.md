@@ -34,6 +34,19 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 21:52 | 從網址匯入：瀏覽器 UA 修 429 ＋ 非 UTF-8 頁面編碼修亂碼（移植 v1 6 項）
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `src/import/extract.ts`
+- **改了什麼**: 把 v1 已加固的 6 項移植進 v2 的 `extractFromUrl`/`extractFromPdf`（v2 較強的 SSRF/DNS-pin 區塊逐字保留，未回退）：
+  1. **瀏覽器 UA（headline 429 修）**: `safeFetch` 標頭 Before＝bot UA `MeetCopilot/0.1 (research-import)`＋`accept:text/html,application/xhtml+xml` → After＝新增常數 `BROWSER_HEADERS`（extract.ts:34，真實桌面 Chrome UA＋完整 accept＋`accept-language: zh-TW,zh;q=0.9,en;q=0.8`），`safeFetch` 改 `headers: BROWSER_HEADERS`（extract.ts:137）。實站對 bot UA 直接回 429。
+  2. **編碼感知解碼（修 Big5/GBK 亂碼）**: 新增 `resolveCharset()`（extract.ts:151，Content-Type charset → 前 2KB 嗅探 `<meta charset>` → 預設 utf-8）＋`decodeBody()`（extract.ts:163，`new TextDecoder(label)`，未知/錯誤退回 utf-8）。`extractFromUrl` body 讀取 Before＝`Buffer.concat(chunks).toString("utf8")` → After＝先讀成 `Buffer` 再 `decodeBody(buf, ctype)`（extract.ts:285）；`!reader` 分支改 `res.arrayBuffer()`（原為 `res.text()`）。
+  3. **十六進位實體＋防崩**: `decodeEntities` 新增 `&#x[hex];` 處理，並把 `String.fromCodePoint(Number(n))` 換成 `codePoint()` 守衛（extract.ts:191，非有限/<0/>0x10FFFF 回 ""），越界實體不再丟 RangeError 崩掉整頁抽取。
+  4. **429/503 有界重試**: `extractFromUrl` 對 429/503 做 1 次有界重試（`RETRY_STATUSES`/`MAX_FETCH_ATTEMPTS=2`/`MAX_RETRY_WAIT_MS=2500`），尊重 `Retry-After`（秒數＋HTTP-date 兩式、上限 ~2.5s）；sleep 可被既有 `AbortController` 中止、abort 即 break；重試走 `safeFetch` 讓 SSRF 逐跳重驗（extract.ts:218-247）；仍 429/503 丟 zh-TW「暫時限流」。
+  5. **DNS lookup 逾時**: 新增 `lookupAll()`（extract.ts:76，`dns.lookup` 對 `DNS_TIMEOUT_MS≈5s` race），在 `resolveAndValidate` 內把 `dns.lookup(...)` 換成 `lookupAll(...)`（extract.ts:94）——**只在 lookup 呼叫內加 race，未動 `resolveAndValidate`/`isPrivateIp` 匯出簽章**（crawler.ts 共用）。黑洞 nameserver 不再拖過 10s 總預算。
+  6. **PDF 頁數上限**: `extractFromPdf` Before＝`pdfParse(buffer)` → After＝`pdfParse(buffer, { max: 50 })`（extract.ts:294）。
+- **為什麼**: 使用者面向的「從網址匯入」（POST /api/extract-url）送 bot UA 被實站回 429、且對非 UTF-8（Big5/GBK/Shift-JIS）頁面硬解 utf8 變亂碼。移植 v1 `apps/server/src/import/extract.ts` 的已加固版。**SSRF / DNS-pin 區塊（isPrivateIp、resolveAndValidate 的公網/雲端 metadata 檢查、pinnedAgent IP-pin、逐跳重驗、error 路徑 body cancel）逐字保留未改**；v2 特有的 `finalUrl` 亦保留。typecheck `tsc -p tsconfig.json --noEmit` 綠。真網重現：`http://www.zol.com.cn/`（charset=gbk）標題「中关村在线 - 大中华区专业IT网站…」正確中文、**無 U+FFFD**；`https://example.com/`（utf-8）標題「Example Domain」無回退。I1/I2/I3 未觸及。
+
 ### 2026-07-08 21:00 | 研究面板一律全網深度（移除輕量/會前建檔選項）＋修 job 卡片誤標「輕量研究」
 - **工作區**: apps/web
 - **類型**: fix/ux

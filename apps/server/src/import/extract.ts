@@ -21,8 +21,22 @@ import pdfParse from "pdf-parse";
 
 const MAX_BODY_BYTES = 3_000_000; // 抓網頁的硬上限
 const MAX_TEXT_CHARS = 8000; // 餵進 prompt 的文字上限
-const FETCH_TIMEOUT_MS = 10_000; // 涵蓋 DNS＋標頭＋body 的總預算
+const FETCH_TIMEOUT_MS = 10_000; // 涵蓋標頭＋body 的總預算（DNS 另有 DNS_TIMEOUT_MS）
+const DNS_TIMEOUT_MS = 5_000; // node:dns.lookup 收不到 AbortSignal，另用 race 綁上限（黑洞/慢速 nameserver 否則會拖過總預算）
 const MAX_REDIRECTS = 3;
+// 429/503 常是「暫時性」限流（很多站台是 by-IP 節流，非只看 UA）；短暫等一下再試一次，仍失敗才報。
+const RETRY_STATUSES = new Set([429, 503]);
+const MAX_FETCH_ATTEMPTS = 2;
+const MAX_RETRY_WAIT_MS = 2_500; // 尊重 Retry-After 但設上限——避免站台叫我們等 60s 而拖爆總預算
+
+// 送出「像瀏覽器」的標頭——很多站台（WordPress + Cloudflare/Wordfence 等）對非瀏覽器 UA 直接回 429/403。
+// 這是使用者主動貼上、想匯入的頁面，用真實瀏覽器 UA 才抓得到（bot UA 實測 429、瀏覽器 UA 200）。
+const BROWSER_HEADERS: Record<string, string> = {
+  "user-agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "accept-language": "zh-TW,zh;q=0.9,en;q=0.8",
+};
 
 /**
  * 位址是否為內部/保留（loopback/私網/link-local/CGNAT/雲端 metadata/測試網段）。
@@ -58,13 +72,26 @@ export function isPrivateIp(ip: string): boolean {
   return true; // 無法判斷 → 保守拒絕
 }
 
+/** dns.lookup 無法被取消，用 race 綁一個上限——避免慢速/黑洞 nameserver 讓 handler 卡過總預算。 */
+async function lookupAll(hostname: string): Promise<{ address: string; family: number }[]> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => rej(new Error("DNS 解析逾時")), DNS_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([dns.lookup(hostname, { all: true }), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** 解析主機名，驗證所有 IP 皆為公網，回傳一個要 pin 的 IP＋family。literal IP 直接驗。 */
 export async function resolveAndValidate(hostname: string): Promise<{ ip: string; family: 4 | 6 }> {
   if (net.isIP(hostname)) {
     if (isPrivateIp(hostname)) throw new Error("目標位址為內部/保留位址，不允許抓取");
     return { ip: hostname, family: net.isIPv6(hostname) ? 6 : 4 };
   }
-  const addrs = await dns.lookup(hostname, { all: true });
+  const addrs = await lookupAll(hostname);
   if (addrs.length === 0) throw new Error("無法解析網域");
   for (const a of addrs) {
     if (isPrivateIp(a.address)) throw new Error("網域解析到內部位址，不允許抓取");
@@ -107,7 +134,7 @@ async function safeFetch(
     redirect: "manual",
     signal,
     dispatcher,
-    headers: { "user-agent": "MeetCopilot/0.1 (research-import)", accept: "text/html,application/xhtml+xml" },
+    headers: BROWSER_HEADERS,
   };
   const res = await undiciFetch(rawUrl, init);
 
@@ -118,6 +145,29 @@ async function safeFetch(
     return safeFetch(new URL(loc, rawUrl).toString(), signal, depth + 1, dispatchers); // 逐跳重新驗證＋pin
   }
   return res;
+}
+
+/** 解析回應真正的字元編碼：Content-Type charset → HTML <meta charset> → 預設 utf-8。 */
+function resolveCharset(buf: Buffer, ctype: string): string {
+  const fromHeader = /charset\s*=\s*["']?([\w-]+)/i.exec(ctype)?.[1];
+  if (fromHeader) return fromHeader.toLowerCase();
+  // 無 header charset 時，嗅探開頭位元組的 <meta charset> / <meta http-equiv>（用 latin1 讀，只為抓 ASCII 標記）。
+  const head = buf.subarray(0, 2048).toString("latin1");
+  const meta =
+    /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i.exec(head)?.[1] ??
+    /<meta[^>]+http-equiv=["']?content-type["']?[^>]*content=["'][^"']*charset=([\w-]+)/i.exec(head)?.[1];
+  return (meta ?? "utf-8").toLowerCase();
+}
+
+/** 依解析出的編碼把 body 解成字串。Node 內建 TextDecoder 支援 big5/gbk/gb18030/shift_jis 等；未知標籤退回 utf-8。 */
+function decodeBody(buf: Buffer, ctype: string): string {
+  const label = resolveCharset(buf, ctype);
+  if (label === "utf-8" || label === "utf8") return buf.toString("utf8");
+  try {
+    return new TextDecoder(label).decode(buf);
+  } catch {
+    return buf.toString("utf8");
+  }
 }
 
 /** 極簡 HTML → 純文字：去 script/style/註解、抽 <title>、剝標籤、收斂空白、截斷。 */
@@ -137,6 +187,11 @@ function htmlToText(html: string): { title?: string; text: string } {
   return { title, text: text.slice(0, MAX_TEXT_CHARS) };
 }
 
+// 合法 Unicode 範圍才轉字元，避免 &#9999999999; 這類越界值讓 String.fromCodePoint 丟 RangeError 而崩掉整頁抽取。
+function codePoint(n: number): string {
+  return Number.isFinite(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "";
+}
+
 function decodeEntities(s: string): string {
   return s
     .replace(/&amp;/g, "&")
@@ -145,7 +200,8 @@ function decodeEntities(s: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, " ")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+    .replace(/&#[xX]([0-9a-fA-F]+);/g, (_, n) => codePoint(parseInt(n, 16))) // 十六進位數值字元參照 &#xNNNN;
+    .replace(/&#(\d+);/g, (_, n) => codePoint(Number(n)));
 }
 
 /**
@@ -158,7 +214,36 @@ export async function extractFromUrl(rawUrl: string): Promise<{ title?: string; 
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   const dispatchers: Agent[] = [];
   try {
-    const res = await safeFetch(rawUrl, controller.signal, 0, dispatchers);
+    let res = await safeFetch(rawUrl, controller.signal, 0, dispatchers);
+    for (let attempt = 1; RETRY_STATUSES.has(res.status) && attempt < MAX_FETCH_ATTEMPTS; attempt++) {
+      // Retry-After 可為「秒數」或「HTTP-date」；先試秒數，非有限值再試日期形式，都拿不到就退回 800ms。
+      const raw = res.headers.get("retry-after");
+      let raSec = Number(raw);
+      if (!Number.isFinite(raSec)) {
+        const t = Date.parse(raw ?? "");
+        raSec = Number.isFinite(t) ? (t - Date.now()) / 1000 : 0;
+      }
+      const waitMs = Math.min(raSec > 0 ? raSec * 1000 : 800, MAX_RETRY_WAIT_MS);
+      await res.body?.cancel().catch(() => {});
+      // 讓 sleep 也能被外層 controller 中止——否則等待期間逾時，醒來還會對已 abort 的 signal 再發一次 safeFetch
+      // （浪費 DNS 解析＋必然 AbortError）。sleep 後若已 abort 就直接跳出，不再重試。
+      await new Promise<void>((resolve) => {
+        const sig = controller.signal;
+        const t = setTimeout(done, waitMs);
+        function done() {
+          clearTimeout(t);
+          sig.removeEventListener("abort", done);
+          resolve();
+        }
+        sig.addEventListener("abort", done, { once: true });
+      });
+      if (controller.signal.aborted) break;
+      res = await safeFetch(rawUrl, controller.signal, 0, dispatchers); // 重跑 safeFetch → 重導/SSRF 全部重驗＋重 pin
+    }
+    if (res.status === 429 || res.status === 503) {
+      await res.body?.cancel().catch(() => {});
+      throw new Error(`來源網站暫時限流（${res.status}），請稍後再試`);
+    }
     if (!res.ok) throw new Error(`來源回應 ${res.status}`);
     // res.url＝最後一跳（非重導）的請求 URL＝真實來源頁（redirect: manual + 逐跳遞迴後）。
     const finalUrl = typeof res.url === "string" && res.url.length > 0 ? res.url : rawUrl;
@@ -173,11 +258,12 @@ export async function extractFromUrl(rawUrl: string): Promise<{ title?: string; 
       throw new Error("網頁過大");
     }
 
-    // 串流讀取並在上限處截斷；逾時由外層 controller（涵蓋 body）保證，慢速滴水會被 abort。
+    // 串流讀取原始位元組並在上限處截斷；逾時由外層 controller（涵蓋 body）保證，慢速滴水會被 abort。
+    // 不在這裡硬解 utf8——先拿到 bytes，再依 Content-Type/<meta> 的實際編碼解碼（Big5/GBK 等站台才不會變亂碼）。
     const reader = res.body?.getReader();
-    let html: string;
+    let buf: Buffer;
     if (!reader) {
-      html = (await res.text()).slice(0, MAX_BODY_BYTES);
+      buf = Buffer.from(await res.arrayBuffer()).subarray(0, MAX_BODY_BYTES);
     } else {
       const chunks: Buffer[] = [];
       let total = 0;
@@ -194,9 +280,9 @@ export async function extractFromUrl(rawUrl: string): Promise<{ title?: string; 
           chunks.push(Buffer.from(value));
         }
       }
-      html = Buffer.concat(chunks).toString("utf8");
+      buf = Buffer.concat(chunks);
     }
-    return { ...htmlToText(html), finalUrl };
+    return { ...htmlToText(decodeBody(buf, ctype)), finalUrl };
   } finally {
     clearTimeout(timer);
     for (const d of dispatchers) void d.close().catch(() => {});
@@ -205,7 +291,7 @@ export async function extractFromUrl(rawUrl: string): Promise<{ title?: string; 
 
 /** 從 PDF buffer 抽純文字（供 grounding；不是 1:1 匯入成頁）。 */
 export async function extractFromPdf(buffer: Buffer): Promise<{ text: string }> {
-  const parsed = await pdfParse(buffer);
+  const parsed = await pdfParse(buffer, { max: 50 }); // 只解析前 50 頁——防超大 PDF 逐頁解析拖爆 CPU/記憶體
   const text = String(parsed?.text ?? "").replace(/\n\s*\n+/g, "\n").trim().slice(0, MAX_TEXT_CHARS);
   if (!text) throw new Error("PDF 未擷取到文字（可能是掃描/圖片型 PDF）");
   return { text };
