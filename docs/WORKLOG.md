@@ -96,3 +96,10 @@
 - **carry-forward**：成本記帳串流小項未涵蓋；persona-lock/真語音待使用者真跑；npm audit 已 triage。
 - **使用者唯一未完＝上線**：GCP 專案/帳單/網域/DNS、OpenAI 組織驗證、換 JWT_SECRET，照 DEPLOY.md。
 - **狀態**：**MeetCopilot v2 = M0–M5 完整成品**（CRM＋研究引擎＋3 產品＋6 前端＋隱私/成本/強化/邀請/部署產物），經對抗審查修正。只差使用者上線＋真語音驗。
+
+## 2026-07-08 session（上線後強化・爬蟲 + 全網深度研究 + web 補建）
+
+- **爬蟲**：navTimeout 20s→env 化、2-level BFS 平行池、雙語連結評分、**5 分鐘硬上限**（CRAWL_HARD_CAP_MS）；SSRF 只 pin 目標 IP（L16）。部署 server rev 00005。深度爬取 6→33 產品。
+- **全網深度研究 deep 模式**（commit `0d06cee`）：DeepResearcher（6–9 雙語 grounding 查詢＋深讀 top6 外部來源，跳過公司網域）＋DeepExtractor（逐事實 [S#]→provenance 真實外部 URL）。orchestrator deep＝研究∥網站爬蟲。migration 010（crawl_jobs.mode 加 deep，boot 自動套）。碩天實測 FT/Wikipedia/cnyes/digitimes 撈到 11 概況+5 新聞+6 主管+10 競爭對手。server rev **00006-gx4**、/api/health＋/api/ready 皆 200。ROM 已記。
+- **web 補建**：deep commit 含 EnrichPanel 第三選項「深度（全網研究）」，但先前**只重建 server 漏了 web**（`NEXT_PUBLIC_*` 是 build 期常數，重啟無效）→ cloudbuild-web 重建（build `999cbbd1`）→ deploy web rev **00003-48v**。**教訓：動到 apps/web 要 server＋web 各自重建。**
+- **待使用者**：Google 登入需在 Console 把兩個 meetcopilot-web 網址加進共用 OAuth client 的「已授權 JavaScript 來源」。
