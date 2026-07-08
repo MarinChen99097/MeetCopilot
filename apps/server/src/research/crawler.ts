@@ -64,11 +64,15 @@ function clampEnvMs(envName: string, def: number, min: number, max: number): num
 export function navTimeoutMs(): number {
   return clampEnvMs("CRAWL_NAV_TIMEOUT_MS", DEFAULT_NAV_TIMEOUT_MS, NAV_TIMEOUT_MIN_MS, NAV_TIMEOUT_MAX_MS);
 }
-/** 整場 crawl deadline（呼叫時讀 env；quick 15–300s、detailed 30–900s）。 */
+/**
+ * 整場 crawl deadline（呼叫時讀 env）。使用者要求「爬官網限 5 分鐘以內」→ **硬上限 300s（5 分鐘）**：
+ * detailed 預設 300s、上限 300s；quick 預設 120s、上限 300s。env 可調低但**不得超過 5 分鐘**。
+ */
+export const CRAWL_HARD_CAP_MS = 300_000; // 5 分鐘硬上限（使用者需求）
 export function crawlDeadlineMs(mode: "quick" | "detailed"): number {
   return mode === "detailed"
-    ? clampEnvMs("CRAWL_DEADLINE_DETAILED_MS", CRAWL_DEADLINE_DETAILED_DEFAULT_MS, 30_000, 900_000)
-    : clampEnvMs("CRAWL_DEADLINE_QUICK_MS", CRAWL_DEADLINE_QUICK_DEFAULT_MS, 15_000, 300_000);
+    ? clampEnvMs("CRAWL_DEADLINE_DETAILED_MS", CRAWL_DEADLINE_DETAILED_DEFAULT_MS, 30_000, CRAWL_HARD_CAP_MS)
+    : clampEnvMs("CRAWL_DEADLINE_QUICK_MS", CRAWL_DEADLINE_QUICK_DEFAULT_MS, 15_000, CRAWL_HARD_CAP_MS);
 }
 // browser.close() 在此機器上會永久卡住 → 給它 5s，逾時就 SIGKILL 底層 Chromium process。
 const BROWSER_CLOSE_TIMEOUT_MS = 5_000;
