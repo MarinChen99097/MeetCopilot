@@ -167,6 +167,7 @@ img {
 
 .mc-field { display: flex; flex-direction: column; gap: 5px; }
 .mc-field > span { font-size: 12px; color: var(--mc-text-muted); }
+.mc-field__hint { font-size: 11px; color: var(--mc-text-muted); }
 .mc-field--grow { flex: 1 1 180px; }
 
 .mc-spinner {

@@ -36,6 +36,18 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 20:30 | 「研究此公司」URL 可選＝無 URL 就以公司名稱做全網深度研究（＋job 逾時）
+- **誰決定**: 使用者（「這邊邏輯有問題，當他說『可選』時，好歹要藉由公司名稱去做深度研究才對」；且新建無官網公司 CyP 留空 URL 研究跑很久沒結果）＋Fable（設計）
+- **根因**: orchestrator createJob 對**所有模式（含 deep）**在無 url 時 throw「no URL to crawl」；但 DeepResearcher 本就以 company.name 為 grounding 種子、domain/startUrl 皆 optional——根本不需 url，只是被這行擋在門外。且整個 job 無逾時＝卡住永遠「研究中」。
+- **決策**:
+  1. **無可爬 url 的 company → 一律以公司名稱走全網深度研究**（grounding by name，跳過官網 crawl）；有 url 才照 mode 爬官網。等於「URL 真正可選」。
+  2. **整體 job 硬逾時** RESEARCH_JOB_TIMEOUT_MS（預設 360s，Promise.race）→ 逾時 markFailed 記「研究逾時」，job 狀態必終結。
+  3. name-based 需 grounding+LLM（正式環境已設 GEMINI）；缺則清楚報錯而非默默卡住。
+- **考慮過的替代**: (a) 無 url 就報錯要使用者補網址——否決：使用者明確要「用公司名稱研究」；(b) 只有 deep 模式支援無 url——否決：quick/detailed 留空也應退回名稱研究（mode 只是標籤，無 url 時官網爬不動）。
+- **限制**: name-based 較耗（跑 grounding+合成）＝即使選 quick，無 url 也會走深度；共用品牌名消歧仍不完美（沿用 deep 既有限制）。逾時採 Promise.race 使 job 狀態終結，背景殘工在單一實例上自然結束（可接受）。
+- **驗證**: typecheck 4ws 綠、server 36/36、CRM 43/43；親自讀回 orchestrator 逾時/createJob/分派/runDeep 四段確認。I1/I2/I3 未觸及。
+- **注意**: 舊卡死 job（前一版建立）狀態不會自動變——使用者需重整重跑；未做 boot-time stale-job 清理（列為後續可選）。
+
 ### 2026-07-08 19:30 | CRM 顯示原文＋zh-TW 簡介、擷取在地化、補技術棧/部門孤兒表
 - **誰決定**: 使用者（截圖 CyberPower 頁反映三點：「表現形式應該原文+i18n 簡介才對」「爬出來全英文沒翻成 i18n」「技術棧與部門也沒爬出來」）＋Fable（設計契約）
 - **決策**:

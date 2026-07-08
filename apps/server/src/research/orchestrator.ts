@@ -23,7 +23,7 @@ import type {
   NewCompanyFunding,
   ProvenanceInput,
 } from "@meetcopilot/shared";
-import type { CrawlProvider } from "./crawler.js";
+import type { CrawlProvider, RawCrawl } from "./crawler.js";
 import { createCrawlExtractor, type CrawlExtractor } from "./extractor.js";
 import { createDeepExtractor, type DeepExtractor, type DeepExtraction } from "./deep-extractor.js";
 import {
@@ -89,16 +89,42 @@ function toCrawlMode(mode: CrawlMode): "quick" | "detailed" {
   return mode === "deep" ? "detailed" : mode;
 }
 
+/** 整體 job 逾時（ms）：env RESEARCH_JOB_TIMEOUT_MS，預設 360000（6 分）。防背景流程掛死→永遠「研究中」。 */
+function jobTimeoutMs(): number {
+  const raw = Number.parseInt(process.env.RESEARCH_JOB_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 360_000;
+}
+
+/** 以 Promise.race 對一項工作施加硬逾時；逾時→reject（呼叫端既有 catch 會 markFailed 記「研究逾時」）。 */
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`研究逾時（超過 ${Math.round(ms / 1000)} 秒）`)), ms);
+  });
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
 export interface RunResult {
   fieldsFilled: number;
   sources: string[];
 }
 
 export interface ResearchOrchestrator {
-  /** 建立 job（queued）並回 jobId + 解析出的爬取目標；不啟動背景流程。 */
+  /**
+   * 建立 job（queued）並回 jobId + 解析出的爬取目標；不啟動背景流程。
+   * url 可為 undefined：company 無官網時以 companyName 走全網深度研究（見 runJob 分派）。
+   */
   createJob(
     req: EnrichRequest,
-  ): Promise<{ jobId: string; url: string; domain?: string; companyIdForContact?: string }>;
+  ): Promise<{
+    jobId: string;
+    url?: string;
+    domain?: string;
+    companyIdForContact?: string;
+    companyName?: string;
+  }>;
   /** 背景執行一個 job（crawl→extract→upsert→更新 job 狀態）。呼叫端 fire-and-forget。 */
   runJob(args: {
     orgId: string;
@@ -106,9 +132,10 @@ export interface ResearchOrchestrator {
     targetType: CrawlTargetType;
     targetId: string;
     mode: CrawlMode;
-    url: string;
+    url?: string;
     domain?: string;
     companyIdForContact?: string;
+    companyName?: string;
   }): Promise<void>;
 }
 
@@ -176,12 +203,19 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       let url = req.url;
       let domain = domainFromUrl(req.url);
       let companyIdForContact: string | undefined;
+      let companyName: string | undefined;
 
       if (req.targetType === "company") {
         const company = await core.companies.findById(req.orgId, req.targetId);
         if (!company) throw new Error("company not found");
         url = url ?? company.websiteUrl ?? (company.domain ? `https://${company.domain}` : undefined);
         domain = company.domain ?? domain ?? domainFromUrl(url);
+        companyName = company.name;
+        // company 情境：無官網不 throw——改帶 companyName 往下走，以公司名稱做全網深度研究（見 runJob）。
+        // 只有連公司名稱都沒有（理論上不會發生）才無從研究。
+        if (!url && !companyName) {
+          throw new Error("company has no website and no name to research");
+        }
       } else {
         const contact = await core.contacts.findById(req.orgId, req.targetId);
         if (!contact) throw new Error("contact not found");
@@ -191,9 +225,11 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
           url = contact.linkedinUrl ?? company?.websiteUrl ?? (company?.domain ? `https://${company.domain}` : undefined);
           domain = company?.domain ?? domainFromUrl(url);
         }
+        // contact 需要一個可爬的 url（LinkedIn 或所屬公司官網）；缺則清楚報錯（本次重點是 company，contact 維持原樣）。
+        if (!url) {
+          throw new Error("no URL to crawl (provide url, or set the contact's LinkedIn or the company's website)");
+        }
       }
-
-      if (!url) throw new Error("no URL to crawl (provide url, or set the target's website)");
 
       const job = await jobs.create(req.orgId, {
         targetType: req.targetType,
@@ -203,17 +239,27 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
         requestedBy: req.requestedBy,
       });
 
-      return { jobId: job.id, url, domain, companyIdForContact };
+      return { jobId: job.id, url, domain, companyIdForContact, companyName };
     },
 
     async runJob(args) {
       const { orgId, jobId, targetType, mode } = args;
       try {
         await jobs.markRunning(orgId, jobId);
-        const result =
-          targetType === "company" && mode === "deep"
-            ? await runDeep(args)
-            : await runStandard(args);
+        // 分派：company 只要「無可爬 url」或「mode==='deep'」→ 一律走 name-based / grounding 全網深度研究（runDeep）；
+        // 其餘（company quick/detailed 有 url、或 contact）→ runStandard（需 url）。
+        const nameBased = targetType === "company" && !args.url; // 純以公司名稱研究（無官網）
+        const useDeep = targetType === "company" && (mode === "deep" || nameBased);
+        // name-based（無 url）必須有 grounding + LLM 合成才能以公司名稱研究；正式環境已設，故實際會跑。
+        if (nameBased) {
+          const hasResearcher = Boolean(deps.deepResearcher || deps.grounding);
+          const hasExtractor = Boolean(deps.deepExtractor || deps.gemini);
+          if (!hasResearcher || !hasExtractor) {
+            throw new Error("此公司無網址，需啟用深度研究（GEMINI/grounding）才能以公司名稱研究");
+          }
+        }
+        const work = useDeep ? runDeep(args) : runStandard(args);
+        const result = await withTimeout(work, jobTimeoutMs());
         await jobs.markDone(orgId, jobId, result);
       } catch (err) {
         await jobs
@@ -230,11 +276,13 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     targetType: CrawlTargetType;
     targetId: string;
     mode: CrawlMode;
-    url: string;
+    url?: string;
     domain?: string;
     companyIdForContact?: string;
   }): Promise<RunResult> {
     const { orgId, jobId, targetType, mode, url, domain } = args;
+    // standard 路徑必須有可爬的 url（分派已保證：只有 company 有 url 或 contact 才會進來；此為型別收斂＋防呆）。
+    if (!url) throw new Error("no URL to crawl");
     const jobExtractor = extractorFor(orgId, jobId);
     const raw = await crawler.crawl({ url, mode: toCrawlMode(mode), screenshots: false });
 
@@ -284,7 +332,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     orgId: string;
     jobId: string;
     targetId: string;
-    url: string;
+    url?: string;
     domain?: string;
   }): Promise<RunResult> {
     const { orgId, jobId, targetId, url } = args;
@@ -297,10 +345,14 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     const deepExtractor = deepExtractorFor(orgId, jobId);
     const siteExtractor = extractorFor(orgId, jobId);
 
-    // 並行：web 研究 + 官網 detailed 爬蟲（各自有界，個別失敗容忍）。
+    // 並行：web 研究（純靠 companyName 就能扇出，startUrl 可選）＋（若有 url）官網 detailed 爬蟲取產品。
+    // 無 url → 跳過官網 crawl（siteRaw=undefined），只跑 DeepResearcher by name。各自有界、個別失敗容忍。
+    const sitePromise: Promise<RawCrawl | undefined> = url
+      ? crawler.crawl({ url, mode: "detailed", screenshots: false })
+      : Promise.resolve(undefined);
     const [webRes, siteRes] = await Promise.allSettled([
       deepResearcher.research({ companyName, domain: dom, startUrl: url }),
-      crawler.crawl({ url, mode: "detailed", screenshots: false }),
+      sitePromise,
     ]);
     const bundle =
       webRes.status === "fulfilled" ? webRes.value : { groundedFindings: [], sourceTexts: [], citationUrls: [] };

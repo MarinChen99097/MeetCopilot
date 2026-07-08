@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 20:30 | 研究：無 URL→以公司名稱做全網深度研究 ＋ job 逾時保護（不再永遠「研究中」）
+- **工作區**: apps/server＋apps/web
+- **類型**: fix
+- **檔案**: server `research/orchestrator.ts`（createJob company 無 url 不再 throw、改帶 companyName；runJob 分派 nameBased=(company&&!url)→useDeep；runDeep url 改 optional、無 url 跳過官網 crawl 只跑 DeepResearcher by name；新增 withTimeout()＋jobTimeoutMs() env RESEARCH_JOB_TIMEOUT_MS 預設 360s）＋`research/routes.ts`（created.url optional、傳 companyName）；web `crm/EnrichPanel.tsx`＋`globals.css`（URL 欄提示「留空則以公司名稱做全網深度研究（不需官網）」）
+- **改了什麼**: (1) 修邏輯 bug——原 orchestrator:196 對**所有模式含 deep** 硬要 URL，導致沒官網的公司留空 URL 就無法研究；現改為 company 無可爬 url 時**一律以公司名稱走全網 grounding 深度研究**（DeepResearcher 本就以 name 為種子、不需 url）。(2) 修掛死——整個 job 包 Promise.race 硬逾時，卡住會 markFailed 記「研究逾時」，不再永遠「研究中」。
+- **為什麼**: 使用者反映「研究此公司」對無官網公司（CyP）留空 URL 跑很久沒結果——「URL 說可選，那好歹要藉由公司名稱去做深度研究才對」。有 url 的三條原路徑行為不變。typecheck 4ws 綠／server 36/36／CRM 43/43。I1/I2/I3 未觸及。
+
 ### 2026-07-08 19:30 | CRM 原文＋zh-TW 簡介並排 ＋ 技術棧/部門擷取寫入（補孤兒表）
 - **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
 - **類型**: feat

@@ -100,7 +100,13 @@ export function createResearchRouter(
       return;
     }
 
-    let created: { jobId: string; url: string; domain?: string; companyIdForContact?: string };
+    let created: {
+      jobId: string;
+      url?: string;
+      domain?: string;
+      companyIdForContact?: string;
+      companyName?: string;
+    };
     try {
       created = await orchestrator.createJob({
         orgId,
@@ -128,6 +134,7 @@ export function createResearchRouter(
         url: created.url,
         domain: created.domain,
         companyIdForContact: created.companyIdForContact,
+        companyName: created.companyName,
       })
       .catch((e) => console.error("[research] runJob crashed:", e));
 

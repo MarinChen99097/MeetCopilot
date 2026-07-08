@@ -143,6 +143,9 @@ export function EnrichPanel({
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="https://example.com"
               />
+              {targetType === "company" ? (
+                <small className="mc-field__hint">留空則以公司名稱做全網深度研究（不需官網）</small>
+              ) : null}
             </label>
           ) : null}
           <div className="mc-enrich__actions">
