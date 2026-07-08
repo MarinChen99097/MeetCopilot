@@ -10,24 +10,67 @@
 - Cloud Run：`meetcopilot-server`（min=0/max=1/cpu=2/mem=4Gi/gen2/CloudSQL/WS 3600/session-affinity）、`meetcopilot-web`（min=0/max=2/cpu=1/mem=1Gi）
 - 影像：`asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/{server,web}`
 
-**重新部署（改程式後）**
+**目前版本（2026-07-08）**：server `meetcopilot-server-00008-qdf`、web `meetcopilot-web-00007-vs6`。
+
+---
+
+## 🚀 重新部署 SOP（改程式後——這是 2026-07-08 session 實際用、驗證可行的流程）
+
+> 前置：已在 `ezpagesite` 同帳號授權過，**直接 `gcloud` 即可，不需重新登入**。變數：`PROJECT=ezpagesite`、`REGION=asia-east1`。
+> **黃金守則**：改 `apps/server` 或 `packages/*` → 重建 **server**；改 `apps/web` → 重建 **web**（`NEXT_PUBLIC_*` 是 build 期常數，光重啟無效！）；跨兩者 → **各自都要重建**。
+
+### A) 最常用：只改程式、沒改 env/secret
 ```bash
-# server（含 Playwright）
-gcloud builds submit --tag asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/server:latest -f Dockerfile.server .
+# ── server（含 Playwright；migration 於開機自動套，新增 migration 就靠這步上）──
+gcloud builds submit --config=cloudbuild-server.yaml --region=asia-east1 --project=ezpagesite --async .
+#   ↑ 回一個 BUILD_ID。gcloud 會等到超過「工具 2 分鐘逾時」→ 一律用 --async，再輪詢直到 SUCCESS：
+gcloud builds describe <BUILD_ID> --region=asia-east1 --project=ezpagesite --format="value(status)"
+gcloud run services update meetcopilot-server --region=asia-east1 --project=ezpagesite \
+  --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/server:latest
+#   ↑ services update --image：只換 image、**完整保留現有 env/secret**（不會吹掉 DB_DRIVER/WEB_ORIGIN/GOOGLE_CLIENT_ID…）
+
+# ── web（改了 apps/web 才需要；_API_BASE/_GOOGLE_CLIENT_ID 於 build 時 bake 進去）──
+gcloud builds submit --config=cloudbuild-web.yaml --region=asia-east1 --project=ezpagesite --async \
+  --substitutions=_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app,_GOOGLE_CLIENT_ID=54139295474-f7cve65n4884ttkcbc2o23hs763q7hm4.apps.googleusercontent.com .
+# 等該 BUILD_ID SUCCESS 後：
+gcloud run deploy meetcopilot-web --region=asia-east1 --project=ezpagesite \
+  --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/web:latest \
+  --min-instances=0 --max-instances=2 --cpu=1 --memory=1Gi \
+  --set-env-vars=NEXT_PUBLIC_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app --allow-unauthenticated
+```
+
+### B) 只改一個 env（不必重建 image）
+```bash
+gcloud run services update meetcopilot-server --region=asia-east1 --project=ezpagesite \
+  --update-env-vars=RESEARCH_JOB_TIMEOUT_MS=600000
+#   ⚠ 用 --update-env-vars（只動這個 key）。**千萬別用 --set-env-vars 或完整 run deploy**——那會覆寫「全部」env，把 DB/CORS/Google/Gemini 設定吹光。
+```
+
+### C) 冒煙測試（每次部署後必做）
+```bash
+curl -s https://meetcopilot-server-54139295474.asia-east1.run.app/api/health   # 期望 {"ok":true}
+curl -s https://meetcopilot-server-54139295474.asia-east1.run.app/api/ready    # 期望 {"ready":true}＝DB 通、開機 migration 已套
+# web：curl -s -o /dev/null -w "%{http_code}" .../  → 307（locale 轉址，正常）
+```
+
+### D) 首次建立服務 / 需重設「全部」env 時（才用完整 run deploy）
+```bash
 gcloud run deploy meetcopilot-server --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/server:latest \
-  --region=asia-east1 --execution-environment=gen2 --min-instances=0 --max-instances=1 --cpu=2 --memory=4Gi \
+  --region=asia-east1 --project=ezpagesite --execution-environment=gen2 --min-instances=0 --max-instances=1 --cpu=2 --memory=4Gi \
   --add-cloudsql-instances=ezpagesite:asia-east1:meetcopilot-db \
   --set-secrets=JWT_SECRET=meetcopilot-jwt-secret:latest,GEMINI_API_KEY=meetcopilot-gemini-key:latest,OPENAI_API_KEY=meetcopilot-openai-key:latest,DATABASE_URL=meetcopilot-db-url:latest \
   --set-env-vars=DB_DRIVER=pg,WEB_ORIGIN=https://meetcopilot-web-54139295474.asia-east1.run.app,GOOGLE_CLIENT_ID=54139295474-f7cve65n4884ttkcbc2o23hs763q7hm4.apps.googleusercontent.com,GEMINI_TEXT_MODEL=gemini-3.1-flash-lite,GEMINI_EXTRACT_MODEL=gemini-3.5-flash,GEMINI_EMBED_MODEL=gemini-embedding-001,GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview,OPENAI_IMAGE_MODEL=gpt-image-2,OPENAI_IMAGE_SIZE=1536x864,OPENAI_IMAGE_QUALITY=medium,RESEARCH_AUTO_LIMIT_PER_MEETING=10,RESEARCH_JOB_TIMEOUT_MS=600000 \
   --allow-unauthenticated --timeout=3600 --session-affinity
-# ⚠ WEB_ORIGIN 必帶（CORS）；GOOGLE_CLIENT_ID 必帶（沿用 EZpage 的 client，共用帳號）。server 用 cloudbuild-server.yaml 建。
-# ⚠ Google 登入前置：Console 把 meetcopilot-web 網址加進該 OAuth client 的「已授權 JavaScript 來源」。
-# web（NEXT_PUBLIC_API_BASE + NEXT_PUBLIC_GOOGLE_CLIENT_ID 皆 build 時 bake）
-gcloud builds submit --config=cloudbuild-web.yaml --region=asia-east1 --substitutions=_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app,_GOOGLE_CLIENT_ID=54139295474-f7cve65n4884ttkcbc2o23hs763q7hm4.apps.googleusercontent.com .
-gcloud run deploy meetcopilot-web --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/web:latest \
-  --region=asia-east1 --min-instances=0 --max-instances=2 --cpu=1 --memory=1Gi \
-  --set-env-vars=NEXT_PUBLIC_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app --allow-unauthenticated
+# ⚠ WEB_ORIGIN 必帶（CORS）；GOOGLE_CLIENT_ID 必帶（沿用 EZpage 的 client，共用帳號）。
+# ⚠ Google 登入前置（一次性、只有使用者能做）：Console 把 meetcopilot-web 兩個網址加進該 OAuth client 的「已授權 JavaScript 來源」。
 ```
+
+### 排錯速記（本 session 踩過）
+- **build 卡住/工具逾時** → `gcloud builds submit` 用 `--async`＋`gcloud builds describe <id> --format="value(status)"` 輪詢；build 在雲端續跑，不受本地 2 分逾時影響。
+- **env 被吹光**（CORS 壞、Google 登入壞）→ 用了 `--set-env-vars`/完整 `run deploy` 只帶部分 env。改用 `--update-env-vars` 只動單一 key。
+- **改了程式卻沒生效** → 只重建了一邊。web 的 `NEXT_PUBLIC_*` 是 build 期常數，非重建 web 無效（光 `run services update` 或重啟都沒用）。
+- **日誌**：app 自身 log 在 `logName:"stdout"` 的 `jsonPayload`（request log 在 `run.googleapis.com/requests`）；查研究 job：`gcloud logging read 'resource.labels.service_name=meetcopilot-server AND logName:"stdout"' --freshness=20m --format=json`。
+- **Google 登入驗證**（不需真登入即可測後端就緒）：`curl -X POST .../api/auth/google -d '{"idToken":"bogus"}'` 應回 401「invalid Google credential」（端點已接）；`OPTIONS` 應回 204＋`access-control-allow-origin`。
 **成本**：Cloud Run 閒置→$0；**Cloud SQL db-f1-micro 約 $8–10/月**（不 scale-to-zero）。合計閒置約 $8–12/月。
 **還需使用者**：(1) OpenAI 組織驗證（否則 gpt-image-2 生圖被拒）；(2) 自訂網域可選（`gcloud run domain-mappings`；run.app 的 HTTPS 已足夠麥克風/擷取/Live）；(3) max>1 需先做 Redis 外部化 session。
 **踩過的坑（已解）**：monorepo `tsc -b` 在 Cloud Build 乾淨 Linux 誤判 mtime（TS6305→shared 解析失敗）→ crm/server build tsconfig 改 `tsc -p`+paths→dist .d.ts。
