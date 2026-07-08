@@ -1,0 +1,16 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg
+      - NEXT_PUBLIC_API_BASE=${_API_BASE}
+      - -f
+      - Dockerfile.web
+      - -t
+      - asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/web:latest
+      - .
+images:
+  - asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/web:latest
+options:
+  machineType: E2_HIGHCPU_8
+timeout: 1800s

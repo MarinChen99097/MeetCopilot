@@ -1,4 +1,38 @@
-# DEPLOY — MeetCopilot v2 上線 runbook（GCP 單 VM）
+# ✅ 實際上線紀錄（2026-07-08，Cloud Run + Cloud SQL，ezpagesite 專案）
+
+> 本產品**已實際部署到 GCP 並驗證通過**（改用 Cloud Run + Cloud SQL，非下方原 VM 方案——因使用者要 scale-to-zero＋建了 SQL DB）。下方「GCP 單 VM」章節保留為**自架替代方案**（此次未採用）。
+
+**現況（live）**
+- 前端 Web：**https://meetcopilot-web-54139295474.asia-east1.run.app**
+- 後端 API/WS：**https://meetcopilot-server-54139295474.asia-east1.run.app**（`/api/health`＋`/api/ready` 皆 200；register→me 端到端過；CSP 已指向 server https/wss＋Gemini Live）
+- DB：Cloud SQL Postgres 16 `ezpagesite:asia-east1:meetcopilot-db`（db-f1-micro）
+- Secrets：`meetcopilot-{jwt-secret,gemini-key,openai-key,db-url}`（Secret Manager）
+- Cloud Run：`meetcopilot-server`（min=0/max=1/cpu=2/mem=4Gi/gen2/CloudSQL/WS 3600/session-affinity）、`meetcopilot-web`（min=0/max=2/cpu=1/mem=1Gi）
+- 影像：`asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/{server,web}`
+
+**重新部署（改程式後）**
+```bash
+# server（含 Playwright）
+gcloud builds submit --tag asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/server:latest -f Dockerfile.server .
+gcloud run deploy meetcopilot-server --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/server:latest \
+  --region=asia-east1 --execution-environment=gen2 --min-instances=0 --max-instances=1 --cpu=2 --memory=4Gi \
+  --add-cloudsql-instances=ezpagesite:asia-east1:meetcopilot-db \
+  --set-secrets=JWT_SECRET=meetcopilot-jwt-secret:latest,GEMINI_API_KEY=meetcopilot-gemini-key:latest,OPENAI_API_KEY=meetcopilot-openai-key:latest,DATABASE_URL=meetcopilot-db-url:latest \
+  --set-env-vars=DB_DRIVER=pg,GEMINI_TEXT_MODEL=gemini-3.1-flash-lite,GEMINI_EXTRACT_MODEL=gemini-3.5-flash,GEMINI_EMBED_MODEL=gemini-embedding-001,GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview,OPENAI_IMAGE_MODEL=gpt-image-2,OPENAI_IMAGE_SIZE=1536x864,OPENAI_IMAGE_QUALITY=medium,RESEARCH_AUTO_LIMIT_PER_MEETING=10 \
+  --allow-unauthenticated --timeout=3600 --session-affinity
+# web（NEXT_PUBLIC_API_BASE 必須 build 時 bake，故走 cloudbuild-web.yaml）
+gcloud builds submit --config=cloudbuild-web.yaml --substitutions=_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app --region=asia-east1 .
+gcloud run deploy meetcopilot-web --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/web:latest \
+  --region=asia-east1 --min-instances=0 --max-instances=2 --cpu=1 --memory=1Gi \
+  --set-env-vars=NEXT_PUBLIC_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app --allow-unauthenticated
+```
+**成本**：Cloud Run 閒置→$0；**Cloud SQL db-f1-micro 約 $8–10/月**（不 scale-to-zero）。合計閒置約 $8–12/月。
+**還需使用者**：(1) OpenAI 組織驗證（否則 gpt-image-2 生圖被拒）；(2) 自訂網域可選（`gcloud run domain-mappings`；run.app 的 HTTPS 已足夠麥克風/擷取/Live）；(3) max>1 需先做 Redis 外部化 session。
+**踩過的坑（已解）**：monorepo `tsc -b` 在 Cloud Build 乾淨 Linux 誤判 mtime（TS6305→shared 解析失敗）→ crm/server build tsconfig 改 `tsc -p`+paths→dist .d.ts。
+
+---
+
+# DEPLOY — MeetCopilot v2 上線 runbook（GCP 單 VM，替代方案／未採用）
 
 > 決策 20：SaaS 成品、部署 GCP、邀請制（先不計費）。技術形態＝**單一 Compute Engine VM ＋持久磁碟**，用 Docker Compose 跑 `server`（含 Playwright）＋`web`＋`caddy`（自動 TLS）。
 > 本檔只給指令與說明；**不含任何已執行的雲端動作**——所有 `gcloud`/`docker` 由你在自己的專案手動執行。

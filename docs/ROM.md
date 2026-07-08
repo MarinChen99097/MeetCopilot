@@ -36,6 +36,14 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 03:00 | ✅ 上線 GCP 完成 — MeetCopilot v2 live
+- **誰決定**: Fable（執行部署；使用者授權「直接部署到 GCP、同 ezpagesite 專案」）
+- **決策/結果**: **已實際部署到 GCP ezpagesite 專案並驗證**——server `https://meetcopilot-server-54139295474.asia-east1.run.app`（Cloud Run min=0/max=1/cpu2/ram4/gen2/CloudSQL/WS3600/session-affinity；/health+/ready 200；register→me 端到端過、資料寫進 Cloud SQL）、web `https://meetcopilot-web-54139295474.asia-east1.run.app`（min=0/max=2；i18n 307→/zh-TW、login 200、CSP 指向 server https/wss+Gemini Live）、Cloud SQL Postgres16 `meetcopilot-db`、4 Secret、Artifact Registry server+web 影像。
+- **執行過程/坑**: provisioning agent 建好 Cloud SQL+secrets+推 server 影像，但反覆卡在 async-build 等待迴圈→**Fable 接手親自驅動剩餘 Cloud Run deploy**。Cloud Build 失敗根因＝monorepo `tsc -b` 乾淨 Linux 誤判 mtime（TS6305→@meetcopilot/shared 解析失敗 cascade implicit-any）→改 crm/server build tsconfig 為 `tsc -p`+paths→dist .d.ts（commit 99a98e4）。web 的 NEXT_PUBLIC_API_BASE build-time bake 走 cloudbuild-web.yaml。
+- **成本**: 閒置約 $8–12/月（Cloud Run→$0、Cloud SQL 常態 ~$8–10）。
+- **仍待使用者**: OpenAI 組織驗證（生圖）、真語音/麥克風瀏覽器實測、自訂網域（可選）。max>1 需 Redis 外部化 session。
+- **影響**: docs/DEPLOY.md 加實際上線章節+重部署指令；cloudbuild-web.yaml。**MeetCopilot v2 從規劃到上線全程完成（M0–M5＋code-review＋Postgres 移植＋GCP 部署）。**
+
 ### 2026-07-08 11:35 | 部署路線定案：Cloud Run(min=0/max=1)+Cloud SQL Postgres；Postgres 移植完成
 - **誰決定**: 使用者（要 scale-to-zero autoscaling＋「可以創一個 SQL 資料庫」）＋Fable（架構裁決）
 - **決策**:
