@@ -4,6 +4,8 @@ steps:
       - build
       - --build-arg
       - NEXT_PUBLIC_API_BASE=${_API_BASE}
+      - --build-arg
+      - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${_GOOGLE_CLIENT_ID}
       - -f
       - Dockerfile.web
       - -t
