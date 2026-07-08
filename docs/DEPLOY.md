@@ -10,7 +10,7 @@
 - Cloud Run：`meetcopilot-server`（min=0/max=1/cpu=2/mem=4Gi/gen2/CloudSQL/WS 3600/session-affinity）、`meetcopilot-web`（min=0/max=2/cpu=1/mem=1Gi）
 - 影像：`asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/{server,web}`
 
-**目前版本（2026-07-08）**：server `meetcopilot-server-00008-qdf`、web `meetcopilot-web-00007-vs6`。
+**目前版本（2026-07-08）**：server `meetcopilot-server-00009-qcb`、web `meetcopilot-web-00007-vs6`。
 
 ---
 
