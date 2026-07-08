@@ -15,18 +15,49 @@ import type { RawCrawl } from "./crawler.js";
 
 /** 統一爬蟲信心（provenance.confidence）。爬蟲抽取值一律標此值，人細填/確認才升信任。 */
 const CRAWL_CONFIDENCE = 0.6;
-const MAX_PROMPT_CHARS = 24_000; // 餵給 Gemini 的頁面文字上限（多頁串接）
+// 多頁串接的 prompt 預算：detailed 會帶 ~20+ 頁（產品列表＋明細），需夠大才能餵進足量頁；
+// 每頁再各自截 PER_PAGE_PROMPT_CHARS 以保「廣度」（不讓某一長頁吃光預算）。gemini-3.5-flash 長 context 撐得住。
+const MAX_PROMPT_CHARS = 180_000;
+const PER_PAGE_PROMPT_CHARS = 6_000;
+// detailed 抽取要回「每產品含 specs/features」的較大 JSON——放寬輸出 token 上限，避免多產品被截斷。
+const EXTRACT_MAX_OUTPUT_TOKENS = 16_384;
+// 低溫抽取：預設溫度（~1.0）下同一批頁的產品數 run-to-run 劇烈跳動（實測 cyberpower 1 vs 33）；
+// 結構化枚舉要的是穩定、可重現，非創意——壓到 0.3 讓「列出所有產品」一致收斂。
+const EXTRACT_TEMPERATURE = 0.3;
 
 export interface CrawlExtractor {
   toCompany(raw: RawCrawl): Promise<CrawlPayload>;
   toContacts(raw: RawCrawl): Promise<Partial<Contact>[]>;
 }
 
+/**
+ * 模型輸出的單一產品形狀。刻意與 CompanyProduct 略有出入，因兩個欄位對 schema 友善的表示不同：
+ *  - specs：CompanyProduct.specs 是自由 key-value 物件（無法枚舉 keys → 空 OBJECT schema 會回空，見 v1 教訓），
+ *    故讓模型回 `{name,value}[]` 明列，程式再摺成物件。
+ *  - priceText：站上「原樣顯示」的價格字串（如 "NT$4,290 起"）→ 程式解析出 priceFrom/currency、原文留 pricingNotes。
+ */
+interface ExtractedProduct {
+  name?: string;
+  category?: string;
+  oneLiner?: string;
+  description?: string;
+  productUrl?: string;
+  docsUrl?: string;
+  pricingModel?: string;
+  priceText?: string;
+  targetMarket?: string;
+  integrations?: string[];
+  differentiators?: string[];
+  targetPersonas?: string[];
+  keyFeatures?: { name?: string; detail?: string; benefit?: string }[];
+  specs?: { name?: string; value?: string }[];
+}
+
 /** Gemini 回傳的抽取形狀（camelCase 對齊 domain 欄位；皆 optional，模型缺值即略）。 */
 interface ExtractedShape {
   company?: Partial<Company>;
   contacts?: Partial<Contact>[];
-  products?: Partial<CompanyProduct>[];
+  products?: ExtractedProduct[];
   news?: Partial<CompanyNews>[];
 }
 
@@ -115,8 +146,37 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
           productUrl: { type: S.STRING },
           docsUrl: { type: S.STRING },
           pricingModel: { type: S.STRING },
-          integrations: { type: S.ARRAY, items: { type: S.STRING } },
+          // 站上原樣顯示的價格字串（含幣別/單位，如 "NT$4,290 起"、"$99/mo"）。程式再解析成 priceFrom/currency。
+          priceText: { type: S.STRING },
           targetMarket: { type: S.STRING },
+          integrations: { type: S.ARRAY, items: { type: S.STRING } },
+          differentiators: { type: S.ARRAY, items: { type: S.STRING } },
+          targetPersonas: { type: S.ARRAY, items: { type: S.STRING } },
+          // 產品重點功能（來自 feature 區塊）。
+          keyFeatures: {
+            type: S.ARRAY,
+            items: {
+              type: S.OBJECT,
+              properties: {
+                name: { type: S.STRING },
+                detail: { type: S.STRING },
+                benefit: { type: S.STRING },
+              },
+              required: ["name"],
+            },
+          },
+          // 規格明細（來自產品明細頁的規格表）：label→value 對。空 OBJECT schema 會回空，故用具名 pair 陣列。
+          specs: {
+            type: S.ARRAY,
+            items: {
+              type: S.OBJECT,
+              properties: {
+                name: { type: S.STRING },
+                value: { type: S.STRING },
+              },
+              required: ["name", "value"],
+            },
+          },
         },
         required: ["name"],
       },
@@ -143,27 +203,36 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
 
 const SYSTEM = [
   "You are a B2B sales-intelligence analyst. Read a prospect company's OWN website text and return a structured company profile as JSON for a sales CRM.",
+  "The text spans MULTIPLE pages of the same site, each labelled with its source URL: a homepage, product-LIST pages, and product-DETAIL/spec pages. Use the detail/spec pages to enrich each product.",
   "A marketing homepage's hero and feature sections ARE the company's self-description. Synthesize these company fields from that copy even when they are not explicitly labelled:",
   "- `description`: 2-3 FULL sentences on WHAT the company does and for whom. REQUIRED whenever the page explains the business.",
   "- `industry`: the product category / vertical as a short label (e.g. '不斷電系統 (UPS) 與電源管理' or 'Publishing & newsletter software'). REQUIRED whenever it can be inferred.",
   "- `businessModel`: e.g. 'B2B hardware', 'B2B SaaS', 'open-source + hosted'.",
   "- `tagline`: ONLY the site's short headline slogan (roughly <= 12 words). Do NOT put the full description in `tagline`.",
   "- `productsOffered`: the product/service names.",
-  "For each product or major offering the site describes, add a `products[]` entry: `name`, a one-sentence `oneLiner`, a short `description`, and up to ~10 `keyFeatures` from the feature sections.",
+  "PRODUCTS — this is the highest-value output. List EVERY distinct product / model / series the site describes as its own `products[]` entry; do NOT cap the list (a hardware catalog may have a dozen or more). For each, fill from the detail/spec pages when present:",
+  "- `category`: the product's family/type (e.g. '在線式 UPS 不斷電系統', 'PDU 電源分配器').",
+  "- `oneLiner` + `description`: one short line + a short paragraph of what it is / who it's for.",
+  "- `pricingModel` + `priceText`: the pricing type, and the price EXACTLY as shown on the page (keep the currency and units, e.g. 'NT$4,290', '$99/mo'). Only if a price is actually shown.",
+  "- `targetMarket` (and `targetPersonas` if stated): who the product is for (e.g. '中小企業伺服器機房', '家庭與 SOHO').",
+  "- `keyFeatures[]`: the product's notable features (name + optional detail/benefit).",
+  "- `specs[]`: technical spec rows from a spec/comparison table as {name,value} pairs, e.g. {name:'容量', value:'1500VA/900W'}, {name:'輸出電壓', value:'110V'}, {name:'外型架構', value:'直立式'}. Product-detail AND product-comparison pages list models by attribute columns (capacity/architecture/form-factor/voltage/runtime) — attach those attribute values as specs[] on the matching product. A page WITH such a table SHOULD populate specs[].",
   "Also include, only when the text states them: HQ location, founded year, social links, key customers, and named people (as `contacts[]`).",
-  "Write the extracted text values in the SAME language as the page (e.g. Traditional Chinese if the page is in Chinese) — do not translate; quote the company's own wording. Field NAMES stay as in the schema.",
-  "Do NOT fabricate factual identifiers you cannot see in the text — emails, phone numbers, employee counts, revenue, or people. Keep each text value concise and never repeat text. Return ONLY valid JSON matching the schema.",
+  "Write the extracted text values in the SAME language as the page (e.g. Traditional Chinese if the page is in Chinese) — do not translate; quote the company's own wording. Field NAMES stay as in the schema (English keys).",
+  "Leave a field empty ONLY when the text does not state it. Do NOT fabricate identifiers, prices, numbers, or specs you cannot see in the text. Keep each text value concise and never repeat text. Return ONLY valid JSON matching the schema.",
 ].join(" ");
 
 function buildPrompt(raw: RawCrawl): string {
-  const header = `Source site: ${raw.finalUrl ?? raw.url}\nPage title: ${raw.title ?? ""}\nMeta description: ${raw.metaDescription ?? ""}\n`;
+  const header = `Source site: ${raw.finalUrl ?? raw.url}\nPage title: ${raw.title ?? ""}\nMeta description: ${raw.metaDescription ?? ""}\nPages crawled: ${raw.pages.length}\n`;
+  // 每頁各自截 PER_PAGE_PROMPT_CHARS（保廣度：不讓某一長頁吃光 prompt 預算），再整體截 MAX_PROMPT_CHARS。
   const bodies = raw.pages
-    .map((p, i) => `\n--- PAGE ${i + 1}: ${p.url} ---\n${p.text}`)
+    .map((p, i) => `\n--- PAGE ${i + 1}: ${p.url} ---\n${p.text.slice(0, PER_PAGE_PROMPT_CHARS)}`)
     .join("\n");
   const task =
-    "TASK: Read the website text below and produce a CONCISE company-profile JSON. " +
-    "Fill `description` and `industry` from what the page says the company does, even if not explicitly labelled. " +
-    "List each product/service the site describes under `products[]`. Use only facts from the text; keep values short and do not repeat yourself.\n\n";
+    "TASK: Read the multi-page website text below (each page labelled with its URL) and produce a company-profile JSON. " +
+    "Fill `description` and `industry` from what the site says the company does, even if not explicitly labelled. " +
+    "List EVERY product/model/series the site describes under `products[]`, and enrich each with category, pricing (priceText as shown), targetMarket, keyFeatures[] and specs[] taken from the product-detail/spec pages. " +
+    "Use only facts from the text; keep values short and do not repeat yourself.\n\n";
   return (task + header + bodies).slice(0, MAX_PROMPT_CHARS);
 }
 
@@ -175,6 +244,85 @@ function cleanUrl(u: unknown): string | undefined {
   if (typeof u !== "string") return undefined;
   const trimmed = u.trim().replace(/[\s,;'"’“”)\]}]+$/u, "");
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** 由「站上原樣顯示的價格字串」best-effort 解析出數值＋幣別。解析不出就回 undefined（原文仍留 pricingNotes）。 */
+function parsePrice(text: string): { amount: number; currency?: string } | undefined {
+  const numMatch = text.replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+  if (!numMatch) return undefined;
+  const amount = Number(numMatch[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return undefined;
+  let currency: string | undefined;
+  // NT$/新台幣 先判（避免被泛用 `$` 誤判成 USD）；`元` 在台灣站脈絡多為 TWD。
+  if (/NT\$|NTD|新台幣|台幣/.test(text)) currency = "TWD";
+  else if (/US\$|USD/.test(text)) currency = "USD";
+  else if (/€|EUR/.test(text)) currency = "EUR";
+  else if (/£|GBP/.test(text)) currency = "GBP";
+  else if (/¥|JPY/.test(text)) currency = "JPY";
+  else if (/RMB|CNY|人民幣/.test(text)) currency = "CNY";
+  else if (/元/.test(text)) currency = "TWD";
+  else if (/\$/.test(text)) currency = "USD";
+  return { amount, currency };
+}
+
+const strArr = (v: unknown): string[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim());
+  return out.length > 0 ? out : undefined;
+};
+
+/** 把模型的 ExtractedProduct[] 摺成 domain 的 Partial<CompanyProduct>[]（specs 陣列→物件、priceText→priceFrom/currency/pricingNotes）。 */
+function toProducts(items: ExtractedProduct[] | undefined): Partial<CompanyProduct>[] {
+  if (!Array.isArray(items)) return [];
+  const out: Partial<CompanyProduct>[] = [];
+  for (const p of items) {
+    const name = typeof p?.name === "string" ? p.name.trim() : "";
+    if (!name) continue;
+    const prod: Partial<CompanyProduct> = { name };
+    if (p.category) prod.category = p.category;
+    if (p.oneLiner) prod.oneLiner = p.oneLiner;
+    if (p.description) prod.description = p.description;
+    const purl = cleanUrl(p.productUrl);
+    if (purl) prod.productUrl = purl;
+    const durl = cleanUrl(p.docsUrl);
+    if (durl) prod.docsUrl = durl;
+    if (p.pricingModel) prod.pricingModel = p.pricingModel;
+    if (p.targetMarket) prod.targetMarket = p.targetMarket;
+    const integrations = strArr(p.integrations);
+    if (integrations) prod.integrations = integrations;
+    const differentiators = strArr(p.differentiators);
+    if (differentiators) prod.differentiators = differentiators;
+    const targetPersonas = strArr(p.targetPersonas);
+    if (targetPersonas) prod.targetPersonas = targetPersonas;
+    // 價格：原文留 pricingNotes；能解析就補 priceFrom/currency。
+    if (typeof p.priceText === "string" && p.priceText.trim()) {
+      prod.pricingNotes = p.priceText.trim();
+      const parsed = parsePrice(p.priceText);
+      if (parsed) {
+        prod.priceFrom = parsed.amount;
+        if (parsed.currency) prod.currency = parsed.currency;
+      }
+    }
+    // 功能：{name,detail?,benefit?}[]（ProductFeature）。
+    if (Array.isArray(p.keyFeatures)) {
+      const feats = p.keyFeatures
+        .filter((f): f is { name: string; detail?: string; benefit?: string } => Boolean(f) && typeof f.name === "string" && f.name.trim().length > 0)
+        .map((f) => ({ name: f.name.trim(), detail: f.detail?.trim() || undefined, benefit: f.benefit?.trim() || undefined }));
+      if (feats.length > 0) prod.keyFeatures = feats;
+    }
+    // 規格：{name,value}[] → 自由 key-value 物件。
+    if (Array.isArray(p.specs)) {
+      const specObj: Record<string, string> = {};
+      for (const s of p.specs) {
+        const k = typeof s?.name === "string" ? s.name.trim() : "";
+        const v = typeof s?.value === "string" ? s.value.trim() : "";
+        if (k && v) specObj[k] = v;
+      }
+      if (Object.keys(specObj).length > 0) prod.specs = specObj;
+    }
+    out.push(prod);
+  }
+  return out;
 }
 
 /** 由抽出的 company 物件逐欄合成公司級 provenance（爬蟲來源）。 */
@@ -199,6 +347,8 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
       system: SYSTEM,
       prompt,
       schema: RESPONSE_SCHEMA,
+      maxOutputTokens: EXTRACT_MAX_OUTPUT_TOKENS,
+      temperature: EXTRACT_TEMPERATURE,
     });
   }
 
@@ -215,7 +365,7 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
       return {
         company,
         contacts: ex.contacts ?? [],
-        products: ex.products ?? [],
+        products: toProducts(ex.products),
         news: ex.news ?? [],
         provenance: companyProvenance(company, sourceUrl),
       };

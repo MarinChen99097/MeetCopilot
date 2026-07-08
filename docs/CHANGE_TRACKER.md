@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 16:30 | 深度爬取大幅強化（2 層 BFS+平行+雙語評分+單產品抽取，5 分內）
+- **工作區**: apps/server
+- **類型**: feat
+- **檔案**: `research/crawler.ts`（BFS+平行 pool+雙語評分+normalizeUrl+env MAX_CRAWL_PAGES/CRAWL_CONCURRENCY+softDeadline）、`research/extractor.ts`（per-product schema+多頁聚合+temp 0.3）、`gemini.ts`（temperature 傳遞）、`.env.example`
+- **改了什麼**: detailed 從「1 層/5 頁/循序/英文評分」→ **2 層 BFS＋有界平行（CRAWL_CONCURRENCY 預設 5）＋雙語連結評分（中英，看 pathname+連結文字）＋逐產品抽取**。總頁數 MAX_CRAWL_PAGES 預設 28（clamp 2-40）；softDeadline=硬 deadline-15s（回 partial+teardown 在 5 分硬上限前收尾）；normalizeUrl 去重（#/追蹤參數/尾斜線+redirect final）。extractor 聚合多頁（標來源 URL、每頁 6k、總 180k）逐產品填 category/pricing/specs/targetMarket/keyFeatures。
+- **為什麼**: 使用者反映爬取效果要加強、要像 EZpage 點連結往下追。**CyberPower 實測：6 產品全空→33-35 產品/100% 有類別，28 頁 2 層 ~80s（遠低於 5 分）**。誠實：定價/功能多空是真的（B2B 硬體不公開、不幻想）、規格量跑動（JS 比較表）。typecheck 綠、ssrf 5/5、server 36/36、fresh-context 審查 PASS（SSRF/SIGKILL/300s/BFS race-safe/quick 不變）。
+
 ### 2026-07-08 14:30 | 共用 EZpage 帳號＝Google 登入＋爬蟲逾時放寬
 - **工作區**: apps/server＋apps/web
 - **類型**: feat

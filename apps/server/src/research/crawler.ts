@@ -14,9 +14,15 @@
  *     目標 host、其餘 host 交給步驟 3 的 page.route 逐請求 SSRF 閘（resolveAndValidate 擋私網）：使用者提供之目標
  *     URL 的 TOCTOU 仍關閉（已 pin），而跨 host 頁面渲染／重導不再被誤擋。子資源 host 屬 route-guard 判定期防線。
  *
- * quick=單頁 text+meta；detailed=+ 子頁連結評分（最多 5，同源）+ 選配截圖。robust 逾時 + body 文字上限。
+ * quick=單頁 text+meta（不變的快路徑）。
+ * detailed=**2 層 BFS ＋有界平行**（key to fitting depth+breadth in 5 min）：
+ *  - 從首頁抓 a[href]（含可見文字），以雙語關鍵字（英/中）對 **pathname＋連結文字**評分，取高分同源連結（level 1）；
+ *    再從 level-1 頁抓它們的高分連結（level 2）——這樣才觸達「產品列表→產品明細」頁。
+ *  - 以 CRAWL_CONCURRENCY（預設 5）條平行 worker（同 context 多開 Page）抓，總頁數 MAX_CRAWL_PAGES（預設 28）為上限；
+ *    URL 正規化（去 #fragment／追蹤參數／尾斜線）去重；同源限制（同 host → 同 IP pin）。
+ *  - 整場仍受硬 deadline 約束（L13：任何 hung nav/close 都要能被掐斷）；逼近 deadline → 停止加頁，回傳已抓到的（partial 可接受）。
  */
-import { chromium, type Browser, type BrowserServer, type Route, type Request as PwRequest } from "playwright";
+import { chromium, type Browser, type BrowserServer, type Page, type Route, type Request as PwRequest } from "playwright";
 import { isPrivateIp, resolveAndValidate } from "../import/extract.js";
 
 /**
@@ -43,7 +49,14 @@ const NAV_TIMEOUT_MAX_MS = 120_000;
 const RETRY_NAV_TIMEOUT_MS = 10_000;
 const SETTLE_TIMEOUT_MS = 4_000; // networkidle 等待上限（超時不視為失敗）
 const MAX_TEXT_CHARS = 12_000; // 每頁抽取文字上限
-const MAX_SUB_PAGES = 5; // detailed 子頁上限（同 ezpagesite max_sub_pages）
+// detailed BFS 參數：
+const MAX_CRAWL_PAGES_DEFAULT = 28; // 整場總頁數（含首頁）預設；env MAX_CRAWL_PAGES 覆寫，clamp [2,40]
+const CRAWL_CONCURRENCY_DEFAULT = 5; // 平行 worker 數預設；env CRAWL_CONCURRENCY 覆寫，clamp [1,8]
+const MAX_CRAWL_DEPTH = 2; // 從首頁往下追連結的層數（level 1 產品列表 → level 2 產品明細）
+const LEVEL1_FRACTION = 0.35; // 非末層取用預算比例——留較多餘額給更深層的產品明細頁（否則 level-1 分類頁就把預算吃光）
+// softDeadline 相對硬 deadline 的安全邊際：留給「回傳 partial ＋有界 teardown（≤10s）」在硬上限前收尾，
+// 避免整場 crawl 被外層硬 guard reject（會丟掉已抓到的頁）。
+const DEADLINE_SAFETY_MARGIN_MS = 15_000;
 // 整場 crawl 硬 deadline（仍有界，L13：hung navigation/close 不能卡死背景 enrich job）。
 // 使用者「慢慢爬沒事」→放寬讓慢頁爬得完：quick 單頁 120s、detailed（最多 5 子頁）300s。
 // 可經 env CRAWL_DEADLINE_QUICK_MS / CRAWL_DEADLINE_DETAILED_MS 覆寫（於呼叫時讀，見 crawlDeadlineMs）。
@@ -73,6 +86,20 @@ export function crawlDeadlineMs(mode: "quick" | "detailed"): number {
   return mode === "detailed"
     ? clampEnvMs("CRAWL_DEADLINE_DETAILED_MS", CRAWL_DEADLINE_DETAILED_DEFAULT_MS, 30_000, CRAWL_HARD_CAP_MS)
     : clampEnvMs("CRAWL_DEADLINE_QUICK_MS", CRAWL_DEADLINE_QUICK_DEFAULT_MS, 15_000, CRAWL_HARD_CAP_MS);
+}
+/**
+ * detailed BFS 的總頁數上限（含首頁；呼叫時讀 env MAX_CRAWL_PAGES）。預設 28、clamp [2,40]。
+ * 真正的硬止血仍是整場 crawl deadline（≤5 分鐘）：無論頁數上限多少，逼近 deadline 就停止加頁。匯出供測試。
+ */
+export function maxCrawlPages(): number {
+  return clampEnvMs("MAX_CRAWL_PAGES", MAX_CRAWL_PAGES_DEFAULT, 2, 40);
+}
+/**
+ * detailed BFS 的平行 worker 數（呼叫時讀 env CRAWL_CONCURRENCY）。預設 5、clamp [1,8]——
+ * 這是「5 分鐘內塞進更多頁」的關鍵：同一 context 多開 Page 併發抓，慢頁不擋其他頁。匯出供測試。
+ */
+export function crawlConcurrency(): number {
+  return clampEnvMs("CRAWL_CONCURRENCY", CRAWL_CONCURRENCY_DEFAULT, 1, 8);
 }
 // browser.close() 在此機器上會永久卡住 → 給它 5s，逾時就 SIGKILL 底層 Chromium process。
 const BROWSER_CLOSE_TIMEOUT_MS = 5_000;
@@ -109,22 +136,119 @@ export interface CrawlProvider {
   crawl(opts: CrawlOptions): Promise<RawCrawl>;
 }
 
-/** 子頁連結評分關鍵字（borrow ezpagesite main.py:2317-2323 的權重法）。 */
+/**
+ * 子頁連結評分關鍵字——**雙語（英/中）**，且對「pathname＋連結可見文字」一起評分（borrow ezpagesite 權重法，
+ * 但擴充中文與 spec/價格/型號 類詞，優先產品/規格/定價頁）。用 substring（非 \b），因 CJK 與已解碼路徑沒有詞界。
+ */
 const LINK_KEYWORDS: { re: RegExp; weight: number }[] = [
-  { re: /\b(about|company|who-?we-?are)\b/i, weight: 5 },
-  { re: /\b(product|products|solutions?|platform|features?)\b/i, weight: 5 },
-  { re: /\b(pricing|plans?)\b/i, weight: 4 },
-  { re: /\b(team|leadership|people|management|founders?)\b/i, weight: 4 },
-  { re: /\b(customers?|case-?stud(y|ies)|clients?)\b/i, weight: 3 },
-  { re: /\b(news|press|blog|media)\b/i, weight: 2 },
-  { re: /\b(contact|careers?|jobs?)\b/i, weight: 2 },
-  { re: /\b(docs?|documentation|developers?)\b/i, weight: 3 },
+  // 產品／系列／規格／型號（最高權重——這是 CRM 要的深資料所在）
+  { re: /product|solutions?|platform|features?|series|catalog(ue)?|line-?up|models?|spec(ification)?s?|datasheet/i, weight: 5 },
+  { re: /產品|系列|型號|規格|產品線|型錄|技術規格|解決方案/, weight: 5 },
+  // 定價／購買
+  { re: /pricing|plans?|price|quote|buy|shop|store|where-?to-?buy/i, weight: 4 },
+  { re: /價格|定價|報價|購買|商店|經銷|通路|哪裡買/, weight: 4 },
+  // 技術文件／支援／下載（常含 spec）
+  { re: /docs?|documentation|developers?|support|download|resources?|manuals?/i, weight: 3 },
+  { re: /文件|技術|下載|支援|服務|手冊|資源/, weight: 3 },
+  // 關於／公司
+  { re: /about|company|who-?we-?are|profile|overview|corporate/i, weight: 3 },
+  { re: /關於|公司|簡介|概覽|品牌|企業/, weight: 3 },
+  // 團隊／主管
+  { re: /team|leadership|people|management|founders?|executives?|board/i, weight: 3 },
+  { re: /團隊|主管|領導|經營團隊|管理團隊|創辦人|高層|董事/, weight: 3 },
+  // 客戶／案例
+  { re: /customers?|case-?stud(y|ies)|clients?|success|references?/i, weight: 2 },
+  { re: /客戶|案例|實績|成功案例|合作夥伴/, weight: 2 },
+  // 新聞／媒體
+  { re: /news|press|blog|media|events?|insights?/i, weight: 2 },
+  { re: /新聞|消息|公告|媒體|活動|部落格/, weight: 2 },
+  // 聯絡／徵才（低權重，仍偶含公司資訊）
+  { re: /contact|careers?|jobs?/i, weight: 1 },
+  { re: /聯絡|聯繫|徵才|職缺|人才/, weight: 1 },
 ];
 
-function scoreLink(href: string): number {
+/** 認證/交易/工具/法遵頁——跳過（return 0）：無 CRM 價值又會排擠產品明細頁的預算。只比對 pathname。 */
+const LINK_EXCLUDE_RE =
+  /(^|\/)(sign-?in|log-?in|log-?out|sign-?up|register|account|my-?account|cart|checkout|wishlist|password|reset|search|sitemap|privacy|terms|cookies?|gdpr|legal|subscribe|newsletter|rss|feed)(\/|$)/i;
+/**
+ * 「個別產品明細/規格頁」加成——這是 specs/pricing/features 的真正所在，須排在「產品總覽/分類頁」之前。
+ * CyberPower 的明細頁樣式：/product/sku/<model>；一般站另見 /series/、/model/、/dp/、product-detail、規格/型號/比較。
+ */
+const LINK_DETAIL_BOOST: { re: RegExp; weight: number }[] = [
+  { re: /\/sku\/|\/product\/sku|\/series\/|\/model\/|\/dp\/|product-?detail/i, weight: 5 },
+  { re: /comparison|compare|spec(ification)?s?|datasheet|規格|型號|比較|技術規格/i, weight: 2 },
+];
+
+/** 對「pathname（試解碼）＋連結文字」評分。分數越高越像產品明細/規格/定價/公司頁。認證/工具頁→0。 */
+function scoreLink(pathname: string, text: string): number {
+  let path = pathname;
+  try {
+    path = decodeURIComponent(pathname);
+  } catch {
+    /* 保留原樣 */
+  }
+  if (LINK_EXCLUDE_RE.test(path)) return 0;
+  const hay = `${path} ${text}`;
   let score = 0;
-  for (const k of LINK_KEYWORDS) if (k.re.test(href)) score += k.weight;
+  for (const k of LINK_KEYWORDS) if (k.re.test(hay)) score += k.weight;
+  for (const k of LINK_DETAIL_BOOST) if (k.re.test(hay)) score += k.weight;
   return score;
+}
+
+/** 已評分的候選連結（url 已正規化）。 */
+interface ScoredLink {
+  url: string;
+  score: number;
+}
+
+/** 追蹤／噪音 query 參數（去除以穩定 dedup key，不影響內容）。 */
+const TRACKING_PARAM_RE = /^(utm_|mc_|ref$|ref_|fbclid$|gclid$|gclsrc$|_ga$|yclid$|msclkid$|igshid$|mkt_tok$|src$|source$)/i;
+
+/**
+ * URL 正規化（dedup key）：去 #fragment、去追蹤參數、其餘 query 依鍵排序、去尾斜線（root 除外）。
+ * 讓 `/p/`、`/p`、`/p?utm_x=1#top` 收斂為同一鍵，避免重複抓同一頁。
+ */
+function normalizeUrl(u: URL): string {
+  const c = new URL(u.toString());
+  c.hash = "";
+  for (const key of [...c.searchParams.keys()]) {
+    if (TRACKING_PARAM_RE.test(key)) c.searchParams.delete(key);
+  }
+  c.searchParams.sort();
+  if (c.pathname.length > 1 && c.pathname.endsWith("/")) {
+    c.pathname = c.pathname.replace(/\/+$/, "");
+  }
+  return c.toString();
+}
+
+/** 從一個已導航的 Page 抓 a[href]＋可見文字，映射為同源、正規化、評分>0 的候選（頁內先去重）。 */
+async function collectScoredLinks(browserPage: Page, origin: string): Promise<ScoredLink[]> {
+  const raw = await browserPage
+    .evaluate(
+      "Array.prototype.slice.call(document.querySelectorAll('a[href]')).map(function(a){return {href:a.href, text:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120)};})",
+    )
+    .catch(() => [] as unknown);
+  const arr = Array.isArray(raw) ? raw : [];
+  const localSeen = new Set<string>();
+  const out: ScoredLink[] = [];
+  for (const item of arr) {
+    const href = (item as { href?: unknown } | null)?.href;
+    const textRaw = (item as { text?: unknown } | null)?.text;
+    if (typeof href !== "string") continue;
+    let abs: URL;
+    try {
+      abs = new URL(href, browserPage.url());
+    } catch {
+      continue;
+    }
+    if (abs.origin !== origin) continue; // 同源限制（同 host → 同 IP pin，SSRF 不放大）
+    const norm = normalizeUrl(abs);
+    if (localSeen.has(norm)) continue;
+    localSeen.add(norm);
+    const score = scoreLink(abs.pathname, typeof textRaw === "string" ? textRaw : "");
+    if (score > 0) out.push({ url: norm, score });
+  }
+  return out;
 }
 
 /** 對一個 request 的 URL 判定是否放行（供 page.route）。快取每 host 的判定。 */
@@ -254,6 +378,9 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
   const validated = await resolveAndValidate(start.hostname);
 
   const deadline = Date.now() + deadlineMs;
+  // 內部軟 deadline：比外層硬 guard 早 DEADLINE_SAFETY_MARGIN_MS 停手，讓 runCrawl 有時間回傳 partial ＋有界 teardown，
+  // 在 5 分鐘硬上限前收尾（否則整場被 crawl() 的硬 guard reject → 丟掉已抓到的頁）。
+  const softDeadline = deadline - DEADLINE_SAFETY_MARGIN_MS;
   let server: BrowserServer | null = null;
   let browser: Browser | null = null;
   const routeCache = new Map<string, Promise<boolean>>();
@@ -288,43 +415,108 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
     const metaDescription = String(metaRaw ?? "") || undefined;
 
     if (opts.mode === "detailed") {
-      const cap = Math.min(opts.maxSubPages ?? MAX_SUB_PAGES, MAX_SUB_PAGES);
       const origin = new URL(home.url).origin;
-      const hrefsRaw = await page
-        .evaluate(
-          "Array.prototype.slice.call(document.querySelectorAll('a[href]')).map(function(a){return a.href;})",
-        )
-        .catch(() => [] as unknown);
-      const hrefs = Array.isArray(hrefsRaw)
-        ? hrefsRaw.filter((h): h is string => typeof h === "string")
-        : [];
-      const seen = new Set<string>([home.url]);
-      const candidates: { url: string; score: number }[] = [];
-      for (const raw of hrefs) {
-        let abs: URL;
-        try {
-          abs = new URL(raw, home.url);
-        } catch {
-          continue;
+      // 總頁數上限：env MAX_CRAWL_PAGES（預設 28）；opts.maxSubPages 若提供可再壓低（1 首頁 + N 子頁）。
+      const pageBudget = Math.min(maxCrawlPages(), 1 + (opts.maxSubPages ?? Number.MAX_SAFE_INTEGER));
+      const concurrency = crawlConcurrency();
+      // 已見（正規化）URL——含「已抓」與「已排入 frontier」，只在單執行緒段變動，避免平行 worker 重複排入。
+      const seen = new Set<string>([normalizeUrl(new URL(home.url))]);
+      const markNew = (links: ScoredLink[]): ScoredLink[] => {
+        const fresh: ScoredLink[] = [];
+        for (const l of links) {
+          if (seen.has(l.url)) continue;
+          seen.add(l.url);
+          fresh.push(l);
         }
-        abs.hash = "";
-        const norm = abs.toString();
-        if (abs.origin !== origin) continue; // 同源限制
-        if (seen.has(norm)) continue;
-        seen.add(norm);
-        const score = scoreLink(abs.pathname);
-        if (score > 0) candidates.push({ url: norm, score });
-      }
-      candidates.sort((x, y) => y.score - x.score);
-      for (const c of candidates.slice(0, cap)) {
-        if (Date.now() > deadline) break; // 趨近 deadline → 停止加子頁，回傳已抓到的
-        try {
-          const sub = await extractPage(page, c.url, wantShots, navTimeout);
-          pages.push(sub);
-          sourcesVisited.push(sub.url);
-        } catch {
-          // 單一子頁失敗不致命——續抓其餘。
+        return fresh;
+      };
+
+      // 平行頁池（同 context 多開 Page；含首頁的 page 當 pool[0] 複用）。context.route 是 context 級 → 每頁都過 SSRF 閘。
+      const pool: Page[] = [page];
+      const ensurePages = async (n: number): Promise<Page[]> => {
+        while (pool.length < n) {
+          const p = await context.newPage();
+          p.setDefaultNavigationTimeout(navTimeout);
+          pool.push(p);
         }
+        return pool.slice(0, n);
+      };
+
+      // 有界平行抓一批 URL；整批對 softDeadline 賽跑（逾時即回已完成的，不空等 in-flight 慢頁——它們由 teardown 收尾）。
+      const fetchMany = async (
+        urls: string[],
+        collect: boolean,
+      ): Promise<{ page: CrawledPage; links: ScoredLink[] }[]> => {
+        const results: { page: CrawledPage; links: ScoredLink[] }[] = [];
+        if (urls.length === 0 || Date.now() > softDeadline) return results;
+        const workers = await ensurePages(Math.min(concurrency, urls.length));
+        let idx = 0;
+        const runWorker = async (wp: Page): Promise<void> => {
+          for (;;) {
+            if (Date.now() > softDeadline) return;
+            const i = idx++;
+            if (i >= urls.length) return;
+            const url = urls[i]!;
+            try {
+              const cp = await extractPage(wp, url, wantShots, navTimeout);
+              const links = collect ? await collectScoredLinks(wp, origin) : [];
+              results.push({ page: cp, links });
+            } catch {
+              // 單一子頁失敗不致命——續抓其餘。
+            }
+          }
+        };
+        const all = Promise.all(workers.map(runWorker));
+        all.catch(() => {}); // race 掉 all 後殘餘 worker 的錯誤已在其 try/catch 內處理，這裡兜底避免 unhandled rejection。
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const guard = new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, Math.max(0, softDeadline - Date.now()));
+        });
+        await Promise.race([all, guard]);
+        if (timer) clearTimeout(timer);
+        return results;
+      };
+
+      // 依「導航後的最終 URL」去重（避免多個候選各自 redirect 到同一頁——如都導回首頁——被重複抽取、浪費預算）。
+      const fetchedFinals = new Set<string>([normalizeUrl(new URL(home.url))]);
+
+      // frontier = 已排入、依分數降冪的候選（尚未抓）。首頁連結 → level-1 候選。
+      let frontier = markNew(await collectScoredLinks(page, origin)).sort((a, b) => b.score - a.score);
+
+      // 2 層 BFS：depth 1 抓 level-1（限量、保留預算）並展開其連結；depth 2 抓 level-2（不再展開）。
+      for (let depth = 1; depth <= MAX_CRAWL_DEPTH; depth++) {
+        if (Date.now() > softDeadline || pages.length >= pageBudget || frontier.length === 0) break;
+        const remaining = pageBudget - pages.length;
+        const collect = depth < MAX_CRAWL_DEPTH; // 末層不再展開連結
+        const take = collect
+          ? Math.min(frontier.length, remaining, Math.max(1, Math.ceil((pageBudget - 1) * LEVEL1_FRACTION)))
+          : Math.min(frontier.length, remaining);
+        const batch = frontier.slice(0, take);
+        frontier = frontier.slice(take); // 未取的同層候選留在 frontier（次要 fallback，別浪費預算）
+        if (process.env.CRAWL_DEBUG) {
+          // 診斷用（env-gated，production 預設關）：印各層抓取量，供 ops/驗證觀察 BFS 深度與頁數。
+          console.error(
+            `[crawl] depth ${depth}/${MAX_CRAWL_DEPTH}: fetching ${batch.length} (visited ${pages.length}/${pageBudget}, frontier left ${frontier.length}, concurrency ${concurrency})`,
+          );
+        }
+        const results = await fetchMany(batch.map((b) => b.url), collect);
+        const children: ScoredLink[] = [];
+        for (const r of results) {
+          if (pages.length >= pageBudget) break;
+          let finalNorm: string;
+          try {
+            finalNorm = normalizeUrl(new URL(r.page.url));
+          } catch {
+            finalNorm = r.page.url;
+          }
+          if (fetchedFinals.has(finalNorm)) continue; // 導航後撞到已抓過的最終 URL（如都導回首頁）→ 略過
+          fetchedFinals.add(finalNorm);
+          pages.push(r.page);
+          sourcesVisited.push(r.page.url);
+          if (collect) children.push(...r.links);
+        }
+        // 下一輪：本層新子連結（更深的產品明細）＋未取同層候選，重新去重＋降冪排序。
+        frontier = [...frontier, ...markNew(children)].sort((a, b) => b.score - a.score);
       }
     }
 

@@ -26,6 +26,12 @@ export interface GenerateJsonOptions {
    * failure that otherwise grinds a background job for minutes). A rich company profile fits well under this.
    */
   maxOutputTokens?: number;
+  /**
+   * Sampling temperature (default: model default, ~1.0). Lower = more deterministic. For structured
+   * EXTRACTION (crawl→CRM) pass a low value (~0.3): at the default temperature the same page yields wildly
+   * different product counts run-to-run (observed 1 vs 33 on cyberpower.com) — low temp stabilizes enumeration.
+   */
+  temperature?: number;
 }
 
 /** 一則 grounding 引用（Google Search grounding 的來源）。 */
@@ -160,6 +166,7 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
               responseMimeType: "application/json",
               responseSchema: opts.schema as never,
               maxOutputTokens: opts.maxOutputTokens ?? 8192,
+              ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
             },
           });
           const text = response.text;
