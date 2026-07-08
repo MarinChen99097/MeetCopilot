@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 18:00 | 全網深度研究 enrich 模式（deep）— 不鎖公司網域、多來源、標真出處
+- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
+- **類型**: feat
+- **檔案**: shared crm-types（CrawlMode 加 'deep'、ProvenanceInput.sourceType）；crm `migrations/010_deep_mode.sql`＋`migrations-pg/010`（crawl_jobs.mode CHECK 加 deep）＋`repos-prospect.ts`（provenance 帶外部 sourceType）；server 新 `research/deep-research.ts`（DeepResearcher：6-9 組雙語 grounding 查詢+排序引用+深讀 top6 外部來源，跳過公司網域，SSRF-safe）＋`research/deep-extractor.ts`（逐事實 [S#] 來源標記→provenance source_url）＋`import/extract.ts`（回 finalUrl 解 redirect 到真發布者）＋`orchestrator.ts`（deep：DeepResearcher∥網站爬蟲→news/funding/people/competitors 寫入）＋routes（MODES 加 deep）；web EnrichPanel 第三選項「深度（全網研究）」
+- **改了什麼**: enrich 從「只爬公司網站」→ 新增 **deep 模式：全網研究**。以公司名/網址為起點，Gemini Google Search 多角度查（概況/新聞/募資/主管/競爭對手/產品，中英雙語）→深讀新聞/維基等外部來源→綜合填 CRM，**每欄 provenance.source_url 指向真實外部網址**（FT/Wikipedia/cnyes…非公司網域）。有界（DEEP_RESEARCH_BUDGET_MS 150s∥網站爬 ≤5min）、不幻想、成本記帳。
+- **為什麼**: 使用者要「不被鎖死在公司網址、要能去報導/wiki 等全網找」。**碩天科技實測：從 FT/Wikipedia/cnyes/digitimes/businesswire 撈到 11 概況+5 新聞+6 主管+10 競爭對手，附真實出處**。誠實：共用品牌名跨實體消歧不完美（CyberPower TW vs 美國 PC）。typecheck 綠/server 36/36/CRM 43/43/SSRF 仍擋內網。
+
 ### 2026-07-08 16:30 | 深度爬取大幅強化（2 層 BFS+平行+雙語評分+單產品抽取，5 分內）
 - **工作區**: apps/server
 - **類型**: feat

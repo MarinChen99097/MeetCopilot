@@ -148,14 +148,20 @@ function decodeEntities(s: string): string {
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
 }
 
-/** 抓網址並抽成純文字。回傳 { title?, text }。SSRF-guarded（含 DNS pin）＋單一逾時涵蓋 body。 */
-export async function extractFromUrl(rawUrl: string): Promise<{ title?: string; text: string }> {
+/**
+ * 抓網址並抽成純文字。回傳 { title?, text, finalUrl? }。SSRF-guarded（含 DNS pin）＋單一逾時涵蓋 body。
+ * `finalUrl`＝逐跳重導後實際抓到的 URL（如 grounding 的 redirect → 真實新聞/維基頁）；供 deep 研究把
+ * provenance 錨定到「真正的來源網址」而非中介 redirect。缺（無 res.url）→ 沿用請求的 rawUrl。
+ */
+export async function extractFromUrl(rawUrl: string): Promise<{ title?: string; text: string; finalUrl?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   const dispatchers: Agent[] = [];
   try {
     const res = await safeFetch(rawUrl, controller.signal, 0, dispatchers);
     if (!res.ok) throw new Error(`來源回應 ${res.status}`);
+    // res.url＝最後一跳（非重導）的請求 URL＝真實來源頁（redirect: manual + 逐跳遞迴後）。
+    const finalUrl = typeof res.url === "string" && res.url.length > 0 ? res.url : rawUrl;
     const ctype = res.headers.get("content-type") ?? "";
     if (!/text\/html|application\/xhtml|text\/plain/i.test(ctype)) {
       await res.body?.cancel().catch(() => {});
@@ -190,7 +196,7 @@ export async function extractFromUrl(rawUrl: string): Promise<{ title?: string; 
       }
       html = Buffer.concat(chunks).toString("utf8");
     }
-    return htmlToText(html);
+    return { ...htmlToText(html), finalUrl };
   } finally {
     clearTimeout(timer);
     for (const d of dispatchers) void d.close().catch(() => {});
@@ -207,7 +213,7 @@ export async function extractFromPdf(buffer: Buffer): Promise<{ text: string }> 
 
 /** M1_CONTRACT §2 SafeFetcher：undici DNS-pin 單頁抽取＋PDF 抽取的具名綁定。 */
 export interface SafeFetcher {
-  extractFromUrl(url: string): Promise<{ title?: string; text: string }>;
+  extractFromUrl(url: string): Promise<{ title?: string; text: string; finalUrl?: string }>;
   extractFromPdf(buf: Buffer): Promise<{ text: string }>;
 }
 

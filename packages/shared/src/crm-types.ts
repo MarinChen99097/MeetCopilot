@@ -99,8 +99,12 @@ export type ActivityDirection = "inbound" | "outbound" | "internal";
 /** enrichment 目標（crawl_jobs.target_type，CRM_SCHEMA §8）。 */
 export type CrawlTargetType = "company" | "contact";
 
-/** 爬蟲模式（crawl_jobs.mode，CRM_SCHEMA §8）：quick＝會中、detailed＝會前。 */
-export type CrawlMode = "quick" | "detailed";
+/**
+ * 爬蟲/研究模式（crawl_jobs.mode，CRM_SCHEMA §8）：
+ *  - quick＝會中單頁；detailed＝會前爬官網＋子頁；
+ *  - deep＝全網深度研究（Google-Search grounding 扇出 + 讀取新聞/維基/公開檔 + 官網爬蟲），不鎖官網。
+ */
+export type CrawlMode = "quick" | "detailed" | "deep";
 
 /** enrichment job 狀態（crawl_jobs.status，CRM_SCHEMA §8；同 API_CONTRACT §3）。 */
 export type CrawlJobStatus = "queued" | "running" | "done" | "failed";
@@ -769,6 +773,12 @@ export interface ProvenanceInput {
   value: string;
   sourceUrl?: string;
   confidence?: number;
+  /**
+   * 來源類型（field_provenance.source_type）。可選、向後相容：detailed/quick 不帶 → repo 沿用預設
+   * （company='company_website'、contact='linkedin'）。deep（全網研究）帶入真實來源分類
+   * （'wikipedia'/'news'/'web'…），使 UI 徽章能標示「此資訊來自 <該外部來源>」而非官網。
+   */
+  sourceType?: string;
 }
 
 /**

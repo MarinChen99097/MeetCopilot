@@ -36,6 +36,15 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 18:00 | 研究引擎不再鎖公司網域＝新增全網深度研究（deep 模式）
+- **誰決定**: 使用者（「應有專門 agent 深度搜尋公司資料，公司網址只是起點，要去報導/wiki 等全網找，不要被鎖死在公司網址」）＋Fable（設計）
+- **決策**: enrich 新增 **deep 模式**——專門的全網研究：以公司名/網址為起點，Gemini Google Search 多角度雙語查詢＋深讀外部來源（新聞/維基/產業/公開資料，跳過公司網域）＋綜合填 CRM，**關鍵＝每欄 provenance 指向真實外部來源 URL**（不是公司網域）。既有 quick/detailed（爬公司網站）不變；deep 額外並行網站爬蟲補產品。GroundingProvider（原只接 HUD /ground）現也接進 enrich。
+- **考慮過的替代**: agentic 迭代 loop（Gemini 自行決定後續查詢）——第一版用結構化多查詢（可靠有界），迭代式列為後續。
+- **實測（碩天科技/CyberPower）**: 從 FT/Wikipedia/cnyes/digitimes/businesswire 撈到 11 概況+5 新聞+6 主管+10 競爭對手，員工數 1730←FT、董事長郭瑾←Wikipedia，附真實出處。~$0.013/次。
+- **誠實限制**: 共用品牌名跨實體消歧不完美（CyberPower TW UPS vs 美國電競 PC，6 主管有 2 疑錯實體）；redirect 解析 best-effort；LLM 合成非決定性（已修 JSON runaway）；找不到私有/付費牆/未索引資料。
+- **新 env**: DEEP_RESEARCH_BUDGET_MS(150s)/MAX_QUERIES(9)/MAX_SOURCES(6)；migration 010（crawl_jobs.mode 加 deep，server boot 自動套）。
+- **影響**: research 全模組、CRM provenance sourceType、web EnrichPanel；需重建 server image 重部署（migrate() boot 套 010）。
+
 ### 2026-07-08 14:30 | 帳號互通＝Google 登入（沿用 EZpage client）＋爬蟲放寬
 - **誰決定**: 使用者（要跟 EZpage 帳號互通；澄清 EZpage 純 Google 登入無密碼；沿用同 OAuth client；爬蟲慢沒事）＋Fable（設計）
 - **決策**:

@@ -3,18 +3,45 @@
  *   crawl → extract → core.companies.upsertFromCrawl(值+provenance 同一 tx) → job(done, fieldsFilled/sources)。
  * 失敗 → job(failed, error)。整條在背景（fire-and-forget），route 立刻回 202。
  *
+ * mode='deep'（全網深度研究）：對 company target，**並行**跑 DeepResearcher（Google-Search grounding 扇出 +
+ *   深讀新聞/維基/公開檔）與官網 detailed 爬蟲（取產品），把「web 合成的公司側資料（每欄帶真實外部 source_url）
+ *   + 官網產品」一起寫入 CRM——news→company_news、funding→company_funding_rounds、key people→contacts（各帶
+ *   provenance）、competitors→research note。這是「不鎖官網」的關鍵：profile 欄位的 provenance 指向真實新聞/維基。
+ *
  * ⚠️ 語意註記（seam 提醒）：upsertFromCrawl 以 **domain** 為 dedupe key，而 enrich 以 **targetId** 指名既有列。
- *   故背景流程用「既有列的 domain（缺則從 URL host 推）」呼叫 upsert，讓它命中同一列。若既有列無 domain 且
- *   URL host 也無法對上，B1 的 upsert 可能新建列——此 id↔domain 落差列為風險，交 Verify 以真實站點確認。
+ *   故背景流程用「既有列的 domain（缺則從 URL host 推）」呼叫 upsert，讓它命中同一列。
  */
 import type { CrmCore } from "@meetcopilot/crm";
-import type { CrawlMode, CrawlTargetType, CrawlPayload, ContactCrawlPayload } from "@meetcopilot/shared";
+import type {
+  CrawlMode,
+  CrawlTargetType,
+  CrawlPayload,
+  ContactCrawlPayload,
+  Company,
+  CompanyProduct,
+  NewCompanyNews,
+  NewCompanyFunding,
+  ProvenanceInput,
+} from "@meetcopilot/shared";
 import type { CrawlProvider } from "./crawler.js";
 import { createCrawlExtractor, type CrawlExtractor } from "./extractor.js";
+import { createDeepExtractor, type DeepExtractor, type DeepExtraction } from "./deep-extractor.js";
+import {
+  createDeepResearcher,
+  resolveRedirects,
+  classifySourceType,
+  type DeepResearcher,
+  type DeepResearchBundle,
+} from "./deep-research.js";
+import type { GroundingProvider } from "./grounding.js";
 import type { CrawlJobStore } from "./jobs.js";
 import type { GeminiClient } from "../gemini.js";
 import type { Meter } from "../ops/meter.js";
 import { meteredGeminiClient } from "../ops/metered-gemini.js";
+import { safeFetcher, type SafeFetcher } from "../import/extract.js";
+
+/** deep 合成主管的 provenance 信心（對齊 deep-extractor 的 DEEP_CONFIDENCE）。 */
+const DEEP_CONFIDENCE = 0.55;
 
 export interface EnrichRequest {
   orgId: string;
@@ -34,6 +61,17 @@ export interface ResearchDeps {
   meter?: Meter;
   gemini?: GeminiClient;
   extractModel?: string;
+  /** grounding 記帳用的 textModel（估價 key；缺則走 kind fallback 定價）。 */
+  textModel?: string;
+  // ── deep（全網研究）相依 ──
+  /** Google-Search grounding provider（DeepResearcher 扇出用）。缺 → deep 無法跑（route 已於 gemini 未設時擋）。 */
+  grounding?: GroundingProvider;
+  /** SSRF 安全的單頁抽取器（深讀來源用）；預設 safeFetcher。 */
+  fetcher?: SafeFetcher;
+  /** 測試注入：整個 DeepResearcher（否則由 grounding+fetcher 現組）。 */
+  deepResearcher?: DeepResearcher;
+  /** 測試注入：DeepExtractor（否則由 metered gemini 現組）。 */
+  deepExtractor?: DeepExtractor;
 }
 
 /** 從 URL 推 domain（去 www.）。無法解析回 undefined。 */
@@ -44,6 +82,16 @@ function domainFromUrl(url: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** deep→crawler：crawler 只認 quick/detailed；deep 走 detailed 爬官網取產品。 */
+function toCrawlMode(mode: CrawlMode): "quick" | "detailed" {
+  return mode === "deep" ? "detailed" : mode;
+}
+
+export interface RunResult {
+  fieldsFilled: number;
+  sources: string[];
 }
 
 export interface ResearchOrchestrator {
@@ -67,17 +115,59 @@ export interface ResearchOrchestrator {
 export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestrator {
   const { core, crawler, extractor, jobs } = deps;
 
-  /** 選抽取器：有 meter + gemini 就現包 per-job metered 抽取器（記 gemini_extract）；否則用預設抽取器。 */
+  /** 現包一個 per-job metered gemini（記 kind），idemPrefix 帶 jobId 保跨請求唯一、跨呼叫不誤去重。 */
+  const meteredGeminiFor = (orgId: string, idemPrefix: string, kind: "gemini_extract") => {
+    return meteredGeminiClient(deps.gemini!, deps.meter!, { orgId, kind, idemPrefix });
+  };
+
+  /** 選（site）抽取器：有 meter+gemini 就現包 metered（記 gemini_extract）；否則用預設。 */
   const extractorFor = (orgId: string, jobId: string): CrawlExtractor => {
     if (deps.meter && deps.gemini) {
-      const mg = meteredGeminiClient(deps.gemini, deps.meter, {
-        orgId,
-        kind: "gemini_extract",
-        idemPrefix: `extract:${jobId}`,
-      });
-      return createCrawlExtractor(mg, deps.extractModel);
+      return createCrawlExtractor(meteredGeminiFor(orgId, `extract:${jobId}`, "gemini_extract"), deps.extractModel);
     }
     return extractor;
+  };
+
+  /** 選 deep 抽取器（獨立 idemPrefix，避與 site 抽取撞鍵而被誤去重）。 */
+  const deepExtractorFor = (orgId: string, jobId: string): DeepExtractor => {
+    if (deps.deepExtractor) return deps.deepExtractor;
+    if (deps.meter && deps.gemini) {
+      return createDeepExtractor(meteredGeminiFor(orgId, `deep-extract:${jobId}`, "gemini_extract"), deps.extractModel);
+    }
+    if (deps.gemini) return createDeepExtractor(deps.gemini, deps.extractModel);
+    throw new Error("deep research unavailable: GEMINI not configured");
+  };
+
+  /** grounding 記帳包裝（best-effort：generateGrounded 無 token 回報 → 以字元數粗估，與 embedding「無則估」一致）。 */
+  const meteredGrounding = (base: GroundingProvider, orgId: string, jobId: string): GroundingProvider => {
+    if (!deps.meter) return base;
+    const meter = deps.meter;
+    let seq = 0;
+    return {
+      answer: (query, ctx) =>
+        meter.meter(
+          orgId,
+          "gemini_text",
+          async () => {
+            const res = await base.answer(query, ctx);
+            return {
+              result: res,
+              model: deps.textModel,
+              inputTokens: Math.max(1, Math.ceil(query.length / 4)),
+              outputTokens: Math.max(1, Math.ceil((res.answer?.length ?? 0) / 4)),
+            };
+          },
+          `deep-ground:${jobId}:${seq++}`,
+        ),
+    };
+  };
+
+  /** 現組 DeepResearcher（grounding 加記帳包裝 + SSRF 安全 fetcher）。 */
+  const deepResearcherFor = (orgId: string, jobId: string): DeepResearcher => {
+    if (deps.deepResearcher) return deps.deepResearcher;
+    if (!deps.grounding) throw new Error("deep research unavailable: no grounding provider");
+    const grounding = meteredGrounding(deps.grounding, orgId, jobId);
+    return createDeepResearcher(grounding, deps.fetcher ?? safeFetcher);
   };
 
   return {
@@ -117,42 +207,14 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     },
 
     async runJob(args) {
-      const { orgId, jobId, targetType, mode, url, domain } = args;
-      const jobExtractor = extractorFor(orgId, jobId);
+      const { orgId, jobId, targetType, mode } = args;
       try {
         await jobs.markRunning(orgId, jobId);
-        const raw = await crawler.crawl({ url, mode, screenshots: false });
-
-        let fieldsFilled = 0;
-        if (targetType === "company") {
-          const payload: CrawlPayload = await jobExtractor.toCompany(raw);
-          const upsertDomain = domain ?? payload.company.domain ?? domainFromUrl(raw.finalUrl ?? url) ?? "";
-          // 指名 targetId：upsert 以 id 命中 enrich 的目標列（缺 domain 就回填），保證更新既有列、不新建重複列。
-          await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId: args.targetId });
-          fieldsFilled = payload.provenance.length;
-        } else {
-          // 主管 target：抽出的第一位（best-effort，M1）寫回其公司下。
-          const contacts = await jobExtractor.toContacts(raw);
-          const companyId = args.companyIdForContact;
-          const first = contacts[0];
-          if (companyId && first) {
-            const payload: ContactCrawlPayload = {
-              contact: first,
-              provenance: Object.entries(first)
-                .filter(([, v]) => v !== undefined && v !== null && v !== "")
-                .map(([fieldName, v]) => ({
-                  fieldName,
-                  value: typeof v === "string" ? v : JSON.stringify(v),
-                  sourceUrl: raw.finalUrl ?? url,
-                  confidence: 0.6,
-                })),
-            };
-            await core.contacts.upsertFromCrawl(orgId, companyId, payload);
-            fieldsFilled = payload.provenance.length;
-          }
-        }
-
-        await jobs.markDone(orgId, jobId, { fieldsFilled, sources: raw.sourcesVisited });
+        const result =
+          targetType === "company" && mode === "deep"
+            ? await runDeep(args)
+            : await runStandard(args);
+        await jobs.markDone(orgId, jobId, result);
       } catch (err) {
         await jobs
           .markFailed(orgId, jobId, err instanceof Error ? err.message : String(err))
@@ -160,6 +222,236 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       }
     },
   };
+
+  /** 既有 quick/detailed 路徑：crawl → extract → upsert。回 {fieldsFilled, sources}。 */
+  async function runStandard(args: {
+    orgId: string;
+    jobId: string;
+    targetType: CrawlTargetType;
+    targetId: string;
+    mode: CrawlMode;
+    url: string;
+    domain?: string;
+    companyIdForContact?: string;
+  }): Promise<RunResult> {
+    const { orgId, jobId, targetType, mode, url, domain } = args;
+    const jobExtractor = extractorFor(orgId, jobId);
+    const raw = await crawler.crawl({ url, mode: toCrawlMode(mode), screenshots: false });
+
+    let fieldsFilled = 0;
+    if (targetType === "company") {
+      const payload: CrawlPayload = await jobExtractor.toCompany(raw);
+      const upsertDomain = domain ?? payload.company.domain ?? domainFromUrl(raw.finalUrl ?? url) ?? "";
+      await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId: args.targetId });
+      fieldsFilled = payload.provenance.length;
+    } else {
+      const contacts = await jobExtractor.toContacts(raw);
+      const companyId = args.companyIdForContact;
+      const first = contacts[0];
+      if (companyId && first) {
+        const payload: ContactCrawlPayload = {
+          contact: first,
+          provenance: Object.entries(first)
+            .filter(([, v]) => v !== undefined && v !== null && v !== "")
+            .map(([fieldName, v]) => ({
+              fieldName,
+              value: typeof v === "string" ? v : JSON.stringify(v),
+              sourceUrl: raw.finalUrl ?? url,
+              confidence: 0.6,
+            })),
+        };
+        await core.contacts.upsertFromCrawl(orgId, companyId, payload);
+        fieldsFilled = payload.provenance.length;
+      }
+    }
+    return { fieldsFilled, sources: raw.sourcesVisited };
+  }
+
+  /**
+   * deep（全網研究）路徑：DeepResearcher（web）並行官網 detailed 爬蟲（產品）→ 合成 → 寫 CRM。
+   * 兩者失敗容忍（partial 可接受）。company 側欄位的 provenance 帶真實外部 source_url（不鎖官網）。
+   */
+  async function runDeep(args: {
+    orgId: string;
+    jobId: string;
+    targetId: string;
+    url: string;
+    domain?: string;
+  }): Promise<RunResult> {
+    const { orgId, jobId, targetId, url } = args;
+    const company = await core.companies.findById(orgId, targetId);
+    if (!company) throw new Error("company not found");
+    const companyName = company.name;
+    const dom = args.domain ?? company.domain ?? domainFromUrl(url);
+
+    const deepResearcher = deepResearcherFor(orgId, jobId);
+    const deepExtractor = deepExtractorFor(orgId, jobId);
+    const siteExtractor = extractorFor(orgId, jobId);
+
+    // 並行：web 研究 + 官網 detailed 爬蟲（各自有界，個別失敗容忍）。
+    const [webRes, siteRes] = await Promise.allSettled([
+      deepResearcher.research({ companyName, domain: dom, startUrl: url }),
+      crawler.crawl({ url, mode: "detailed", screenshots: false }),
+    ]);
+    const bundle =
+      webRes.status === "fulfilled" ? webRes.value : { groundedFindings: [], sourceTexts: [], citationUrls: [] };
+    const siteRaw = siteRes.status === "fulfilled" ? siteRes.value : undefined;
+
+    // 官網產品（沿用既有 detailed 抽取，路徑不變）。
+    let siteExtract: CrawlPayload | undefined;
+    if (siteRaw && siteRaw.pages.length > 0) {
+      try {
+        siteExtract = await siteExtractor.toCompany(siteRaw);
+      } catch (e) {
+        console.error("[research:deep] site extract failed:", e);
+      }
+    }
+
+    // web 合成（公司側欄位 + news + funding + people + competitors，各帶真實 source_url）。
+    let deep: Awaited<ReturnType<DeepExtractor["toDeep"]>> | undefined;
+    if (bundle.groundedFindings.length > 0 || bundle.sourceTexts.length > 0) {
+      try {
+        deep = await deepExtractor.toDeep({ companyName, domain: dom, bundle });
+      } catch (e) {
+        console.error("[research:deep] deep extract failed:", e);
+      }
+    }
+
+    // provenance 的 grounding-redirect URL → 真實出處 URL（有界、可容錯）：讓徽章顯示真正的新聞/維基網域，
+    // 而非中介 redirect。深讀已解析的（citationUrl→resolved）先套用免重抓；其餘實抓。並依真實 URL 重新分類 sourceType。
+    let resolvedMap = new Map<string, string>();
+    if (deep) {
+      resolvedMap = await resolveMerged(deep, bundle);
+    }
+
+    // 合併公司欄位：web 覆蓋官網（profile 以外部來源為準）；provenance 官網在前、web 在後 → 覆蓋欄 web 勝（真實外部來源）。
+    const mergedCompany: Partial<Company> = { ...(siteExtract?.company ?? {}), ...(deep?.company ?? {}) };
+    const provenance: ProvenanceInput[] = [
+      ...(siteExtract?.provenance ?? []),
+      ...(deep?.companyProvenance ?? []),
+    ];
+    const products: Partial<CompanyProduct>[] = siteExtract?.products ?? [];
+
+    const upsertDomain = dom ?? domainFromUrl(siteRaw?.finalUrl ?? url) ?? "";
+    const payload: CrawlPayload = { company: mergedCompany, contacts: [], products, news: [], provenance };
+    const saved = await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId });
+    const companyId = saved.id;
+
+    let fieldsFilled = provenance.length;
+
+    if (deep && deep.news.length > 0) {
+      await core.companyChildren.bulkUpsertNews(orgId, companyId, deep.news as NewCompanyNews[]);
+      fieldsFilled += deep.news.length;
+    }
+    if (deep && deep.funding.length > 0) {
+      await core.companyChildren.bulkUpsertFunding(orgId, companyId, deep.funding as NewCompanyFunding[]);
+      fieldsFilled += deep.funding.length;
+    }
+    if (deep) {
+      for (const person of deep.people) {
+        const fullName = person.contact.fullName;
+        if (!fullName) continue;
+        const prov: ProvenanceInput[] = Object.entries(person.contact)
+          .filter(([, v]) => v !== undefined && v !== null && v !== "")
+          .map(([fieldName, v]) => ({
+            fieldName,
+            value: typeof v === "string" ? v : JSON.stringify(v),
+            sourceUrl: person.sourceUrl,
+            sourceType: person.sourceType,
+            confidence: DEEP_CONFIDENCE,
+          }));
+        await core.contacts.upsertFromCrawl(orgId, companyId, { contact: person.contact, provenance: prov });
+        fieldsFilled += prov.length;
+      }
+      if (deep.competitors.length > 0) {
+        await writeCompetitorsNote(orgId, companyId, deep.competitors);
+        fieldsFilled += 1;
+      }
+    }
+
+    // job.sources＝真正「取材自」的網址：官網爬過的頁 + 深讀的真實來源 + 解析後的真實出處（不含中介 redirect 雜訊）。
+    const sources = [
+      ...new Set([
+        ...(siteRaw?.sourcesVisited ?? []),
+        ...bundle.sourceTexts.map((s) => s.url),
+        ...resolvedMap.values(),
+      ]),
+    ];
+    return { fieldsFilled, sources };
+  }
+
+  /**
+   * 把 deep 產出的 provenance/新聞/募資/主管/競品的 grounding-redirect URL 對成真實出處 URL，並依真實 URL 重分類
+   * sourceType。回 redirect→real 映射（供 job.sources 收攏真實網址）。有界、可容錯（解不出就留原 URL）。
+   */
+  async function resolveMerged(deep: DeepExtraction, bundle: DeepResearchBundle): Promise<Map<string, string>> {
+    const fetcher = deps.fetcher ?? safeFetcher;
+    const used = new Set<string>();
+    const add = (u?: string): void => {
+      if (u) used.add(u);
+    };
+    deep.companyProvenance.forEach((p) => add(p.sourceUrl));
+    deep.people.forEach((pr) => add(pr.sourceUrl));
+    deep.competitors.forEach((c) => add(c.sourceUrl));
+    deep.news.forEach((n) => add(n.url));
+    deep.funding.forEach((f) => add(f.sourceUrl));
+
+    const known = new Map<string, string>();
+    for (const st of bundle.sourceTexts) if (st.citationUrl) known.set(st.citationUrl, st.url);
+
+    const resolved = await resolveRedirects(fetcher, [...used], { known, budgetMs: 30_000 });
+    const remap = (u?: string): string | undefined => (u ? resolved.get(u) ?? u : undefined);
+
+    for (const p of deep.companyProvenance) {
+      const nu = remap(p.sourceUrl);
+      if (nu && nu !== p.sourceUrl) {
+        p.sourceUrl = nu;
+        p.sourceType = classifySourceType(nu);
+      }
+    }
+    for (const pr of deep.people) {
+      const nu = remap(pr.sourceUrl);
+      if (nu && nu !== pr.sourceUrl) {
+        pr.sourceUrl = nu;
+        pr.sourceType = classifySourceType(nu);
+      }
+    }
+    for (const c of deep.competitors) {
+      const nu = remap(c.sourceUrl);
+      if (nu && nu !== c.sourceUrl) {
+        c.sourceUrl = nu;
+        c.sourceType = classifySourceType(nu);
+      }
+    }
+    for (const n of deep.news) {
+      const nu = remap(n.url);
+      if (nu) n.url = nu;
+    }
+    for (const f of deep.funding) {
+      const nu = remap(f.sourceUrl);
+      if (nu) f.sourceUrl = nu;
+    }
+    return resolved;
+  }
+
+  /** 競爭對手 → 一則 research note（列名＋來源）。以 header 去重：已存在則更新，避免重跑堆疊重複 note。 */
+  async function writeCompetitorsNote(
+    orgId: string,
+    companyId: string,
+    competitors: { name: string; sourceUrl?: string }[],
+  ): Promise<void> {
+    const header = "主要競爭對手（深度研究）：";
+    const body =
+      header +
+      "\n" +
+      competitors
+        .map((c) => `- ${c.name}${c.sourceUrl ? `（來源：${c.sourceUrl}）` : ""}`)
+        .join("\n");
+    const existing = await core.notes.list(orgId, "company", companyId);
+    const prior = existing.find((n) => n.body.startsWith(header));
+    if (prior) await core.notes.update(orgId, prior.id, { body });
+    else await core.notes.create(orgId, { entityType: "company", entityId: companyId, body, noteType: "research" });
+  }
 }
 
 /**

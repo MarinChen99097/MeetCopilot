@@ -89,7 +89,7 @@ export function EnrichPanel({
         targetType,
         targetId,
         mode,
-        url: mode === "detailed" && url.trim() ? url.trim() : undefined,
+        url: (mode === "detailed" || mode === "deep") && url.trim() ? url.trim() : undefined,
       });
       window.localStorage.setItem(storageKey(targetType, targetId), jobId);
       setJob({ id: jobId, targetType, targetId, mode, status: "queued" });
@@ -128,10 +128,15 @@ export function EnrichPanel({
               <span>會前建檔（detailed）</span>
               <small>爬官網＋子頁＋grounding</small>
             </label>
+            <label className={`mc-enrich__mode ${mode === "deep" ? "is-on" : ""}`}>
+              <input type="radio" name="mode" checked={mode === "deep"} onChange={() => setMode("deep")} />
+              <span>深度（全網研究）</span>
+              <small>全網新聞／維基／公開檔＋官網產品，逐欄標示真實來源</small>
+            </label>
           </div>
-          {mode === "detailed" ? (
+          {mode === "detailed" || mode === "deep" ? (
             <label className="mc-field">
-              <span>官網 URL（可選）</span>
+              <span>官網 URL（可選，作為研究起點）</span>
               <input
                 className="mc-input"
                 value={url}

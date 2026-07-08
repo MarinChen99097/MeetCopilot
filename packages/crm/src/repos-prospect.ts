@@ -289,7 +289,9 @@ export class SqliteCompanyRepository implements CompanyRepository {
           fieldName: p.fieldName,
           valueSnapshot: p.value,
           filledBy: "crawler" as const,
-          sourceType: "company_website",
+          // deep（全網研究）帶 sourceType（'wikipedia'/'news'/'web'…）＝真實外部來源分類；
+          // detailed/quick 不帶 → 沿用預設 'company_website'（官網）。source_url 一律是實際來源。
+          sourceType: p.sourceType ?? "company_website",
           sourceUrl: p.sourceUrl,
           confidence: p.confidence,
           verified: 0 as const,
@@ -437,7 +439,8 @@ export class SqliteContactRepository implements ContactRepository {
           fieldName: p.fieldName,
           valueSnapshot: p.value,
           filledBy: "crawler" as const,
-          sourceType: "linkedin",
+          // deep 研究的主管來自新聞/維基/公開檔 → 帶真實 sourceType；detailed/quick 不帶 → 預設 'linkedin'。
+          sourceType: p.sourceType ?? "linkedin",
           sourceUrl: p.sourceUrl,
           confidence: p.confidence,
           verified: 0 as const,
