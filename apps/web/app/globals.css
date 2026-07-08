@@ -586,6 +586,8 @@ img {
 /* ── enrich ─────────────────────────────────────────────────── */
 .mc-enrich { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; width: 100%; }
 .mc-enrich__panel { width: 100%; padding: 14px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); display: flex; flex-direction: column; gap: 12px; }
+.mc-enrich__lead { display: flex; flex-direction: column; gap: 3px; padding: 10px; border: 1px solid var(--mc-accent); border-radius: var(--mc-radius); background: rgba(139, 92, 246, 0.1); }
+.mc-enrich__lead small { color: var(--mc-text-muted); font-size: 11px; }
 .mc-enrich__modes { display: flex; gap: 10px; flex-wrap: wrap; }
 .mc-enrich__mode { flex: 1 1 140px; display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--mc-border); border-radius: var(--mc-radius); cursor: pointer; }
 .mc-enrich__mode.is-on { border-color: var(--mc-accent); background: rgba(139, 92, 246, 0.1); }

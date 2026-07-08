@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 21:00 | 研究面板一律全網深度（移除輕量/會前建檔選項）＋修 job 卡片誤標「輕量研究」
+- **工作區**: apps/web
+- **類型**: fix/ux
+- **檔案**: `crm/EnrichPanel.tsx`（移除 quick/detailed/deep 模式選單，mode 固定 'deep'；URL 欄永遠顯示為可選起點；加 mc-enrich__lead 說明）＋`ui/JobProgressCard.tsx`（MODE_LABEL map：deep→「全網深度研究」/detailed→「會前建檔」/quick→「輕量研究」，修掉原本 `mode==='detailed'?'會前建檔':'輕量研究'` 二分法把 deep 誤標成輕量；進度文字 deep 改「正在全網研究…」）＋`globals.css`（.mc-enrich__lead）
+- **改了什麼**: (1) 修顯示 bug——JobProgressCard 用二分法判斷模式，deep 落入 else 被標成「輕量研究」、進度文字硬寫「爬取官網」；改為 mode-aware 正確顯示。(2) 依使用者要求移除模式選擇，手動「研究此公司」一律跑最重的全網深度研究（deep），只留可選 URL 起點。
+- **為什麼**: 使用者選深度卻顯示「輕量研究」，且「不需要有輕度研究，一律都是最重的」。註：會中副駕的 auto-research 仍用 quick（現場需快，屬不同情境，未動）。typecheck 4ws 綠。I1/I2/I3 未觸及。
+
 ### 2026-07-08 20:30 | 研究：無 URL→以公司名稱做全網深度研究 ＋ job 逾時保護（不再永遠「研究中」）
 - **工作區**: apps/server＋apps/web
 - **類型**: fix

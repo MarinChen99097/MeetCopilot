@@ -2,6 +2,13 @@ import type { ResearchJob } from "@/lib/api";
 import { JobStatusBadge } from "./StatusBadge";
 import { Spinner } from "./Spinner";
 
+/** 研究模式顯示名（deep 為主流程；detailed/quick 為既有/自動研究可能留下的舊 job）。 */
+const MODE_LABEL: Record<string, string> = {
+  deep: "全網深度研究",
+  detailed: "會前建檔",
+  quick: "輕量研究",
+};
+
 /**
  * JobProgressCard — long-task (crawl/enrich) progress (PROMPT 0 通用元件 #4).
  * queued→running→done/failed；done 顯示 fieldsFilled 與 sources；failed 顯示 error＋重試。
@@ -22,14 +29,18 @@ export function JobProgressCard({
       <div className="mc-job__head">
         <div className="mc-job__title">
           {active ? <Spinner size={14} /> : null}
-          <span>研究工作 · {job.mode === "detailed" ? "會前建檔" : "輕量研究"}</span>
+          <span>研究工作 · {MODE_LABEL[job.mode] ?? "研究"}</span>
         </div>
         <JobStatusBadge status={job.status} />
       </div>
 
       {active ? (
         <p className="mc-job__hint">
-          {job.status === "queued" ? "已排入佇列，稍候開始…" : "正在爬取官網與子頁、抽取欄位…可離開再回來。"}
+          {job.status === "queued"
+            ? "已排入佇列，稍候開始…"
+            : job.mode === "deep"
+              ? "正在全網研究（新聞／維基／公開檔＋官網產品）、逐欄標示來源…可離開再回來。"
+              : "正在爬取官網與子頁、抽取欄位…可離開再回來。"}
         </p>
       ) : null}
 

@@ -27,7 +27,8 @@ export function EnrichPanel({
 }) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<CrawlMode>("detailed");
+  // 單一模式：一律做最重的全網深度研究（不再提供輕量/會前建檔選項）。官網 URL 只是可選起點。
+  const mode: CrawlMode = "deep";
   const [url, setUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [job, setJob] = useState<ResearchJob | null>(null);
@@ -89,7 +90,7 @@ export function EnrichPanel({
         targetType,
         targetId,
         mode,
-        url: (mode === "detailed" || mode === "deep") && url.trim() ? url.trim() : undefined,
+        url: url.trim() ? url.trim() : undefined,
       });
       window.localStorage.setItem(storageKey(targetType, targetId), jobId);
       setJob({ id: jobId, targetType, targetId, mode, status: "queued" });
@@ -117,37 +118,22 @@ export function EnrichPanel({
 
       {open ? (
         <div className="mc-enrich__panel">
-          <div className="mc-enrich__modes" role="radiogroup" aria-label="研究模式">
-            <label className={`mc-enrich__mode ${mode === "quick" ? "is-on" : ""}`}>
-              <input type="radio" name="mode" checked={mode === "quick"} onChange={() => setMode("quick")} />
-              <span>輕量（quick）</span>
-              <small>快速補幾個關鍵欄位</small>
-            </label>
-            <label className={`mc-enrich__mode ${mode === "detailed" ? "is-on" : ""}`}>
-              <input type="radio" name="mode" checked={mode === "detailed"} onChange={() => setMode("detailed")} />
-              <span>會前建檔（detailed）</span>
-              <small>爬官網＋子頁＋grounding</small>
-            </label>
-            <label className={`mc-enrich__mode ${mode === "deep" ? "is-on" : ""}`}>
-              <input type="radio" name="mode" checked={mode === "deep"} onChange={() => setMode("deep")} />
-              <span>深度（全網研究）</span>
-              <small>全網新聞／維基／公開檔＋官網產品，逐欄標示真實來源</small>
-            </label>
+          <div className="mc-enrich__lead">
+            <strong>全網深度研究</strong>
+            <small>全網新聞／維基／公開檔＋官網產品，逐欄標示真實來源。</small>
           </div>
-          {mode === "detailed" || mode === "deep" ? (
-            <label className="mc-field">
-              <span>官網 URL（可選，作為研究起點）</span>
-              <input
-                className="mc-input"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://example.com"
-              />
-              {targetType === "company" ? (
-                <small className="mc-field__hint">留空則以公司名稱做全網深度研究（不需官網）</small>
-              ) : null}
-            </label>
-          ) : null}
+          <label className="mc-field">
+            <span>官網 URL（可選，作為研究起點）</span>
+            <input
+              className="mc-input"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com"
+            />
+            {targetType === "company" ? (
+              <small className="mc-field__hint">留空則以公司名稱做全網深度研究（不需官網）</small>
+            ) : null}
+          </label>
           <div className="mc-enrich__actions">
             <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={() => setOpen(false)}>
               取消
