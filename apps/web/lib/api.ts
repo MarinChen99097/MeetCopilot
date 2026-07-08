@@ -198,6 +198,15 @@ export function apiLogin(input: LoginInput): Promise<AuthResponse> {
   return request<AuthResponse>("/api/auth/login", { method: "POST", body: input, auth: false });
 }
 
+/**
+ * Google Sign-In: exchange a Google ID token (GIS `credential`) for a MeetCopilot JWT. The server verifies
+ * the token and find-or-creates a local user+org by the verified Google email (same identity as EZpage).
+ * Returns the SAME {token,user,org} shape as login/register.
+ */
+export function apiGoogleLogin(idToken: string): Promise<AuthResponse> {
+  return request<AuthResponse>("/api/auth/google", { method: "POST", body: { idToken }, auth: false });
+}
+
 export function apiMe(): Promise<MeResponse> {
   return request<MeResponse>("/api/auth/me");
 }

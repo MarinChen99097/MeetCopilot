@@ -19,16 +19,22 @@ const monorepoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8787";
 const WS_BASE = API_BASE.replace(/^http/, "ws"); // http→ws, https→wss (matches lib/ws.ts scheme mapping)
 const GEMINI = "https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com";
+// Google Identity Services (GIS): the gsi/client script, the button/One-Tap iframe, and its XHRs all
+// live on accounts.google.com. Required so "使用 Google 登入" works (default CSP would block it).
+const GSI_ORIGIN = "https://accounts.google.com";
+const GSI_SCRIPT = "https://accounts.google.com/gsi/client";
 const isProd = process.env.NODE_ENV === "production";
 const scriptSrc = isProd ? "'self' 'unsafe-inline'" : "'self' 'unsafe-inline' 'unsafe-eval'";
 
 const csp = [
   "default-src 'self'",
-  `script-src ${scriptSrc}`,
+  `script-src ${scriptSrc} ${GSI_SCRIPT} ${GSI_ORIGIN}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self' ${API_BASE} ${WS_BASE} ${GEMINI}`,
+  `connect-src 'self' ${API_BASE} ${WS_BASE} ${GEMINI} ${GSI_ORIGIN}`,
+  `frame-src 'self' ${GSI_ORIGIN}`,
+  `child-src 'self' ${GSI_ORIGIN}`,
   "worker-src 'self' blob:",
   "media-src 'self' blob:",
   "frame-ancestors 'none'",

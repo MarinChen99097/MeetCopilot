@@ -334,6 +334,13 @@ img {
 .mc-authcard__submit { margin-top: 4px; }
 .mc-authcard__switch { margin: 4px 0 0; font-size: 13px; color: var(--mc-text-muted); text-align: center; }
 .mc-auth-checking { min-height: 60vh; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--mc-text-muted); }
+.mc-authform { display: flex; flex-direction: column; gap: 14px; }
+.mc-google { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.mc-google__btn { display: flex; justify-content: center; min-height: 40px; width: 100%; color-scheme: light; }
+.mc-google__busy { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mc-text-muted); }
+.mc-authcard__alt { background: none; border: none; color: var(--mc-accent); font-size: 13px; cursor: pointer; text-decoration: underline; align-self: center; }
+.mc-authdivider { display: flex; align-items: center; gap: 10px; color: var(--mc-text-muted); font-size: 12px; }
+.mc-authdivider::before, .mc-authdivider::after { content: ""; flex: 1; height: 1px; background: var(--mc-border); }
 
 /* ── shell / topbar ─────────────────────────────────────────── */
 .mc-shell { min-height: 100vh; }

@@ -22,6 +22,7 @@ function testConfig(): AppConfig {
     jwtSecret: "test-secret-value-not-a-placeholder-1234567890",
     dbPath: ":memory:",
     researchAutoLimitPerMeeting: 5,
+    googleClientId: "",
     gemini: { apiKey: "", textModel: "t", extractModel: "e", embedModel: "m", liveModel: "l" },
     openai: { apiKey: "", imageModel: "i", imageSize: "1x1", imageQuality: "low" },
   };

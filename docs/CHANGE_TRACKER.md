@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 14:30 | 共用 EZpage 帳號＝Google 登入＋爬蟲逾時放寬
+- **工作區**: apps/server＋apps/web
+- **類型**: feat
+- **檔案**: server 新 `auth/provision.ts`＋`auth/google-auth.test.ts`；改 `auth/routes.ts`（POST /api/auth/google）＋`config.ts`（GOOGLE_CLIENT_ID）＋`auth/index.ts`＋`index.ts`＋package.json（google-auth-library）；web 新 `components/auth/GoogleSignInButton.tsx`＋改 `AuthForm.tsx`/`lib/api.ts`/`next.config.mjs`（CSP 放行 accounts.google.com）/globals.css；`research/crawler.ts`（逾時/deadline）＋`.env.example`
+- **改了什麼**: (1) **Google 登入**：後端驗 Google ID token（audience＝EZpage 同一個 client id）→取 email→provisionUser find-or-create 本地 user+個人 org+owner→發 MeetCopilot JWT。與 EZpage 同 Google email 即同身分、無密碼。feature flag（GOOGLE_CLIENT_ID 未設→維持本地登入、測試不壞）。前端 GIS 按鈕＋CSP。(2) **爬蟲**：nav 逾時 20s→60s（env CRAWL_NAV_TIMEOUT_MS，clamp 5–120s）、逾時不硬敗改 waitUntil:"commit" 搶救部分內容、剝 #fragment；整場 deadline 放寬 quick 120s/detailed 300s（env 可覆寫、仍有界，L13）——使用者「慢慢爬沒事」。
+- **為什麼**: 使用者要跟 EZpage 帳號互通＋嫌密碼複雜（EZpage 純 Google 登入無密碼）；爬 CyberPower 產品頁 domcontentloaded 20s 硬敗。typecheck 綠、server 36/36。
+
 ### 2026-07-08 11:30 | Postgres 移植（雙驅動；為 Cloud Run + Cloud SQL，4 agent；指揮官代記）
 - **工作區**: packages/crm＋apps/server
 - **類型**: feat

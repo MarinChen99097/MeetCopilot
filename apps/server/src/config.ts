@@ -44,6 +44,12 @@ export interface AppConfig {
   jwtSecret: string;
   dbPath: string;
   researchAutoLimitPerMeeting: number;
+  /**
+   * Google OAuth client id used to verify the audience of Google ID tokens (same client id as EZpage, so the
+   * two apps share one Google identity by verified email). Feature flag: when set, POST /api/auth/google is
+   * active; when empty, that route returns 501 and only local email/password auth (register/login) is available.
+   */
+  googleClientId: string;
   gemini: GeminiConfig;
   openai: OpenAiImageConfig;
 }
@@ -91,11 +97,20 @@ export function loadConfig(): AppConfig {
     );
   }
 
+  const googleClientId = (process.env.GOOGLE_CLIENT_ID ?? "").trim();
+  if (!googleClientId) {
+    console.warn(
+      "[config] GOOGLE_CLIENT_ID not set — Google Sign-In disabled (POST /api/auth/google → 501); " +
+        "local email/password auth remains active.",
+    );
+  }
+
   return {
     port: Number(process.env.PORT ?? 8787),
     jwtSecret,
     dbPath: resolvePath(process.env.DB_PATH ?? "./data/meetcopilot.db"),
     researchAutoLimitPerMeeting: Number(process.env.RESEARCH_AUTO_LIMIT_PER_MEETING ?? 10),
+    googleClientId,
     gemini: {
       apiKey: geminiApiKey,
       textModel: process.env.GEMINI_TEXT_MODEL ?? "gemini-3.1-flash-lite",

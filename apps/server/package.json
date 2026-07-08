@@ -21,6 +21,7 @@
     "dotenv": "^17",
     "express": "^4",
     "fast-xml-parser": "^4",
+    "google-auth-library": "^10",
     "jszip": "^3.10.1",
     "jsonwebtoken": "^9",
     "multer": "^2.0.0",

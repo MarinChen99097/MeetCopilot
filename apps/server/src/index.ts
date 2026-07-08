@@ -106,7 +106,7 @@ async function main(): Promise<void> {
     }
   });
 
-  app.use("/api/auth", createAuthRouter(core, config.jwtSecret));
+  app.use("/api/auth", createAuthRouter(core, config.jwtSecret, { googleClientId: config.googleClientId }));
 
   // CRM routes (API_CONTRACT §2) — all require a valid Bearer token; tenant scope from req.auth.orgId.
   app.use("/api/crm", authRequired(config.jwtSecret), createCrmRouter(core));

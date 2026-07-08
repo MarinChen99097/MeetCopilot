@@ -36,6 +36,15 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 14:30 | 帳號互通＝Google 登入（沿用 EZpage client）＋爬蟲放寬
+- **誰決定**: 使用者（要跟 EZpage 帳號互通；澄清 EZpage 純 Google 登入無密碼；沿用同 OAuth client；爬蟲慢沒事）＋Fable（設計）
+- **決策**:
+  1. **共用帳號＝Google 登入**（非密碼代理）：EZpage 只用 Google，故 MeetCopilot 也做 Google Sign-In，用同一個 Google email 對接＝同身分。零 secret 共用、零改 EZpage、零改 MeetCopilot schema（用既有 provision 邏輯 by email）。沿用 EZpage 的 OAuth client id `54139295474-f7cve65n...`（client id 非機密）。feature flag 保留本地登入給 dev。中途兩個 agent（email 密碼代理、爬蟲）被使用者停掉——採用其已落地且 typecheck 綠的爬蟲碼，Google 登入改由新 agent 正確實作。
+  2. **爬蟲「慢慢爬沒事」**：nav 60s、quick deadline 120s、detailed 300s，全 env 可覆寫但仍有界（L13）；逾時不硬敗、搶救部分內容。
+- **使用者行動項（唯一）**: Google Cloud Console 把 `https://meetcopilot-web-54139295474.asia-east1.run.app` 加進該 OAuth client 的「已授權 JavaScript 來源」（gcloud 改不了、只能 Console），否則 Google 不發 token。
+- **部署**: 需重建 server image（爬蟲＋auth 碼）＋設 GOOGLE_CLIENT_ID env；重建 web image（bake NEXT_PUBLIC_GOOGLE_CLIENT_ID）。
+- **影響**: server auth/config/crawler、web auth/CSP、.env.example、DEPLOY 重部署要加 GOOGLE_CLIENT_ID。
+
 ### 2026-07-08 03:00 | ✅ 上線 GCP 完成 — MeetCopilot v2 live
 - **誰決定**: Fable（執行部署；使用者授權「直接部署到 GCP、同 ezpagesite 專案」）
 - **決策/結果**: **已實際部署到 GCP ezpagesite 專案並驗證**——server `https://meetcopilot-server-54139295474.asia-east1.run.app`（Cloud Run min=0/max=1/cpu2/ram4/gen2/CloudSQL/WS3600/session-affinity；/health+/ready 200；register→me 端到端過、資料寫進 Cloud SQL）、web `https://meetcopilot-web-54139295474.asia-east1.run.app`（min=0/max=2；i18n 307→/zh-TW、login 200、CSP 指向 server https/wss+Gemini Live）、Cloud SQL Postgres16 `meetcopilot-db`、4 Secret、Artifact Registry server+web 影像。

@@ -32,14 +32,44 @@ export function hostResolverRules(host: string, ip: string, family: 4 | 6): stri
   return `MAP ${host} ${target}`;
 }
 
-const NAV_TIMEOUT_MS = 20_000; // 單頁導航預算
+// 單頁導航預算：預設 45s。重量級 JS 產品頁（如 CyberPower ut_ups 產品系列頁）的 domcontentloaded
+// 常 >20s 才觸發——20s 會硬敗。env `CRAWL_NAV_TIMEOUT_MS` 覆寫，clamp 到 [5s,120s]。這只是「軟預算」，
+// 真正的硬上界仍是下方整場 crawl deadline（L13：外部進程一定要能被我方逾時掐斷）。
+const DEFAULT_NAV_TIMEOUT_MS = 60_000; // 使用者「慢慢爬沒事」：單頁更有耐心（clamp 上限仍 120s）
+const NAV_TIMEOUT_MIN_MS = 5_000;
+const NAV_TIMEOUT_MAX_MS = 120_000;
+// domcontentloaded 逾時後的「寬鬆重試」預算：改用 waitUntil:"commit"（navigation 一 commit 就 resolve，
+// 不等 DOM/子資源），再往下搶救已渲染的部分。短而有界，避免疊加到逼近 deadline。
+const RETRY_NAV_TIMEOUT_MS = 10_000;
 const SETTLE_TIMEOUT_MS = 4_000; // networkidle 等待上限（超時不視為失敗）
 const MAX_TEXT_CHARS = 12_000; // 每頁抽取文字上限
 const MAX_SUB_PAGES = 5; // detailed 子頁上限（同 ezpagesite max_sub_pages）
-// 整場 crawl 硬 deadline：quick（單頁）45s、detailed（含子頁）90s。逾時→整個 crawl reject，
-// 讓 hung navigation/close 也不能卡死背景 enrich job（M1 verify 主 bug）。
-const CRAWL_DEADLINE_QUICK_MS = 45_000;
-const CRAWL_DEADLINE_DETAILED_MS = 90_000;
+// 整場 crawl 硬 deadline（仍有界，L13：hung navigation/close 不能卡死背景 enrich job）。
+// 使用者「慢慢爬沒事」→放寬讓慢頁爬得完：quick 單頁 120s、detailed（最多 5 子頁）300s。
+// 可經 env CRAWL_DEADLINE_QUICK_MS / CRAWL_DEADLINE_DETAILED_MS 覆寫（於呼叫時讀，見 crawlDeadlineMs）。
+const CRAWL_DEADLINE_QUICK_DEFAULT_MS = 120_000;
+const CRAWL_DEADLINE_DETAILED_DEFAULT_MS = 300_000;
+
+/**
+ * 從 env（`CRAWL_NAV_TIMEOUT_MS`）解析單頁導航逾時，clamp 到 [5s,120s]；未設/非法 → 45s。
+ * **在呼叫時讀取**（非 import 時）：apps/server/.env 由 loadConfig() 於 bootstrap 載入，crawl 實際
+ * 執行時 process.env 已就緒。此值只是軟預算，整場 crawl 仍受上方 deadline 硬界約束。匯出供測試。
+ */
+/** 共用：於呼叫時讀 env（非 import 時，避 .env 尚未載入），未設/非法→def，clamp 到 [min,max]。 */
+function clampEnvMs(envName: string, def: number, min: number, max: number): number {
+  const raw = Number(process.env[envName]);
+  if (!Number.isFinite(raw) || raw <= 0) return def;
+  return Math.min(Math.max(Math.trunc(raw), min), max);
+}
+export function navTimeoutMs(): number {
+  return clampEnvMs("CRAWL_NAV_TIMEOUT_MS", DEFAULT_NAV_TIMEOUT_MS, NAV_TIMEOUT_MIN_MS, NAV_TIMEOUT_MAX_MS);
+}
+/** 整場 crawl deadline（呼叫時讀 env；quick 15–300s、detailed 30–900s）。 */
+export function crawlDeadlineMs(mode: "quick" | "detailed"): number {
+  return mode === "detailed"
+    ? clampEnvMs("CRAWL_DEADLINE_DETAILED_MS", CRAWL_DEADLINE_DETAILED_DEFAULT_MS, 30_000, 900_000)
+    : clampEnvMs("CRAWL_DEADLINE_QUICK_MS", CRAWL_DEADLINE_QUICK_DEFAULT_MS, 15_000, 300_000);
+}
 // browser.close() 在此機器上會永久卡住 → 給它 5s，逾時就 SIGKILL 底層 Chromium process。
 const BROWSER_CLOSE_TIMEOUT_MS = 5_000;
 
@@ -129,13 +159,38 @@ function makeRouteGuard(cache: Map<string, Promise<boolean>>) {
   };
 }
 
+/** 去掉 URL 的 #fragment（純 client-side，不影響 server 導航，去掉更乾淨、避免奇怪等待）。原 URL 由呼叫端另留作 provenance。 */
+function stripHash(url: string): string {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 async function extractPage(
   browserPage: import("playwright").Page,
   url: string,
   wantShot: boolean,
+  navTimeout: number,
 ): Promise<CrawledPage> {
-  await browserPage.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
-  // 給 SPA 一點沉澱時間，但不因 networkidle 逾時而失敗。
+  const navUrl = stripHash(url);
+  // 導航策略（root causes 1–3）：
+  //  (1) 先以 domcontentloaded＋navTimeout 導航——它**不等子資源**，故被 route-guard abort 的跨站
+  //      子請求（SSRF 閘）不會卡住 goto；只有主文件本身會被等待。
+  //  (2) 逾時（重量級 JS 頁 domcontentloaded 遲遲不觸發）**不硬敗**：改以 waitUntil:"commit"
+  //      （navigation 一 commit 即 resolve、不等 DOM）寬鬆重試一次，再往下抽「已渲染的部分」。
+  //  (3) navUrl 已去掉 #fragment。
+  try {
+    await browserPage.goto(navUrl, { waitUntil: "domcontentloaded", timeout: navTimeout });
+  } catch {
+    await browserPage
+      .goto(navUrl, { waitUntil: "commit", timeout: RETRY_NAV_TIMEOUT_MS })
+      .catch(() => {}); // 連 commit 都失敗（DNS/連線被擋）→ 下方仍嘗試搶救，真的空才丟錯。
+  }
+  // 給 SPA 一點沉澱時間，但不因 networkidle 逾時而失敗（有界；不會卡在被 abort 的子請求上）。
   await browserPage.waitForLoadState("networkidle", { timeout: SETTLE_TIMEOUT_MS }).catch(() => {});
   const title = await browserPage.title().catch(() => undefined);
   // 用 **string-form** evaluate（在瀏覽器內執行），避免在 Node lib（無 DOM）下 typecheck `document`。
@@ -146,6 +201,10 @@ async function extractPage(
     .replace(/\n\s*\n+/g, "\n")
     .trim()
     .slice(0, MAX_TEXT_CHARS);
+  // 部分頁勝過整個 job 失敗：只有「真的什麼都沒渲染」才算導航失敗（首頁失敗上拋、子頁失敗被上層 try 吞掉並續抓）。
+  if (!title && text.length === 0) {
+    throw new Error(`crawl navigation produced no content: ${navUrl}`);
+  }
   let screenshot: string | undefined;
   if (wantShot) {
     const buf = await browserPage
@@ -153,7 +212,7 @@ async function extractPage(
       .catch(() => null);
     if (buf) screenshot = `data:image/png;base64,${Buffer.from(buf).toString("base64")}`;
   }
-  return { url: browserPage.url() || url, title: title || undefined, text, screenshot };
+  return { url: browserPage.url() || navUrl, title: title || undefined, text, screenshot };
 }
 
 /** BROWSER_CLOSE_TIMEOUT_MS 後 resolve 的計時器（有界等待；配合 server.kill() 強制收尾）。 */
@@ -210,10 +269,11 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
     await context.route("**/*", makeRouteGuard(routeCache));
 
     const page = await context.newPage();
-    page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    const navTimeout = navTimeoutMs(); // env CRAWL_NAV_TIMEOUT_MS（預設 45s，clamp 5–120s）
+    page.setDefaultNavigationTimeout(navTimeout);
 
     const wantShots = opts.mode === "detailed" && Boolean(opts.screenshots);
-    const home = await extractPage(page, opts.url, wantShots);
+    const home = await extractPage(page, opts.url, wantShots, navTimeout);
     const sourcesVisited = [home.url];
     const pages: CrawledPage[] = [home];
     const metaRaw = await page
@@ -255,7 +315,7 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
       for (const c of candidates.slice(0, cap)) {
         if (Date.now() > deadline) break; // 趨近 deadline → 停止加子頁，回傳已抓到的
         try {
-          const sub = await extractPage(page, c.url, wantShots);
+          const sub = await extractPage(page, c.url, wantShots, navTimeout);
           pages.push(sub);
           sourcesVisited.push(sub.url);
         } catch {
@@ -282,8 +342,7 @@ export function createCrawlProvider(): CrawlProvider {
   return {
     async crawl(opts: CrawlOptions): Promise<RawCrawl> {
       // 整場 crawl 硬 deadline：hung navigation/close 也不得卡死背景 enrich job。逾時 → 明確 Error。
-      const deadlineMs =
-        opts.mode === "detailed" ? CRAWL_DEADLINE_DETAILED_MS : CRAWL_DEADLINE_QUICK_MS;
+      const deadlineMs = crawlDeadlineMs(opts.mode);
       let timer: ReturnType<typeof setTimeout> | undefined;
       const guard = new Promise<never>((_, reject) => {
         timer = setTimeout(
