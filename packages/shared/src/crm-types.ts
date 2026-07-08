@@ -156,6 +156,8 @@ export interface Company {
   websiteUrl?: string;
   logoUrl?: string;
   description?: string;
+  /** 繁中(zh-TW)精簡簡介（擷取時另產；不覆寫來源語言的 description）。 */
+  descriptionZh?: string;
   tagline?: string;
   // ── 分類 ──
   industry?: string;
@@ -250,10 +252,14 @@ export interface CompanyNews {
   orgId: string;
   companyId: string;
   title: string;
+  /** 繁中(zh-TW)精簡標題（擷取時另產；不覆寫來源語言的 title）。 */
+  titleZh?: string;
   url?: string;
   source?: string;
   publishedAt?: number;
   summary?: string;
+  /** 繁中(zh-TW)精簡摘要（擷取時另產；不覆寫來源語言的 summary）。 */
+  summaryZh?: string;
   category?: CompanyNewsCategory;
   sentiment?: number;
   relevance?: number;
@@ -300,7 +306,11 @@ export interface CompanyProduct {
   name: string;
   category?: string;
   oneLiner?: string;
+  /** 繁中(zh-TW)一句話定位（擷取時另產；不覆寫來源語言的 oneLiner）。 */
+  oneLinerZh?: string;
   description?: string;
+  /** 繁中(zh-TW)精簡描述（擷取時另產；不覆寫來源語言的 description）。 */
+  descriptionZh?: string;
   status?: CompanyProductStatus;
   launchedYear?: number;
   productUrl?: string;
@@ -386,6 +396,8 @@ export interface Contact {
   photoUrl?: string;
   // ── 角色 ──
   title?: string;
+  /** 繁中(zh-TW)精簡頭銜（擷取時另產；不覆寫來源語言的 title）。 */
+  titleZh?: string;
   titleNormalized?: string;
   roleCategory?: string;
   department?: string;
@@ -406,6 +418,8 @@ export interface Contact {
   // ── 背景 ──
   bio?: string;
   backgroundSummary?: string;
+  /** 繁中(zh-TW)精簡背景簡介（擷取時另產；不覆寫來源語言的 backgroundSummary）。 */
+  backgroundSummaryZh?: string;
   previousCompanies?: PreviousCompany[];
   education?: unknown[];
   skills?: string[];
@@ -790,6 +804,16 @@ export interface CrawlPayload {
   contacts?: Partial<Contact>[];
   products?: Partial<CompanyProduct>[];
   news?: Partial<CompanyNews>[];
+  /**
+   * 對方技術棧（company_tech 子表；deep/detailed 研究產）。型別對映 bulkUpsertTech 的入參
+   * （NewCompanyTech＝Omit 系統欄後的 CompanyTech）。orchestrator 落庫時走 companyChildren.bulkUpsertTech。
+   */
+  techStack?: NewCompanyTech[];
+  /**
+   * 對方部門（company_departments 子表；deep/detailed 研究產）。型別對映 bulkUpsertDepartments 的入參
+   * （NewCompanyDepartment）。orchestrator 落庫時走 companyChildren.bulkUpsertDepartments。
+   */
+  departments?: NewCompanyDepartment[];
   provenance: ProvenanceInput[];
 }
 

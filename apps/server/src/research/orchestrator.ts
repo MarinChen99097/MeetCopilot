@@ -242,8 +242,17 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     if (targetType === "company") {
       const payload: CrawlPayload = await jobExtractor.toCompany(raw);
       const upsertDomain = domain ?? payload.company.domain ?? domainFromUrl(raw.finalUrl ?? url) ?? "";
-      await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId: args.targetId });
+      const saved = await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId: args.targetId });
       fieldsFilled = payload.provenance.length;
+      // techStack / departments 子表（upsertFromCrawl 只寫 contacts/products/news，不涵蓋此二者 → 顯式寫入）。
+      if (payload.techStack && payload.techStack.length > 0) {
+        await core.companyChildren.bulkUpsertTech(orgId, saved.id, payload.techStack);
+        fieldsFilled += payload.techStack.length;
+      }
+      if (payload.departments && payload.departments.length > 0) {
+        await core.companyChildren.bulkUpsertDepartments(orgId, saved.id, payload.departments);
+        fieldsFilled += payload.departments.length;
+      }
     } else {
       const contacts = await jobExtractor.toContacts(raw);
       const companyId = args.companyIdForContact;
@@ -367,6 +376,18 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
         await writeCompetitorsNote(orgId, companyId, deep.competitors);
         fieldsFilled += 1;
       }
+    }
+
+    // techStack / departments：官網（siteExtract）＋ web（deep）合併寫入（upsertFromCrawl 不涵蓋此二子表 → 顯式寫）。
+    const techStack = [...(siteExtract?.techStack ?? []), ...(deep?.techStack ?? [])];
+    if (techStack.length > 0) {
+      await core.companyChildren.bulkUpsertTech(orgId, companyId, techStack);
+      fieldsFilled += techStack.length;
+    }
+    const departments = [...(siteExtract?.departments ?? []), ...(deep?.departments ?? [])];
+    if (departments.length > 0) {
+      await core.companyChildren.bulkUpsertDepartments(orgId, companyId, departments);
+      fieldsFilled += departments.length;
     }
 
     // job.sources＝真正「取材自」的網址：官網爬過的頁 + 深讀的真實來源 + 解析後的真實出處（不含中介 redirect 雜訊）。

@@ -33,8 +33,10 @@ describe("migrate", () => {
       "SELECT version FROM schema_migrations ORDER BY version",
       [],
     );
-    // 001-010（含 M2 007_decks、M4 008_training、M5 009_ops、010_deep_mode）；idempotency＝二次 migrate 不重複套用、版本集不成長。
-    expect(applied.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    // idempotency＝二次 migrate 不重複套用：版本集為 1..N 連續且無重複（不隨新增 migration 脆裂）。
+    const versions = applied.map((r) => r.version);
+    expect(versions).toEqual(Array.from({ length: versions.length }, (_, i) => i + 1));
+    expect(new Set(versions).size).toBe(versions.length); // 無重複套用
   });
 });
 

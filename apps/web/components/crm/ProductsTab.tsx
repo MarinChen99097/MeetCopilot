@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useLocale } from "next-intl";
 import type { CompanyProduct, ProductPersonLink } from "@meetcopilot/shared";
 import { ApiError, getProduct, getProductPeople, listProducts, updateProduct } from "@/lib/api";
 import { fmtNumber } from "@/lib/format";
@@ -12,6 +13,7 @@ import { useEntityProvenance } from "./useProvenance";
 
 /** 產品深檔 tab：對方產品清單 → 點開規格/定價/技術棧/功能/整合＋產品↔人。 */
 export function ProductsTab({ companyId }: { companyId: string }) {
+  const isZh = useLocale() === "zh-TW";
   const [items, setItems] = useState<CompanyProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,27 +53,34 @@ export function ProductsTab({ companyId }: { companyId: string }) {
         emptyHint="用研究引擎爬對方產品頁補齊深檔。"
       >
         <ul className="mc-productlist">
-          {items.map((p) => (
-            <li key={p.id}>
-              <button
-                type="button"
-                className={`mc-productrow ${selected === p.id ? "is-open" : ""}`}
-                onClick={() => setSelected(selected === p.id ? null : p.id)}
-                aria-expanded={selected === p.id}
-              >
-                <span className="mc-productrow__name">{p.name}</span>
-                <span className="mc-productrow__meta">
-                  {p.category ?? "未分類"}
-                  {p.oneLiner ? ` · ${p.oneLiner}` : ""}
-                </span>
-                <span className="mc-productrow__badges">
-                  <ConfidenceBadge value={p.crawlConfidence} />
-                  <VerifiedBadge status={p.verifiedStatus} />
-                </span>
-              </button>
-              {selected === p.id ? <ProductProfile productId={p.id} onChanged={load} /> : null}
-            </li>
-          ))}
+          {items.map((p) => {
+            // zh-TW: prefer Chinese one-liner; keep original as hover title.
+            const oneLine = isZh && p.oneLinerZh ? p.oneLinerZh : p.oneLiner;
+            return (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  className={`mc-productrow ${selected === p.id ? "is-open" : ""}`}
+                  onClick={() => setSelected(selected === p.id ? null : p.id)}
+                  aria-expanded={selected === p.id}
+                >
+                  <span className="mc-productrow__name">{p.name}</span>
+                  <span
+                    className="mc-productrow__meta"
+                    title={isZh && p.oneLinerZh && p.oneLiner ? p.oneLiner : undefined}
+                  >
+                    {p.category ?? "未分類"}
+                    {oneLine ? ` · ${oneLine}` : ""}
+                  </span>
+                  <span className="mc-productrow__badges">
+                    <ConfidenceBadge value={p.crawlConfidence} />
+                    <VerifiedBadge status={p.verifiedStatus} />
+                  </span>
+                </button>
+                {selected === p.id ? <ProductProfile productId={p.id} onChanged={load} /> : null}
+              </li>
+            );
+          })}
         </ul>
       </StateBoundary>
     </div>
@@ -79,6 +88,7 @@ export function ProductsTab({ companyId }: { companyId: string }) {
 }
 
 function ProductProfile({ productId, onChanged }: { productId: string; onChanged: () => void }) {
+  const isZh = useLocale() === "zh-TW";
   const [product, setProduct] = useState<CompanyProduct | null>(null);
   const [people, setPeople] = useState<ProductPersonLink[]>([]);
   const [loading, setLoading] = useState(true);
@@ -149,6 +159,12 @@ function ProductProfile({ productId, onChanged }: { productId: string; onChanged
             </div>
 
             {product.description ? <p className="mc-product-detail__desc">{product.description}</p> : null}
+            {isZh && product.descriptionZh ? (
+              <p className="mc-i18n-sum">
+                <span className="mc-i18n-sum__label">🌐 中文簡介</span>
+                {product.descriptionZh}
+              </p>
+            ) : null}
 
             <ListBlock title="關鍵功能" items={(product.keyFeatures ?? []).map((f) => f.name)} tone="accent" />
             <ListBlock title="技術棧" items={product.techStack} tone="info" />

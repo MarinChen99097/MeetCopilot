@@ -17,6 +17,8 @@ import type {
   CompanyNewsCategory,
   Seniority,
   ProvenanceInput,
+  NewCompanyTech,
+  NewCompanyDepartment,
 } from "@meetcopilot/shared";
 import type { DeepResearchBundle } from "./deep-research.js";
 import { classifySourceType } from "./deep-research.js";
@@ -39,6 +41,9 @@ const NEWS_CATEGORIES: CompanyNewsCategory[] = [
   "other",
 ];
 const SENIORITIES: Seniority[] = ["c_level", "vp", "director", "manager", "ic", "founder", "board"];
+// 子表輸出上限（避免 JSON 爆量／截斷）。
+const MAX_TECH = 12;
+const MAX_DEPARTMENTS = 10;
 
 // ── 模型輸出形狀 ──────────────────────────────────────────
 interface ExtractedDeep {
@@ -46,9 +51,11 @@ interface ExtractedDeep {
   companyFieldSources?: { field?: string; sourceIndex?: number }[];
   news?: {
     title?: string;
+    titleZh?: string;
     url?: string;
     source?: string;
     summary?: string;
+    summaryZh?: string;
     publishedDate?: string;
     category?: string;
     sourceIndex?: number;
@@ -62,7 +69,7 @@ interface ExtractedDeep {
     investors?: string[];
     sourceIndex?: number;
   }[];
-  people?: { fullName?: string; title?: string; seniority?: string; sourceIndex?: number }[];
+  people?: { fullName?: string; title?: string; titleZh?: string; seniority?: string; sourceIndex?: number }[];
   competitors?: { name?: string; sourceIndex?: number }[];
 }
 
@@ -80,6 +87,10 @@ export interface DeepExtraction {
   funding: Partial<CompanyFunding>[];
   people: DeepPerson[];
   competitors: { name: string; sourceUrl?: string; sourceType?: string }[];
+  /** 對方技術棧（company_tech 子表）→ orchestrator 走 bulkUpsertTech。 */
+  techStack: NewCompanyTech[];
+  /** 對方部門（company_departments 子表）→ orchestrator 走 bulkUpsertDepartments。 */
+  departments: NewCompanyDepartment[];
 }
 
 export interface DeepExtractInput {
@@ -102,6 +113,8 @@ const S = Type;
  */
 const COMPANY_PROPS: Record<string, unknown> = {
   description: { type: S.STRING },
+  // zh-TW 精簡公司簡介（另產；不覆寫來源語言的 description）。是 companies 欄位（走 COMPANY_FIELD_KEYS/provenance）。
+  descriptionZh: { type: S.STRING },
   industry: { type: S.STRING },
   businessModel: { type: S.STRING },
   foundedYear: { type: S.INTEGER },
@@ -118,10 +131,40 @@ const COMPANY_PROPS: Record<string, unknown> = {
 };
 const COMPANY_FIELD_KEYS = new Set(Object.keys(COMPANY_PROPS));
 
+// techStack/departments 掛在 company 子物件下但屬子表（非 companies 欄位）；刻意不入 COMPANY_PROPS，
+// 故不會被 COMPANY_FIELD_KEYS 當公司欄複製/寫 provenance——由 toDeep 另行拆出映射成 NewCompanyTech/Department。
+const TECH_SCHEMA: Record<string, unknown> = {
+  type: S.ARRAY,
+  items: {
+    type: S.OBJECT,
+    properties: {
+      category: { type: S.STRING },
+      vendor: { type: S.STRING },
+      product: { type: S.STRING },
+      detectedFrom: { type: S.STRING },
+    },
+  },
+};
+const DEPARTMENTS_SCHEMA: Record<string, unknown> = {
+  type: S.ARRAY,
+  items: {
+    type: S.OBJECT,
+    properties: {
+      name: { type: S.STRING },
+      focus: { type: S.STRING },
+      headcountEstimate: { type: S.INTEGER },
+    },
+    required: ["name"],
+  },
+};
+
 const RESPONSE_SCHEMA: Record<string, unknown> = {
   type: S.OBJECT,
   properties: {
-    company: { type: S.OBJECT, properties: COMPANY_PROPS },
+    company: {
+      type: S.OBJECT,
+      properties: { ...COMPANY_PROPS, techStack: TECH_SCHEMA, departments: DEPARTMENTS_SCHEMA },
+    },
     companyFieldSources: {
       type: S.ARRAY,
       items: {
@@ -136,9 +179,11 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         type: S.OBJECT,
         properties: {
           title: { type: S.STRING },
+          titleZh: { type: S.STRING }, // zh-TW 標題簡述（另產）
           url: { type: S.STRING },
           source: { type: S.STRING },
           summary: { type: S.STRING },
+          summaryZh: { type: S.STRING }, // zh-TW 摘要（另產）
           publishedDate: { type: S.STRING }, // YYYY 或 YYYY-MM-DD；程式轉 epoch
           category: { type: S.STRING, enum: NEWS_CATEGORIES as unknown as string[] },
           sourceIndex: { type: S.INTEGER },
@@ -168,6 +213,7 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         properties: {
           fullName: { type: S.STRING },
           title: { type: S.STRING },
+          titleZh: { type: S.STRING }, // zh-TW 職稱簡述（另產）
           seniority: { type: S.STRING, enum: SENIORITIES as unknown as string[] },
           sourceIndex: { type: S.INTEGER },
         },
@@ -195,7 +241,9 @@ const SYSTEM = [
   "funding: rounds if mentioned (roundType, amount as a number, currency, announcedDate, leadInvestor, investors[]).",
   "people: named executives/leaders with their title and seniority.",
   "competitors: named competitor companies.",
-  "Write text values in the language of the sources (Traditional Chinese for zh sources — do not translate); keep values concise; never repeat text. Field NAMES stay English per the schema. Return ONLY valid JSON matching the schema.",
+  "company.techStack[] (only when stated): technologies/vendors/products the company uses or is built on ({category, vendor, product, detectedFrom}); company.departments[] (only when stated): internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns original (e.g. AWS, React, Kubernetes). Cap: at most 12 techStack items and at most 10 departments.",
+  "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the language of the sources (Traditional Chinese for zh sources; do NOT translate the primary fields; keep values concise; never repeat text). IN ADDITION, emit a concise Traditional-Chinese (zh-TW) gloss in each `*Zh` field: company.descriptionZh (of description), news[].titleZh/summaryZh (of that item's title/summary), and people[].titleZh (of that person's title) — each at most 2 sentences; if the source is already zh-TW you may condense it.",
+  "Field NAMES stay English per the schema. Return ONLY valid JSON matching the schema.",
 ].join(" ");
 
 interface SourceRef {
@@ -299,6 +347,49 @@ function serialize(v: unknown): string {
   return typeof v === "string" ? v : JSON.stringify(v);
 }
 
+/** 模型 company.techStack（unknown）→ NewCompanyTech[]（去空、上限 MAX_TECH）。至少要有 category/vendor/product 之一。 */
+function toDeepTech(v: unknown): NewCompanyTech[] {
+  if (!Array.isArray(v)) return [];
+  const out: NewCompanyTech[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const t = raw as Record<string, unknown>;
+    const category = cleanStr(t.category);
+    const vendor = cleanStr(t.vendor);
+    const product = cleanStr(t.product);
+    const detectedFrom = cleanStr(t.detectedFrom);
+    if (!category && !vendor && !product) continue;
+    const row: NewCompanyTech = { confidence: DEEP_CONFIDENCE };
+    if (category) row.category = category;
+    if (vendor) row.vendor = vendor;
+    if (product) row.product = product;
+    if (detectedFrom) row.detectedFrom = detectedFrom;
+    out.push(row);
+    if (out.length >= MAX_TECH) break;
+  }
+  return out;
+}
+
+/** 模型 company.departments（unknown）→ NewCompanyDepartment[]（name 必填、去空、上限 MAX_DEPARTMENTS）。 */
+function toDeepDepartments(v: unknown): NewCompanyDepartment[] {
+  if (!Array.isArray(v)) return [];
+  const out: NewCompanyDepartment[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const d = raw as Record<string, unknown>;
+    const name = cleanStr(d.name);
+    if (!name) continue;
+    const row: NewCompanyDepartment = { name };
+    const focus = cleanStr(d.focus);
+    if (focus) row.focus = focus;
+    const hc = d.headcountEstimate;
+    if (typeof hc === "number" && Number.isFinite(hc) && hc >= 0) row.headcountEstimate = Math.round(hc);
+    out.push(row);
+    if (out.length >= MAX_DEPARTMENTS) break;
+  }
+  return out;
+}
+
 export function createDeepExtractor(gemini: GeminiClient, extractModel?: string): DeepExtractor {
   return {
     async toDeep(input: DeepExtractInput): Promise<DeepExtraction> {
@@ -330,6 +421,9 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
         if (Array.isArray(v) && v.length === 0) continue;
         (company as Record<string, unknown>)[k] = v;
       }
+      // techStack/departments（掛在 company 下但屬子表；COMPANY_FIELD_KEYS 未含 → 上面迴圈已略過）。
+      const techStack = toDeepTech(rawCompany.techStack);
+      const departments = toDeepDepartments(rawCompany.departments);
       // 欄位→來源 index 映射（模型給的）。
       const fieldSource = new Map<string, SourceRef>();
       for (const fs of ex.companyFieldSources ?? []) {
@@ -361,11 +455,15 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
           ? (n.category as CompanyNewsCategory)
           : undefined;
         const row: Partial<CompanyNews> = { title };
+        const titleZh = cleanStr(n.titleZh);
+        if (titleZh) row.titleZh = titleZh;
         if (url) row.url = url;
         const source = cleanStr(n.source) ?? ref?.title;
         if (source) row.source = source;
         const summary = cleanStr(n.summary);
         if (summary) row.summary = summary;
+        const summaryZh = cleanStr(n.summaryZh);
+        if (summaryZh) row.summaryZh = summaryZh;
         const publishedAt = parseLooseDate(n.publishedDate);
         if (publishedAt !== undefined) row.publishedAt = publishedAt;
         if (category) row.category = category;
@@ -404,6 +502,8 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
         const contact: Partial<Contact> = { fullName };
         const title = cleanStr(p.title);
         if (title) contact.title = title;
+        const titleZh = cleanStr(p.titleZh);
+        if (titleZh) contact.titleZh = titleZh;
         if (SENIORITIES.includes(p.seniority as Seniority)) contact.seniority = p.seniority as Seniority;
         people.push({ contact, sourceUrl: ref?.url, sourceType: ref?.sourceType ?? "web" });
       }
@@ -419,7 +519,7 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
         competitors.push({ name, sourceUrl: ref?.url, sourceType: ref?.sourceType ?? "web" });
       }
 
-      return { company, companyProvenance, news, funding, people, competitors };
+      return { company, companyProvenance, news, funding, people, competitors, techStack, departments };
     },
   };
 }

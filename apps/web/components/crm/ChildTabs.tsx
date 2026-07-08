@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useLocale } from "next-intl";
 import type { CompanyNews, CompanyTech, CompanyDepartment, Deal, DealStage } from "@meetcopilot/shared";
 import {
   ApiError,
@@ -45,6 +46,7 @@ function useChild<T>(loader: () => Promise<T[]>, deps: unknown[]) {
 
 export function NewsTab({ companyId }: { companyId: string }) {
   const { items, loading, error, load } = useChild<CompanyNews>(() => getCompanyNews(companyId), [companyId]);
+  const isZh = useLocale() === "zh-TW";
   return (
     <div className="mc-tabpane">
       <h3 className="mc-tabpane__title">新聞</h3>
@@ -68,6 +70,7 @@ export function NewsTab({ companyId }: { companyId: string }) {
                   ) : (
                     n.title
                   )}
+                  {isZh && n.titleZh ? <span className="mc-i18n-title">🌐 {n.titleZh}</span> : null}
                 </span>
                 {n.category ? <StatusBadge tone="info">{n.category}</StatusBadge> : null}
               </div>
@@ -75,6 +78,12 @@ export function NewsTab({ companyId }: { companyId: string }) {
                 {n.source ?? "來源不明"} · {fmtDate(n.publishedAt)}
               </div>
               {n.summary ? <p className="mc-newsitem__sum">{n.summary}</p> : null}
+              {isZh && n.summaryZh ? (
+                <p className="mc-i18n-sum">
+                  <span className="mc-i18n-sum__label">🌐 中文簡介</span>
+                  {n.summaryZh}
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>

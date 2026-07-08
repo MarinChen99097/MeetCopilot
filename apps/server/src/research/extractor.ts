@@ -10,7 +10,16 @@
  */
 import { Type } from "@google/genai";
 import type { GeminiClient } from "../gemini.js";
-import type { Company, Contact, CompanyProduct, CompanyNews, CrawlPayload, ProvenanceInput } from "@meetcopilot/shared";
+import type {
+  Company,
+  Contact,
+  CompanyProduct,
+  CompanyNews,
+  CrawlPayload,
+  ProvenanceInput,
+  NewCompanyTech,
+  NewCompanyDepartment,
+} from "@meetcopilot/shared";
 import type { RawCrawl } from "./crawler.js";
 
 /** 統一爬蟲信心（provenance.confidence）。爬蟲抽取值一律標此值，人細填/確認才升信任。 */
@@ -24,6 +33,9 @@ const EXTRACT_MAX_OUTPUT_TOKENS = 16_384;
 // 低溫抽取：預設溫度（~1.0）下同一批頁的產品數 run-to-run 劇烈跳動（實測 cyberpower 1 vs 33）；
 // 結構化枚舉要的是穩定、可重現，非創意——壓到 0.3 讓「列出所有產品」一致收斂。
 const EXTRACT_TEMPERATURE = 0.3;
+// 新增子表輸出上限（避免 JSON 爆量／截斷）：techStack/departments 各設硬上限，*Zh 簡介另以 prompt 限 <=2 句。
+const MAX_TECH = 12;
+const MAX_DEPARTMENTS = 10;
 
 export interface CrawlExtractor {
   toCompany(raw: RawCrawl): Promise<CrawlPayload>;
@@ -40,7 +52,11 @@ interface ExtractedProduct {
   name?: string;
   category?: string;
   oneLiner?: string;
+  /** zh-TW 一句話定位（另產；不覆寫來源語言的 oneLiner）。 */
+  oneLinerZh?: string;
   description?: string;
+  /** zh-TW 精簡描述（另產；不覆寫來源語言的 description）。 */
+  descriptionZh?: string;
   productUrl?: string;
   docsUrl?: string;
   pricingModel?: string;
@@ -53,9 +69,34 @@ interface ExtractedProduct {
   specs?: { name?: string; value?: string }[];
 }
 
+/** 模型輸出的技術棧單筆（zh-TW，惟技術/產品專有名保留原名）。摺成 NewCompanyTech。 */
+interface ExtractedTech {
+  category?: string;
+  vendor?: string;
+  product?: string;
+  detectedFrom?: string;
+}
+
+/** 模型輸出的部門單筆（zh-TW）。摺成 NewCompanyDepartment（name 必填）。 */
+interface ExtractedDepartment {
+  name?: string;
+  focus?: string;
+  headcountEstimate?: number;
+}
+
+/**
+ * company 抽取形狀：Partial<Company>（含新 descriptionZh 欄）＋模型另附的子表陣列。
+ * techStack/departments 並非 companies 欄位（是子表），故在此掛在 company 物件下、由 toCompany 拆出，
+ * 不讓它們污染 company 欄位寫入與 companyProvenance。
+ */
+type ExtractedCompany = Partial<Company> & {
+  techStack?: ExtractedTech[];
+  departments?: ExtractedDepartment[];
+};
+
 /** Gemini 回傳的抽取形狀（camelCase 對齊 domain 欄位；皆 optional，模型缺值即略）。 */
 interface ExtractedShape {
-  company?: Partial<Company>;
+  company?: ExtractedCompany;
   contacts?: Partial<Contact>[];
   products?: ExtractedProduct[];
   news?: Partial<CompanyNews>[];
@@ -79,6 +120,8 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         // collapsed the whole object into the websiteUrl string and dropped industry/description/etc.
         logoUrl: { type: S.STRING },
         description: { type: S.STRING },
+        // zh-TW 精簡公司簡介（另產；不覆寫來源語言的 description）。
+        descriptionZh: { type: S.STRING },
         tagline: { type: S.STRING },
         industry: { type: S.STRING },
         subIndustries: { type: S.ARRAY, items: { type: S.STRING } },
@@ -105,6 +148,32 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         certifications: { type: S.ARRAY, items: { type: S.STRING } },
         awards: { type: S.ARRAY, items: { type: S.STRING } },
         hiringSignals: { type: S.ARRAY, items: { type: S.STRING } },
+        // 技術棧（company_tech 子表；zh-TW，技術/產品專有名保留原名如 AWS/React）。toCompany 拆出→bulkUpsertTech。
+        techStack: {
+          type: S.ARRAY,
+          items: {
+            type: S.OBJECT,
+            properties: {
+              category: { type: S.STRING },
+              vendor: { type: S.STRING },
+              product: { type: S.STRING },
+              detectedFrom: { type: S.STRING },
+            },
+          },
+        },
+        // 部門/團隊（company_departments 子表；zh-TW）。toCompany 拆出→bulkUpsertDepartments。
+        departments: {
+          type: S.ARRAY,
+          items: {
+            type: S.OBJECT,
+            properties: {
+              name: { type: S.STRING },
+              focus: { type: S.STRING },
+              headcountEstimate: { type: S.INTEGER },
+            },
+            required: ["name"],
+          },
+        },
       },
       // Force the model to actually emit the high-value fields it otherwise skips. A company's own
       // homepage always supports name+description+industry; without `required`, gemini fills the easy
@@ -120,6 +189,8 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
           firstName: { type: S.STRING },
           lastName: { type: S.STRING },
           title: { type: S.STRING },
+          // zh-TW 職稱簡述（另產；不覆寫來源語言的 title）。
+          titleZh: { type: S.STRING },
           department: { type: S.STRING },
           seniority: {
             type: S.STRING,
@@ -128,6 +199,8 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
           email: { type: S.STRING },
           linkedinUrl: { type: S.STRING },
           bio: { type: S.STRING },
+          // zh-TW 背景摘要（另產）。
+          backgroundSummaryZh: { type: S.STRING },
           locationCity: { type: S.STRING },
           locationCountry: { type: S.STRING },
         },
@@ -142,7 +215,11 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
           name: { type: S.STRING },
           category: { type: S.STRING },
           oneLiner: { type: S.STRING },
+          // zh-TW 一句話定位（另產）。
+          oneLinerZh: { type: S.STRING },
           description: { type: S.STRING },
+          // zh-TW 精簡描述（另產）。
+          descriptionZh: { type: S.STRING },
           productUrl: { type: S.STRING },
           docsUrl: { type: S.STRING },
           pricingModel: { type: S.STRING },
@@ -187,9 +264,13 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         type: S.OBJECT,
         properties: {
           title: { type: S.STRING },
+          // zh-TW 標題簡述（另產）。
+          titleZh: { type: S.STRING },
           url: { type: S.STRING },
           source: { type: S.STRING },
           summary: { type: S.STRING },
+          // zh-TW 摘要（另產）。
+          summaryZh: { type: S.STRING },
           category: {
             type: S.STRING,
             enum: ["funding", "product", "exec_change", "mna", "partnership", "legal", "financial", "other"],
@@ -218,7 +299,8 @@ const SYSTEM = [
   "- `keyFeatures[]`: the product's notable features (name + optional detail/benefit).",
   "- `specs[]`: technical spec rows from a spec/comparison table as {name,value} pairs, e.g. {name:'容量', value:'1500VA/900W'}, {name:'輸出電壓', value:'110V'}, {name:'外型架構', value:'直立式'}. Product-detail AND product-comparison pages list models by attribute columns (capacity/architecture/form-factor/voltage/runtime) — attach those attribute values as specs[] on the matching product. A page WITH such a table SHOULD populate specs[].",
   "Also include, only when the text states them: HQ location, founded year, social links, key customers, and named people (as `contacts[]`).",
-  "Write the extracted text values in the SAME language as the page (e.g. Traditional Chinese if the page is in Chinese) — do not translate; quote the company's own wording. Field NAMES stay as in the schema (English keys).",
+  "TECH & DEPARTMENTS (only when the text states them): `company.techStack[]` = technologies/vendors/products the company itself uses or is built on ({category, vendor, product, detectedFrom = where on the page you saw it}); `company.departments[]` = the company's internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns in their original form (e.g. AWS, React, Kubernetes, SAP). Cap: at most 12 techStack items and at most 10 departments.",
+  "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the page's own source language (e.g. Traditional Chinese if the page is Chinese; do NOT translate the primary fields; quote the company's own wording). IN ADDITION, for each `*Zh` field — company.descriptionZh, products[].oneLinerZh, products[].descriptionZh, contacts[].titleZh, contacts[].backgroundSummaryZh, news[].titleZh, news[].summaryZh — emit a concise Traditional-Chinese (zh-TW) gloss of that item's corresponding primary field, each at most 2 sentences. If the source is already zh-TW you may condense it. Field NAMES stay as in the schema (English keys).",
   "Leave a field empty ONLY when the text does not state it. Do NOT fabricate identifiers, prices, numbers, or specs you cannot see in the text. Keep each text value concise and never repeat text. Return ONLY valid JSON matching the schema.",
 ].join(" ");
 
@@ -281,7 +363,9 @@ function toProducts(items: ExtractedProduct[] | undefined): Partial<CompanyProdu
     const prod: Partial<CompanyProduct> = { name };
     if (p.category) prod.category = p.category;
     if (p.oneLiner) prod.oneLiner = p.oneLiner;
+    if (p.oneLinerZh) prod.oneLinerZh = p.oneLinerZh;
     if (p.description) prod.description = p.description;
+    if (p.descriptionZh) prod.descriptionZh = p.descriptionZh;
     const purl = cleanUrl(p.productUrl);
     if (purl) prod.productUrl = purl;
     const durl = cleanUrl(p.docsUrl);
@@ -325,6 +409,45 @@ function toProducts(items: ExtractedProduct[] | undefined): Partial<CompanyProdu
   return out;
 }
 
+/** 模型 techStack → NewCompanyTech[]（去空、上限 MAX_TECH）。至少要有 vendor/product/category 之一才成一列。 */
+function toTechStack(items: ExtractedTech[] | undefined): NewCompanyTech[] {
+  if (!Array.isArray(items)) return [];
+  const out: NewCompanyTech[] = [];
+  for (const t of items) {
+    const category = typeof t?.category === "string" ? t.category.trim() : "";
+    const vendor = typeof t?.vendor === "string" ? t.vendor.trim() : "";
+    const product = typeof t?.product === "string" ? t.product.trim() : "";
+    const detectedFrom = typeof t?.detectedFrom === "string" ? t.detectedFrom.trim() : "";
+    if (!category && !vendor && !product) continue; // 純 detectedFrom 無資訊 → 跳過
+    const row: NewCompanyTech = { confidence: CRAWL_CONFIDENCE };
+    if (category) row.category = category;
+    if (vendor) row.vendor = vendor;
+    if (product) row.product = product;
+    if (detectedFrom) row.detectedFrom = detectedFrom;
+    out.push(row);
+    if (out.length >= MAX_TECH) break;
+  }
+  return out;
+}
+
+/** 模型 departments → NewCompanyDepartment[]（name 必填、去空、上限 MAX_DEPARTMENTS）。 */
+function toDepartments(items: ExtractedDepartment[] | undefined): NewCompanyDepartment[] {
+  if (!Array.isArray(items)) return [];
+  const out: NewCompanyDepartment[] = [];
+  for (const d of items) {
+    const name = typeof d?.name === "string" ? d.name.trim() : "";
+    if (!name) continue;
+    const row: NewCompanyDepartment = { name };
+    if (typeof d.focus === "string" && d.focus.trim()) row.focus = d.focus.trim();
+    if (typeof d.headcountEstimate === "number" && Number.isFinite(d.headcountEstimate) && d.headcountEstimate >= 0) {
+      row.headcountEstimate = Math.round(d.headcountEstimate);
+    }
+    out.push(row);
+    if (out.length >= MAX_DEPARTMENTS) break;
+  }
+  return out;
+}
+
 /** 由抽出的 company 物件逐欄合成公司級 provenance（爬蟲來源）。 */
 function companyProvenance(company: Partial<Company> | undefined, sourceUrl?: string): ProvenanceInput[] {
   if (!company) return [];
@@ -356,7 +479,10 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
     async toCompany(raw: RawCrawl): Promise<CrawlPayload> {
       const ex = await extract(raw);
       const sourceUrl = cleanUrl(raw.finalUrl ?? raw.url) ?? (raw.finalUrl ?? raw.url);
-      const company: Partial<Company> = ex.company ?? {};
+      // techStack/departments 由模型掛在 company 下但屬子表 → 先拆出，勿讓其污染 company 欄位與 provenance。
+      const exCompany: ExtractedCompany = ex.company ?? {};
+      const { techStack: rawTech, departments: rawDepts, ...companyFields } = exCompany;
+      const company: Partial<Company> = companyFields;
       // 正規化模型可能回傳的 URL 欄位（去尾端逗號等污染）。
       company.websiteUrl = cleanUrl(company.websiteUrl);
       company.logoUrl = cleanUrl(company.logoUrl) ?? company.logoUrl;
@@ -367,6 +493,8 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
         contacts: ex.contacts ?? [],
         products: toProducts(ex.products),
         news: ex.news ?? [],
+        techStack: toTechStack(rawTech),
+        departments: toDepartments(rawDepts),
         provenance: companyProvenance(company, sourceUrl),
       };
     },

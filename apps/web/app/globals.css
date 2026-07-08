@@ -461,6 +461,20 @@ img {
 .mc-overview__desc, .mc-product-detail__desc { color: var(--mc-text); font-size: 14px; line-height: 1.6; }
 .mc-overview__fields, .mc-persona__fields, .mc-product-detail__fields { display: flex; flex-direction: column; }
 
+/* ── i18n 中文簡介 (zh-TW parallel display; original text stays primary) ── */
+.mc-i18n-sum {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--mc-accent);
+  border-radius: 6px;
+  background: rgba(139, 92, 246, 0.08);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--mc-text);
+}
+.mc-i18n-sum__label { color: var(--mc-accent); font-weight: 600; margin-right: 6px; }
+.mc-i18n-title { display: block; margin-top: 3px; font-size: 12px; font-weight: 500; color: var(--mc-text-muted); }
+
 /* ── field row (provenance) ─────────────────────────────────── */
 .mc-field-row { display: flex; gap: 14px; padding: 11px 0; border-bottom: 1px solid rgba(38, 50, 82, 0.5); }
 .mc-field-row__label { flex: 0 0 120px; font-size: 13px; color: var(--mc-text-muted); padding-top: 3px; }

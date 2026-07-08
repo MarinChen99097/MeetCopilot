@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useLocale } from "next-intl";
 import type { Company } from "@meetcopilot/shared";
 import { ApiError, getCompany, updateCompany, type CompanyDetail } from "@/lib/api";
 import { fmtNumber } from "@/lib/format";
@@ -143,6 +144,7 @@ function CompanyHead({ company, onEnriched }: { company: CompanyDetail; onEnrich
 }
 
 function OverviewTab({ company, onChanged }: { company: CompanyDetail; onChanged: () => void }) {
+  const isZh = useLocale() === "zh-TW";
   const prov = useEntityProvenance(
     "company",
     company.id,
@@ -168,6 +170,12 @@ function OverviewTab({ company, onChanged }: { company: CompanyDetail; onChanged
     <div className="mc-tabpane">
       <h3 className="mc-tabpane__title">總覽</h3>
       {company.description ? <p className="mc-overview__desc">{company.description}</p> : null}
+      {isZh && company.descriptionZh ? (
+        <p className="mc-i18n-sum">
+          <span className="mc-i18n-sum__label">🌐 中文簡介</span>
+          {company.descriptionZh}
+        </p>
+      ) : null}
       <div className="mc-overview__fields">
         {field("標語", "tagline", company.tagline ?? "—")}
         {field("產業", "industry", company.industry ?? "—")}

@@ -34,6 +34,13 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 19:30 | CRM 原文＋zh-TW 簡介並排 ＋ 技術棧/部門擷取寫入（補孤兒表）
+- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
+- **類型**: feat
+- **檔案**: crm `migrations/011_i18n_children.sql`＋`migrations-pg/011`（company_news+title_zh/summary_zh、company_products+one_liner_zh/description_zh、companies+description_zh、contacts+title_zh/background_summary_zh）＋`mappers.ts`（6 新欄 FieldDef，讀寫雙向）；shared crm-types（CompanyNews/CompanyProduct/Company/Contact 加 *Zh；CrawlPayload 加 techStack/departments，型別 NewCompanyTech[]/NewCompanyDepartment[]）；server `research/extractor.ts`＋`deep-extractor.ts`（schema 加 descriptionZh/techStack/departments/*Zh，SYSTEM 改雙語規則：原文逐字＋*Zh 產 zh-TW 簡介 ≤2 句，techStack/departments 直接 zh-TW、專有名保留；MAX_TECH=12/MAX_DEPARTMENTS=10）＋`orchestrator.ts`（runStandard/runDeep 落庫後呼叫 bulkUpsertTech/bulkUpsertDepartments，接上孤兒表）；web `ChildTabs.tsx`（NewsTab 原文+🌐中文簡介）＋`ProductsTab.tsx`（product description/oneLiner 中文簡介）＋`CompanyDetailView.tsx`（OverviewTab descriptionZh）＋`globals.css`（.mc-i18n-sum 等）；test `crm-core.test.ts`（idempotency 斷言改連續 1..N 不硬編碼）
+- **改了什麼**: 三件——(1) 對方情報顯示「原文＋zh-TW 簡介」並排（locale===zh-TW 且 *Zh 有值時顯示中文簡介框）；(2) 擷取器產出並在地化（不再只逐字英文）；(3) 技術棧 company_tech／部門 company_departments 兩張「有表有 repo 有讀路由有 UI、卻從無寫入」的孤兒表——補上擷取 schema＋orchestrator bulkUpsert 寫入路徑。
+- **為什麼**: 使用者反映「表現形式應該原文+i18n 簡介、爬出來全英文沒翻、技術棧與部門沒爬出來」。範圍＝只影響新研究結果（重跑「研究此公司」即現）；不回填既有資料。typecheck 4 workspace 綠/server 36/36/CRM 43/43。I1/I2/I3 未觸及（只動 CRM 資料/擷取/顯示）。
+
 ### 2026-07-08 18:00 | 全網深度研究 enrich 模式（deep）— 不鎖公司網域、多來源、標真出處
 - **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
 - **類型**: feat

@@ -36,6 +36,17 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 19:30 | CRM 顯示原文＋zh-TW 簡介、擷取在地化、補技術棧/部門孤兒表
+- **誰決定**: 使用者（截圖 CyberPower 頁反映三點：「表現形式應該原文+i18n 簡介才對」「爬出來全英文沒翻成 i18n」「技術棧與部門也沒爬出來」）＋Fable（設計契約）
+- **決策**:
+  1. **原文＋zh-TW 簡介並排**（非取代）：DB 各加平行 `*_zh` 欄（news title/summary、product one_liner/description、company description、contact title/background_summary），原文欄照舊逐字，額外存 zh-TW 簡介；前端 locale===zh-TW 且 *Zh 有值時，於原文下顯示視覺區別的「🌐 中文簡介」框。
+  2. **在地化放擷取階段**（非讀取時即時翻譯）：擷取器一次產出雙語（SYSTEM 從「do not translate」改為「主欄逐字＋*Zh 產 ≤2 句 zh-TW 簡介」）——省成本、可快取、有 provenance、離線可讀。
+  3. **技術棧/部門是合成資料，直接產 zh-TW**（不需雙語欄）；補上擷取 schema（techStack/departments）＋orchestrator 呼叫既有 bulkUpsertTech/bulkUpsertDepartments，接上「有表有 repo 有讀路由有 UI 卻從無寫入」的孤兒表。
+- **根因（調查確認）**: company_tech/company_departments 自 003 就有表＋repo＋GET＋前端分頁，但**沒有任何擷取器產出、orchestrator 也從沒呼叫 bulkUpsert**＝只讀得到永遠空。且兩擷取器 prompt 都明令 do-not-translate＝內容全來源語言、schema 無任何 zh 欄。
+- **考慮過的替代**: (a) i18n map（Record<locale,string>）欄——否決：只有 zh-TW/en，平行純量 `*_zh` 最簡且足夠；(b) 讀取時即時翻譯——否決：延遲/成本/無 provenance；(c) 批次回填既有資料——否決：改走「使用者重跑研究即現」，避免一次性翻譯 job。
+- **範圍/限制**: 只影響**新研究結果**，既有 CyberPower 資料需重跑「研究此公司（深度）」才會出現新欄位；大型產品目錄每產品多出 *Zh 可能逼近 16384 output token 上限（簡介有界故風險低，deep-extractor 有 3 次重試救 truncation）。
+- **驗證**: typecheck 4 workspace 綠、server 36/36、CRM 43/43（idempotency 測試改連續 1..N 不硬編碼版本數）。I1/I2/I3 未觸及。migration 011 雙份（SQLite 多條 ADD COLUMN／PG ADD COLUMN IF NOT EXISTS），server boot 自動套。
+
 ### 2026-07-08 18:00 | 研究引擎不再鎖公司網域＝新增全網深度研究（deep 模式）
 - **誰決定**: 使用者（「應有專門 agent 深度搜尋公司資料，公司網址只是起點，要去報導/wiki 等全網找，不要被鎖死在公司網址」）＋Fable（設計）
 - **決策**: enrich 新增 **deep 模式**——專門的全網研究：以公司名/網址為起點，Gemini Google Search 多角度雙語查詢＋深讀外部來源（新聞/維基/產業/公開資料，跳過公司網域）＋綜合填 CRM，**關鍵＝每欄 provenance 指向真實外部來源 URL**（不是公司網域）。既有 quick/detailed（爬公司網站）不變；deep 額外並行網站爬蟲補產品。GroundingProvider（原只接 HUD /ground）現也接進 enrich。
