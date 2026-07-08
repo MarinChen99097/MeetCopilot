@@ -18,7 +18,7 @@ gcloud run deploy meetcopilot-server --image=asia-east1-docker.pkg.dev/ezpagesit
   --region=asia-east1 --execution-environment=gen2 --min-instances=0 --max-instances=1 --cpu=2 --memory=4Gi \
   --add-cloudsql-instances=ezpagesite:asia-east1:meetcopilot-db \
   --set-secrets=JWT_SECRET=meetcopilot-jwt-secret:latest,GEMINI_API_KEY=meetcopilot-gemini-key:latest,OPENAI_API_KEY=meetcopilot-openai-key:latest,DATABASE_URL=meetcopilot-db-url:latest \
-  --set-env-vars=DB_DRIVER=pg,WEB_ORIGIN=https://meetcopilot-web-54139295474.asia-east1.run.app,GOOGLE_CLIENT_ID=54139295474-f7cve65n4884ttkcbc2o23hs763q7hm4.apps.googleusercontent.com,GEMINI_TEXT_MODEL=gemini-3.1-flash-lite,GEMINI_EXTRACT_MODEL=gemini-3.5-flash,GEMINI_EMBED_MODEL=gemini-embedding-001,GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview,OPENAI_IMAGE_MODEL=gpt-image-2,OPENAI_IMAGE_SIZE=1536x864,OPENAI_IMAGE_QUALITY=medium,RESEARCH_AUTO_LIMIT_PER_MEETING=10 \
+  --set-env-vars=DB_DRIVER=pg,WEB_ORIGIN=https://meetcopilot-web-54139295474.asia-east1.run.app,GOOGLE_CLIENT_ID=54139295474-f7cve65n4884ttkcbc2o23hs763q7hm4.apps.googleusercontent.com,GEMINI_TEXT_MODEL=gemini-3.1-flash-lite,GEMINI_EXTRACT_MODEL=gemini-3.5-flash,GEMINI_EMBED_MODEL=gemini-embedding-001,GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview,OPENAI_IMAGE_MODEL=gpt-image-2,OPENAI_IMAGE_SIZE=1536x864,OPENAI_IMAGE_QUALITY=medium,RESEARCH_AUTO_LIMIT_PER_MEETING=10,RESEARCH_JOB_TIMEOUT_MS=600000 \
   --allow-unauthenticated --timeout=3600 --session-affinity
 # ⚠ WEB_ORIGIN 必帶（CORS）；GOOGLE_CLIENT_ID 必帶（沿用 EZpage 的 client，共用帳號）。server 用 cloudbuild-server.yaml 建。
 # ⚠ Google 登入前置：Console 把 meetcopilot-web 網址加進該 OAuth client 的「已授權 JavaScript 來源」。

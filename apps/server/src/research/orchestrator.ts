@@ -89,10 +89,13 @@ function toCrawlMode(mode: CrawlMode): "quick" | "detailed" {
   return mode === "deep" ? "detailed" : mode;
 }
 
-/** 整體 job 逾時（ms）：env RESEARCH_JOB_TIMEOUT_MS，預設 360000（6 分）。防背景流程掛死→永遠「研究中」。 */
+/**
+ * 整體 job 逾時（ms）：env RESEARCH_JOB_TIMEOUT_MS，預設 600000（10 分）。防背景流程掛死→永遠「研究中」。
+ * 預設須寬鬆於 deep 最壞路徑：官網爬 300s 硬上限 ∥ grounding 150s（並行）→ 再序列 2 次 Gemini 抽取＋redirect 30s ≈ 450s。
+ */
 function jobTimeoutMs(): number {
   const raw = Number.parseInt(process.env.RESEARCH_JOB_TIMEOUT_MS ?? "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 360_000;
+  return Number.isFinite(raw) && raw > 0 ? raw : 600_000;
 }
 
 /** 以 Promise.race 對一項工作施加硬逾時；逾時→reject（呼叫端既有 catch 會 markFailed 記「研究逾時」）。 */
