@@ -15,7 +15,15 @@
   },
   "present": {
     "title": "Slide Stage",
-    "desc": "A clean slide presentation view."
+    "desc": "A clean slide presentation view.",
+    "loading": "Loading slides",
+    "waiting": "Waiting for the presenter to start…",
+    "emptyTitle": "No presentation to show",
+    "emptyDesc": "This link doesn't point to a presentation. Open a deck in the app, then start presenting.",
+    "failedTitle": "Couldn't load the presentation",
+    "failedDesc": "We couldn't load the slides. Check the link is correct, or try again.",
+    "retry": "Try again",
+    "backHome": "Back to app"
   },
   "copilot": {
     "title": "In-Meeting Copilot Capture",

@@ -5,8 +5,9 @@
  *
  * ⚠️ 不變量 I3（HUD 絕不外流）：本檔**只**渲染投影片 + 頁碼 + 一個極不顯眼的連線圓點。
  * 嚴禁 import 任何副駕元素（transcript / suggestion / info_card / signals / hud / copilot）。
- * 允許 import：SlideRenderer（純渲染）、lib/api（getDeck / API_BASE）、lib/ws（connect）、@meetcopilot/shared 型別。
- *   → 這份 import 清單即 I3 的機械保證；擴充前務必確認新增 import 不含 HUD 詞彙。
+ * 允許 import：SlideRenderer（純渲染）、lib/api（getDeck / API_BASE）、lib/ws（connect）、@meetcopilot/shared 型別、
+ *   next-intl（useTranslations，僅文案）、@/i18n/navigation（Link，僅 locale-aware 導覽——非 HUD、且只在「無投影片可播」的終態顯示）。
+ *   → 這份 import 清單即 I3 的機械保證；擴充前務必確認新增 import 不含 HUD 詞彙（transcript/suggestion/signals/copilot…）。
  *
  * 不變量：I1（deck 只從尾端 APPEND 長出，deck_update 靜默接尾）、I2（只有已批准內容才會經 deck_update 抵達）。
  *
@@ -14,9 +15,11 @@
  * 收 deck_update 靜默 append、收 session_state 對齊頁碼。無 session 憑證時＝純本地播放（鍵盤翻頁仍可用）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import type { ServerMessage, SlideSpec } from "@meetcopilot/shared";
 import { API_BASE, getDeck } from "@/lib/api";
 import { connect, type WsConnection } from "@/lib/ws";
+import { Link } from "@/i18n/navigation";
 import { SlideRenderer } from "@/components/slide/SlideRenderer";
 
 type LinkState = "off" | "connecting" | "open" | "reconnecting";
@@ -30,13 +33,17 @@ export interface PresentStageProps {
 const RECONNECT_MS = 2000;
 const RECONNECT_MAX_MS = 15000;
 const MAX_RECONNECT_ATTEMPTS = 10;
+// getDeck 無內建 timeout：後端久候不回時避免無限 spinner，超過此上限即視同載入失敗。
+const LOAD_TIMEOUT_MS = 12000;
 
 export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
+  const t = useTranslations("present");
   const [slides, setSlides] = useState<SlideSpec[]>([]);
   const [index, setIndex] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [link, setLink] = useState<LinkState>("off");
+  const [reloadKey, setReloadKey] = useState(0); // 重試：bump 後重跑 deck 載入 effect。
 
   // committedIndex：本地已播出的最高頁（送 page_commit 用；單調遞增，只增不減）。
   const committed = useRef(-1);
@@ -51,22 +58,39 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       return;
     }
     let alive = true;
+    // 載入上限：後端久候不回時，逾時視同失敗（避免 spinner 無限轉）。
+    const timer = window.setTimeout(() => {
+      if (!alive) return;
+      setFailed(true);
+      setLoaded(true);
+    }, LOAD_TIMEOUT_MS);
     getDeck(deckId)
       .then((view) => {
         if (!alive) return;
+        window.clearTimeout(timer);
         setSlides(view.slides);
         committed.current = view.deck.committedIndex;
+        setFailed(false); // 逾時後才回來的成功也能復原
         setLoaded(true);
       })
       .catch(() => {
         if (!alive) return;
+        window.clearTimeout(timer);
         setFailed(true);
         setLoaded(true);
       });
     return () => {
       alive = false;
+      window.clearTimeout(timer);
     };
-  }, [deckId]);
+  }, [deckId, reloadKey]);
+
+  // 重試：清掉失敗/載入旗標並重跑上面的 effect（回退 spinner→重抓 deck）。
+  const retryLoad = useCallback(() => {
+    setFailed(false);
+    setLoaded(false);
+    setReloadKey((k) => k + 1);
+  }, []);
 
   const total = slides.length;
 
@@ -209,24 +233,78 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   }, [meetingId, token, deckId, onMessage]);
 
   // ── render：極簡舞台（僅投影片 + 頁碼 + 連線圓點）──────────
+  // 載入中（deck 抓取進行中；已有 LOAD_TIMEOUT_MS 上限，不會無限轉）。
   if (!loaded) {
     return (
       <main className="mc-present mc-present--loading" aria-busy="true">
-        <div className="mc-present__spinner" aria-label="簡報載入中" />
+        <div className="mc-present__spinner" aria-label={t("loading")} />
       </main>
     );
   }
 
   const current = slides[index];
+  // 有 session 憑證＝live 分享：投影片可能還會經 WS deck_update 陸續抵達，空舞台＝「即將開始」而非死路。
+  const isLive = Boolean(meetingId && token);
+
+  // 無投影片可播：依情境給明確終態，取代會誤導的「載入中…」。
+  // 這些畫面只在「無內容可播」時出現，不含任何副駕元素；回 App 鈕在真正播放（有投影片）時永不顯示（I3）。
+  if (!current) {
+    if (failed) {
+      return (
+        <main className="mc-present">
+          <div className="mc-present__stage">
+            <div className="mc-present__notice" role="alert">
+              <p className="mc-present__notice-title">{t("failedTitle")}</p>
+              <p className="mc-present__notice-desc">{t("failedDesc")}</p>
+              <div className="mc-present__notice-actions">
+                {deckId ? (
+                  <button type="button" className="mc-btn mc-btn--ghost" onClick={retryLoad}>
+                    {t("retry")}
+                  </button>
+                ) : null}
+                <Link href="/" className="mc-btn mc-btn--primary">
+                  {t("backHome")}
+                </Link>
+              </div>
+            </div>
+          </div>
+        </main>
+      );
+    }
+    if (isLive) {
+      // 合法觀眾在等報告者推第一頁：友善等待、無按鈕（守 I3、也不像壞掉）。
+      return (
+        <main className="mc-present">
+          <div className="mc-present__stage">
+            <div className="mc-present__empty" role="status">
+              {t("waiting")}
+            </div>
+          </div>
+        </main>
+      );
+    }
+    // 沒帶 deck、或 deck 為空且非 live：死路→給出口。
+    return (
+      <main className="mc-present">
+        <div className="mc-present__stage">
+          <div className="mc-present__notice" role="status">
+            <p className="mc-present__notice-title">{t("emptyTitle")}</p>
+            <p className="mc-present__notice-desc">{t("emptyDesc")}</p>
+            <div className="mc-present__notice-actions">
+              <Link href="/" className="mc-btn mc-btn--primary">
+                {t("backHome")}
+              </Link>
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="mc-present">
       <div className="mc-present__stage">
-        {current ? (
-          <SlideRenderer slide={current} size="full" />
-        ) : (
-          <div className="mc-present__empty">簡報載入中…</div>
-        )}
+        <SlideRenderer slide={current} size="full" />
       </div>
 
       {total > 0 ? (

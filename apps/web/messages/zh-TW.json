@@ -15,7 +15,15 @@
   },
   "present": {
     "title": "簡報舞台",
-    "desc": "乾淨的投影片播放視圖。"
+    "desc": "乾淨的投影片播放視圖。",
+    "loading": "簡報載入中",
+    "waiting": "簡報即將開始…",
+    "emptyTitle": "沒有可播放的簡報",
+    "emptyDesc": "這個連結沒有指定要播放的簡報。請從 App 開啟一份簡報,再開始播放。",
+    "failedTitle": "簡報載入失敗",
+    "failedDesc": "無法載入投影片內容。請確認連結是否正確,或稍後再試。",
+    "retry": "重試",
+    "backHome": "回到 App"
   },
   "copilot": {
     "title": "會中副駕擷取端",

@@ -327,6 +327,11 @@
 .mc-present { position: fixed; inset: 0; background: #05070f; color: var(--mc-text); display: flex; align-items: center; justify-content: center; }
 .mc-present__stage { width: min(100vw, calc(100vh * 16 / 9)); }
 .mc-present__empty { color: var(--mc-text-muted); text-align: center; }
+/* 終態通知（無投影片可播：空/失敗/逾時）——置中、深色、不含任何副駕元素（I3） */
+.mc-present__notice { max-width: 34rem; margin: 0 auto; padding: 0 24px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+.mc-present__notice-title { margin: 0; font-size: clamp(20px, 3.2vw, 28px); font-weight: 650; color: var(--mc-text); }
+.mc-present__notice-desc { margin: 0; font-size: 15px; line-height: 1.65; color: var(--mc-text-muted); }
+.mc-present__notice-actions { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 6px; }
 .mc-present__pageno { position: fixed; right: 18px; bottom: 14px; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: rgba(230, 235, 245, 0.55); user-select: none; }
 .mc-present__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mc-text-muted); }
 .mc-present__dot--open { background: var(--mc-ok); }
