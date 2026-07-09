@@ -34,6 +34,29 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-08 23:20 | P2/P3 部署前審查修正（3 項）
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `src/gemini.ts`, `src/decks-routes/index.ts`, `src/asr/gemini-asr.ts`
+- **改了什麼**:
+  - **gemini.ts `normalizeCallError`**: abort/逾時分支原地改寫 `e.message`——但真實 client timeout 的 caught error 是 `DOMException{name:"AbortError", message:"This operation was aborted"}`、其 `.message` 是唯讀 getter，賦值丟 TypeError → 吞掉 `retryable=false` → withRetry 不短路、白跑第二次 ~120s（共 ~240s）且逾時被誤標一般錯誤。改：回傳**全新可寫 Error**帶 `retryable=false`（保留逾時 token）；abort 偵測靠既有 `isAbortOrTimeout`（比對 `err.name`）。
+  - **decks-routes/index.ts**: catch-all `/MAX_TOKENS|finishReason/i` 會把 `finishReason=OTHER`/`MALFORMED_FUNCTION_CALL` 誤標「輸出過長」；收窄成 `/MAX_TOKENS/i`，殘餘 `/finishReason/i` 另給中性 422「生成未正常結束，請調整輸入後再試」；429、SAFETY/RECITATION 順序不變。
+  - **asr/gemini-asr.ts**: 併發 fire-and-forget transcribe 共用單一 `unavailableSignaled` 旗標，恢復後 straggler 失敗會重放 `asr_unavailable`（presenter HUD 雜訊）。加單調序號 `dispatchSeq`/`lastSuccessSeq`，失敗只在 `seq > lastSuccessSeq && !unavailableSignaled` 才 signal → 過期 straggler 不重放；空白音訊仍不報。
+- **為什麼**: 部署前用內建多 agent 對抗式審查（0 critical／1 warning／2 info、4 駁回）抓到——warning 的 gemini 逾時路徑崩是 P2 引入的真 bug（會讓逾時變 240s＋誤標）。typecheck 4ws 綠、server 36/36＋CRM 43/43 綠、fresh-context read-back（含 DOMException 實測）PASS。
+
+### 2026-07-08 22:40 | extract-url 加固後續 P2/P3：gemini 韌性＋pptx 串流/worker 隔離＋ASR asr_unavailable＋webp 匯出排除
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `src/gemini.ts`, `src/import/pptx-parser.ts`, `src/import/run-in-worker.ts`(新), `src/import/parse-worker.ts`(新), `src/asr/gemini-asr.ts`, `src/realtime/hub.ts`, `src/generation/pptx-render.ts`, `src/decks-routes/index.ts`
+- **改了什麼**:
+  - **P2 gemini（gemini.ts）**: generateContent 加 per-call 逾時（client 預設 30s、generateJson 120s——非串流大簡報可能 >30s）；generateJson 偵測 finishReason≠STOP → 丟含「finishReason=<REASON>」的可行動 zh-TW 錯誤＋設 `err.retryable=false`；withRetry 加退避（衍生 jitter、非 Math.random）＋honor Retry-After（數值＋message 內 `retryDelay:"Ns"` 字串）＋`retryable===false` 立即短路。ASR 不走此共用 client（v2 ASR 自有 GoogleGenAI）；maxOutputTokens 已存在未重加。
+  - **P3 pptx 串流上限（pptx-parser.ts）**: 原 post-decompress 檢查（`MAX_IMAGE_BASE64_CHARS`，可被謊報宣告大小繞過）→ 改 `entry.nodeStream()` 邊解壓邊累計位元組、超標即 destroy+reject；圖片與 slide-XML 路徑都走；加投影片數上限。周邊 entry（rels/theme/layout）超標由既有 try/catch 吞（graceful，記憶體仍因 stream destroy 有界）。
+  - **P3 worker 隔離（run-in-worker.ts＋parse-worker.ts 新）**: `runInWorker<T>(task,buf,timeoutMs)` 把 parse 丟進可 terminate 的 worker_thread，逾時 `worker.terminate()`+reject「匯入解析逾時」。載入用 `__filename` 副檔名判斷＋workerData 傳 ext＋**dynamic import 帶副檔名**（Node 22.18 原生 strip-types 會頂掉 worker 內 tsx、靜態 import 會 ERR_MODULE_NOT_FOUND）。dev(tsx)＋prod(dist node) 兩模式實測 parse 正確＋1ms 逾時真 terminate。
+  - **P3 ASR（asr/gemini-asr.ts＋realtime/hub.ts）**: 真失敗 vs 靜音區分；真失敗經 hub 廣播既有 ServerMessage error（code `asr_unavailable`）一次（per-provider 去重旗標、instance-per-session＝等同 per-runtime，成功即清）；空白音訊仍不廣播。I3 保留（只傳可用性通知、無內容、presenter-private）。
+  - **P3 webp（generation/pptx-render.ts）**: 匯出 addImage 三個 sink（safeImage、cover renderImageFull、addLogo 經 resolveLogo）排除 `image/webp`；**shared `isRasterImageDataUri` 不動**（畫面預覽仍可顯示 webp）——舊版 PowerPoint 無法渲染 webp。
+  - **P2/P3 decks（decks-routes/index.ts）**: /decks/generate catch 依 `err.status`/訊息映射（429/quota→429、SAFETY/RECITATION→422、MAX_TOKENS/finishReason→422、其餘 502 不外洩 raw、一律 server-side `console.error`）；/decks/import、/extract-pdf 改走 `runInWorker`，逾時→408，保留掃描/空白→422；GenerationEmptyError→422。
+- **為什麼**: extract-url（P1）上線後續，把 v1 稽核＋審查在 v2 也複發的同類問題補上（P2 LLM 韌性、P3 上傳 DoS／ASR 觀測性／webp 相容）。使用者「1 3修一修」。全 workspace typecheck 綠；server 36/36＋CRM 43/43 測試全 pass；逐 cluster fresh-context read-back PASS。I1/I2/I3 未削弱、SSRF 未動。凍結契約平行派工（v2 rule 6）。
+
 ### 2026-07-08 21:52 | 從網址匯入：瀏覽器 UA 修 429 ＋ 非 UTF-8 頁面編碼修亂碼（移植 v1 6 項）
 - **工作區**: apps/server
 - **類型**: fix

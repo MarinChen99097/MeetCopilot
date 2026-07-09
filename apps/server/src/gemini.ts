@@ -116,7 +116,95 @@ function stripJsonFences(text: string): string {
     .trim();
 }
 
-async function withRetry<T>(fn: () => Promise<T>, attempts: number, label: string): Promise<T> {
+/** 每次呼叫的預設逾時（client 層）：一般文字/embedding/grounding 30s。 */
+const DEFAULT_TIMEOUT_MS = 30_000;
+/**
+ * generateJson 專用逾時 120s：deck 生成走非串流、單次可能 >30s（多頁 + responseSchema），
+ * 用 client 預設 30s 會誤殺正常長生成。ASR 走自己的 GoogleGenAI（不共用本 client），維持自身短 deadline。
+ */
+const GENERATE_JSON_TIMEOUT_MS = 120_000;
+
+const BASE_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 4_000;
+/** honor upstream Retry-After 時的上限（避免被上游要求等太久拖垮排隊）。 */
+const RETRY_AFTER_CAP_MS = 5_000;
+
+/** 帶 retryable 旗標的錯誤（C1：retryable===false 時 withRetry 短路不重試）。 */
+type RetryableError = Error & { retryable?: boolean; status?: number };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 是否為 client 端逾時/中止（httpOptions.timeout 觸發的 AbortError 之類）。 */
+function isAbortOrTimeout(err: unknown): boolean {
+  if (!err) return false;
+  const e = err as { name?: unknown; message?: unknown };
+  const name = typeof e.name === "string" ? e.name : "";
+  const msg = typeof e.message === "string" ? e.message : "";
+  return (
+    /AbortError|RequestTimeoutError|RequestAbortedError/i.test(name) ||
+    /\babort(ed)?\b|timed out|timeout|逾時/i.test(msg)
+  );
+}
+
+/**
+ * 正規化單次呼叫錯誤（C1）：
+ *  - 真正的限流是帶數字 .status 的 ApiError（429/503）→ 原樣保留（可重試，交給 withRetry 退避 + Retry-After）。
+ *  - client 端逾時/中止 → 設 retryable=false 並確保訊息含 timeout 關鍵字（避免白等第二次長逾時）。
+ */
+function normalizeCallError(err: unknown): Error {
+  const e: RetryableError = err instanceof Error ? err : new Error(String(err));
+  if (typeof (e as { status?: unknown }).status === "number") return e;
+  if (isAbortOrTimeout(err)) {
+    // 不可原地改 e.message：真實 client 逾時是 DOMException{name:"AbortError"}，其 .message 為 getter-only，
+    // 賦值會拋 TypeError → 沖掉 retryable=false 旗標，害 withRetry 不短路而白等第二次長逾時。改回傳全新可寫 Error。
+    const orig = e.message;
+    const ne: RetryableError = new Error(
+      /timeout|timed out|逾時|AbortError/i.test(orig) ? orig : `Gemini 呼叫逾時（timeout）：${orig}`,
+    );
+    ne.retryable = false;
+    return ne;
+  }
+  return e;
+}
+
+/**
+ * 從錯誤解析上游 Retry-After（毫秒）。C1：同時解析數字欄位與 ApiError.message 內的 retryDelay:"Ns" 字串。
+ * Google API 的 429/503 訊息常內嵌 `"retryDelay":"5s"`；亦支援標準 `Retry-After: N`（秒）。
+ */
+function parseRetryAfterMs(err: unknown): number | undefined {
+  const e = err as { retryAfterMs?: unknown; retryAfter?: unknown; message?: unknown };
+  if (typeof e?.retryAfterMs === "number" && e.retryAfterMs >= 0) return e.retryAfterMs;
+  if (typeof e?.retryAfter === "number" && e.retryAfter >= 0) return e.retryAfter * 1000;
+  const msg = typeof e?.message === "string" ? e.message : "";
+  const delay = msg.match(/retryDelay["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)s/i);
+  if (delay?.[1]) return Math.round(parseFloat(delay[1]) * 1000);
+  const retryAfter = msg.match(/Retry-After["']?\s*[:=]\s*["']?(\d+)/i);
+  if (retryAfter?.[1]) return parseInt(retryAfter[1], 10) * 1000;
+  return undefined;
+}
+
+/**
+ * 兩次嘗試之間的退避（毫秒）。C1：確定性 jitter（不使用 Math.random，測試可重現）；
+ * 若上游帶 Retry-After 則優先採用（上限 RETRY_AFTER_CAP_MS）。
+ */
+function backoffDelayMs(attempt: number, err: unknown): number {
+  const retryAfter = parseRetryAfterMs(err);
+  if (retryAfter !== undefined) return Math.min(retryAfter, RETRY_AFTER_CAP_MS);
+  const expo = Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+  const jitter = (attempt * 131) % 250; // 確定性 jitter：依 attempt 推導，非亂數
+  return expo + jitter;
+}
+
+/**
+ * 有界重試（C1）：短路（.retryable===false 直接 rethrow 不重試）＋退避（確定性 jitter）＋
+ * honor 上游 Retry-After。簽名固定為 withRetry(fn, { attempts, label })。
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  { attempts, label }: { attempts: number; label: string },
+): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -124,6 +212,10 @@ async function withRetry<T>(fn: () => Promise<T>, attempts: number, label: strin
     } catch (err) {
       lastErr = err;
       console.warn(`[gemini:${label}] attempt ${attempt}/${attempts} failed: ${(err as Error).message}`);
+      if ((err as RetryableError)?.retryable === false) {
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+      if (attempt < attempts) await sleep(backoffDelayMs(attempt, err));
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
@@ -133,7 +225,9 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
   let cached: GoogleGenAI | null = null;
   const client = (): GoogleGenAI => {
     if (!cfg.apiKey) throw new Error("GEMINI_API_KEY not configured");
-    if (!cached) cached = new GoogleGenAI({ apiKey: cfg.apiKey });
+    // client 層預設逾時 30s（httpOptions.timeout，@google/genai 認可的選項路徑）；
+    // 個別呼叫可用 config.httpOptions.timeout 覆寫（generateJson 拉到 120s）。
+    if (!cached) cached = new GoogleGenAI({ apiKey: cfg.apiKey, httpOptions: { timeout: DEFAULT_TIMEOUT_MS } });
     return cached;
   };
 
@@ -158,17 +252,44 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
 
       return withRetry<Metered<T>>(
         async () => {
-          const response = await ai.models.generateContent({
-            model,
-            contents,
-            config: {
-              systemInstruction: opts.system,
-              responseMimeType: "application/json",
-              responseSchema: opts.schema as never,
-              maxOutputTokens: opts.maxOutputTokens ?? 8192,
-              ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
-            },
-          });
+          let response;
+          try {
+            response = await ai.models.generateContent({
+              model,
+              contents,
+              config: {
+                systemInstruction: opts.system,
+                responseMimeType: "application/json",
+                responseSchema: opts.schema as never,
+                maxOutputTokens: opts.maxOutputTokens ?? 8192,
+                // 個別呼叫覆寫 client 預設 30s：deck 生成單次可能 >30s。
+                httpOptions: { timeout: GENERATE_JSON_TIMEOUT_MS },
+                ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+              },
+            });
+          } catch (err) {
+            // 逾時/中止 → retryable=false（不再白等一次 120s）；限流的 ApiError 原樣保留可重試。
+            throw normalizeCallError(err);
+          }
+          // C1：finishReason!==STOP → 丟出可行動的 zh-TW 錯誤並標記 retryable=false（重試同樣會被截斷/擋下）。
+          // 訊息含 "finishReason=<REASON>" 供 decks agent 分流（SAFETY/RECITATION→422、MAX_TOKENS→422）。
+          // 轉為純字串，避免與 FinishReason 字串列舉直接比較觸發 TS「無交集」誤判。
+          const finishReason = response.candidates?.[0]?.finishReason as string | undefined;
+          if (finishReason && finishReason !== "STOP") {
+            const hint =
+              finishReason === "MAX_TOKENS"
+                ? "輸出過長被截斷，請減少頁數或精簡輸入後再試。"
+                : finishReason === "SAFETY" || finishReason === "PROHIBITED_CONTENT" || finishReason === "BLOCKLIST"
+                  ? "內容可能觸發安全性限制，請調整主題或用語後再試。"
+                  : finishReason === "RECITATION"
+                    ? "內容可能涉及 recitation 限制，請調整輸入後再試。"
+                    : "生成未正常結束，請調整輸入後再試。";
+            const e: RetryableError = new Error(
+              `Gemini 生成未正常結束（finishReason=${finishReason}）：${hint}`,
+            );
+            e.retryable = false;
+            throw e;
+          }
           const text = response.text;
           if (!text) throw new Error("empty Gemini response");
           const cleaned = stripJsonFences(text);
@@ -181,8 +302,7 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
             );
           }
         },
-        attempts,
-        "generateJson",
+        { attempts, label: "generateJson" },
       );
   }
 
@@ -216,8 +336,7 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
           }
           return { answer, citations };
         },
-        attempts,
-        "generateGrounded",
+        { attempts, label: "generateGrounded" },
       );
   }
 

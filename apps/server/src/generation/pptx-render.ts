@@ -15,6 +15,16 @@ import { CHART_ACCENT_HUES, isRasterImageDataUri } from "@meetcopilot/shared";
 
 const HEX_RE = /^[0-9a-fA-F]{6}$/;
 
+/**
+ * 匯出專用（EXPORT-ONLY）：webp 在螢幕渲染沒問題，但舊版 PowerPoint 無法解碼 image/webp，
+ * 塞進去會整頁破圖。故在 .pptx 匯出的所有 addImage 出口，額外排除 webp data URI；
+ * 螢幕端仍走 shared 的 isRasterImageDataUri（接受 webp，不改）。
+ */
+const WEBP_DATA_URI_RE = /^data:image\/webp[;,]/i;
+function isPptxExportableImage(data: unknown): data is string {
+  return isRasterImageDataUri(data) && !WEBP_DATA_URI_RE.test(data);
+}
+
 const DEFAULT_THEME = {
   bg: "18233B",
   text: "E6EBF5",
@@ -100,7 +110,7 @@ function addPanel(slide: PptxGenJS.Slide, x: number, y: number, w: number, h: nu
 }
 
 function safeImage(slide: PptxGenJS.Slide, opts: PptxGenJS.ImageProps): void {
-  if (!isRasterImageDataUri(opts.data)) return;
+  if (!isPptxExportableImage(opts.data)) return;
   try {
     slide.addImage(opts);
   } catch {
@@ -749,7 +759,7 @@ export async function exportDeckToPptx(
   const logoCache = new Map<string, string | undefined>();
   function resolveLogo(logo: string | undefined): string | undefined {
     if (!logo) return undefined;
-    if (!logoCache.has(logo)) logoCache.set(logo, isRasterImageDataUri(logo) ? logo : undefined);
+    if (!logoCache.has(logo)) logoCache.set(logo, isPptxExportableImage(logo) ? logo : undefined);
     return logoCache.get(logo);
   }
 

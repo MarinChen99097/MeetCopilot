@@ -111,7 +111,85 @@ const MIME_BY_EXT: Record<string, string> = {
   svg: "image/svg+xml",
 };
 
+// 原以「解壓後 base64 長度」判圖片是否過大——但那是解壓完才檢查，惡意檔可在解壓當下就撐爆記憶體（zip bomb）。
+// 改用「串流位元組上限」在解壓過程即時計數並中止；此常數保留為原有效門檻的來源（換算成原始位元組）。
 const MAX_IMAGE_BASE64_CHARS = 400 * 1024;
+// 單張內嵌圖片解壓上限（原始位元組）：由原 base64 長度門檻換算（base64 每 3 bytes → 4 chars），維持既有效果。
+const MAX_IMAGE_BYTES = Math.floor((MAX_IMAGE_BASE64_CHARS * 3) / 4);
+// 單一 XML entry 解壓上限：正常 slide/theme/rels XML 遠小於此；設 16MiB 足以攔下高壓縮比 zip bomb。
+const MAX_XML_BYTES = 16 * 1024 * 1024;
+// 整份 pptx 所有 entry 累計解壓上限：擋「大量小 entry」型炸彈（單一 entry cap 擋不住的攤平攻擊）。
+const MAX_TOTAL_DECOMPRESSED_BYTES = 256 * 1024 * 1024;
+// slide 頁數上限：擋「灌爆頁數」型炸彈；正常簡報遠低於此。
+const MAX_SLIDES = 1000;
+
+/** 解壓縮位元組超過上限時丟出（image 路徑捕捉此型別 → 略過該圖；XML 路徑不捕捉 → 中止整份解析）。 */
+class ZipEntryTooLargeError extends Error {
+  constructor(entryName: string, cap: number) {
+    super(`zip entry 解壓超過大小上限（${entryName}，上限 ${cap} bytes）`);
+    this.name = "ZipEntryTooLargeError";
+  }
+}
+
+/** 跨 entry 的累計解壓位元組預算（單次 parsePptx 共用一個實例）。 */
+interface SizeBudget {
+  total: number;
+}
+
+/**
+ * 串流解壓單一 zip entry 並在位元組數超過 cap（或超過整份總量）時「即刻」destroy 串流並 reject。
+ * 這是防 zip bomb 的關鍵：不先把整個 entry 解到記憶體再檢查，而是邊解邊數、超標即斷。
+ * declared uncompressedSize 只當便宜快篩（可被竄改，故仍以下方串流實際計數為準）。
+ */
+function readEntryCapped(entry: JSZip.JSZipObject, cap: number, budget: SizeBudget): Promise<Buffer> {
+  // 便宜快篩：宣告的解壓大小若已超標，連串流都不用開就拒（可偽造，僅作最省成本的前置攔截）。
+  const declared = (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+  if (typeof declared === "number" && declared > cap) {
+    return Promise.reject(new ZipEntryTooLargeError(entry.name, cap));
+  }
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let entryTotal = 0;
+    let settled = false;
+    const stream = entry.nodeStream("nodebuffer") as NodeJS.ReadableStream & { destroy?: (err?: Error) => void };
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+    const abort = (err: Error): void => {
+      try {
+        stream.destroy?.();
+      } catch {
+        /* destroy 失敗亦忽略：settled 已擋掉後續事件 */
+      }
+      finish(() => reject(err));
+    };
+    stream.on("data", (chunk: Buffer | string) => {
+      if (settled) return;
+      const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      entryTotal += b.length;
+      budget.total += b.length;
+      if (entryTotal > cap) {
+        abort(new ZipEntryTooLargeError(entry.name, cap));
+        return;
+      }
+      if (budget.total > MAX_TOTAL_DECOMPRESSED_BYTES) {
+        abort(new ZipEntryTooLargeError(`${entry.name}（整份總量）`, MAX_TOTAL_DECOMPRESSED_BYTES));
+        return;
+      }
+      chunks.push(b);
+    });
+    stream.on("error", (err: Error) => finish(() => reject(err)));
+    stream.on("end", () => finish(() => resolve(Buffer.concat(chunks))));
+  });
+}
+
+/** 以位元組上限串流讀出 entry 並以 UTF-8 解碼（取代 .async("string") 的無上限解壓）。 */
+async function readEntryText(entry: JSZip.JSZipObject, cap: number, budget: SizeBudget): Promise<string> {
+  const buf = await readEntryCapped(entry, cap, budget);
+  return buf.toString("utf8");
+}
 
 interface SlideRel {
   id: string;
@@ -119,7 +197,12 @@ interface SlideRel {
   target: string;
 }
 
-async function loadRelsFor(zip: JSZip, xmlFileName: string, parser: XMLParser): Promise<SlideRel[]> {
+async function loadRelsFor(
+  zip: JSZip,
+  xmlFileName: string,
+  parser: XMLParser,
+  budget: SizeBudget,
+): Promise<SlideRel[]> {
   const slashIdx = xmlFileName.lastIndexOf("/");
   const dir = slashIdx >= 0 ? xmlFileName.slice(0, slashIdx) : "";
   const base = slashIdx >= 0 ? xmlFileName.slice(slashIdx + 1) : xmlFileName;
@@ -127,7 +210,7 @@ async function loadRelsFor(zip: JSZip, xmlFileName: string, parser: XMLParser): 
   const relsFile = zip.file(relsPath);
   if (!relsFile) return [];
   try {
-    const xml = await relsFile.async("string");
+    const xml = await readEntryText(relsFile, MAX_XML_BYTES, budget);
     const parsed = xml ? parser.parse(xml) : undefined;
     const rels = asArray(
       (parsed as Record<string, unknown> | undefined)?.["Relationships"] &&
@@ -203,6 +286,7 @@ async function buildImageBlock(
   zip: JSZip,
   shape: Record<string, unknown>,
   mediaRelsById: Map<string, string>,
+  budget: SizeBudget,
 ): Promise<{ block: SlideBlock; skipReason?: undefined } | { block: undefined; skipReason: "tooLarge" | "other" }> {
   const embedId = findBlipEmbedId(shape);
   if (!embedId) return { block: undefined, skipReason: "other" };
@@ -218,17 +302,17 @@ async function buildImageBlock(
   if (!mediaFile) return { block: undefined, skipReason: "other" };
 
   try {
-    const bytes = await mediaFile.async("nodebuffer");
+    // 串流解壓＋位元組上限：邊解邊數，超標即 destroy 串流並丟 ZipEntryTooLargeError（防 zip bomb 撐爆記憶體）。
+    const bytes = await readEntryCapped(mediaFile, MAX_IMAGE_BYTES, budget);
     const base64 = bytes.toString("base64");
-    if (base64.length > MAX_IMAGE_BASE64_CHARS) {
-      return { block: undefined, skipReason: "tooLarge" };
-    }
     const alt = picAltText(shape);
     const block: SlideBlock = alt
       ? { type: "image", dataUri: `data:${mime};base64,${base64}`, alt }
       : { type: "image", dataUri: `data:${mime};base64,${base64}` };
     return { block };
-  } catch {
+  } catch (err) {
+    // 超過大小上限 → 標記 tooLarge（維持原「過大則略過並記 notes」語意）；其餘解析錯誤 → other。
+    if (err instanceof ZipEntryTooLargeError) return { block: undefined, skipReason: "tooLarge" };
     return { block: undefined, skipReason: "other" };
   }
 }
@@ -265,6 +349,7 @@ async function extractSlideBlocks(
   slideXmlObj: unknown,
   zip: JSZip,
   mediaRelsById: Map<string, string>,
+  budget: SizeBudget,
 ): Promise<SlideBlocksResult> {
   const root = slideXmlObj as Record<string, any> | undefined;
   const spTree = root?.["p:sld"]?.["p:cSld"]?.["p:spTree"];
@@ -296,7 +381,7 @@ async function extractSlideBlocks(
   let imageSkippedTooLarge = false;
   let imageSkippedOther = false;
   for (const pic of pics) {
-    const result = await buildImageBlock(zip, pic, mediaRelsById);
+    const result = await buildImageBlock(zip, pic, mediaRelsById, budget);
     if (result.block) {
       blocks.push(result.block);
     } else if (result.skipReason === "tooLarge") {
@@ -392,7 +477,7 @@ function extractBaseTheme(themeXmlObj: unknown): SlideTheme {
   return theme;
 }
 
-async function loadBaseTheme(zip: JSZip, parser: XMLParser): Promise<SlideTheme> {
+async function loadBaseTheme(zip: JSZip, parser: XMLParser, budget: SizeBudget): Promise<SlideTheme> {
   try {
     const themeFiles = zip
       .file(/^ppt\/theme\/theme\d+\.xml$/)
@@ -401,7 +486,7 @@ async function loadBaseTheme(zip: JSZip, parser: XMLParser): Promise<SlideTheme>
     const themeFile = themeFiles.find((t) => t.n === 1)?.file ?? themeFiles[0]?.file;
     if (!themeFile) return {};
 
-    const xml = await themeFile.async("string");
+    const xml = await readEntryText(themeFile, MAX_XML_BYTES, budget);
     const parsed = parser.parse(xml);
     return extractBaseTheme(parsed);
   } catch {
@@ -428,6 +513,7 @@ async function loadSlideLayoutName(
   slideRels: SlideRel[],
   parser: XMLParser,
   layoutNameCache: Map<string, string | undefined>,
+  budget: SizeBudget,
 ): Promise<string | undefined> {
   const layoutRel = slideRels.find((r) => r.type.endsWith("/slideLayout"));
   if (!layoutRel) return undefined;
@@ -440,7 +526,7 @@ async function loadSlideLayoutName(
     return undefined;
   }
   try {
-    const xml = await layoutFile.async("string");
+    const xml = await readEntryText(layoutFile, MAX_XML_BYTES, budget);
     const parsed = parser.parse(xml) as Record<string, any>;
     const name = parsed?.["p:sldLayout"]?.["p:cSld"]?.["@_name"];
     const result = typeof name === "string" && name.trim().length > 0 ? name.trim() : undefined;
@@ -493,10 +579,18 @@ export async function parsePptx(buffer: Buffer): Promise<SlideSpec[]> {
   const zip = await JSZip.loadAsync(buffer);
   const parser = createParser();
 
+  // 單次解析共用的解壓總量預算（防 zip bomb 攤平攻擊）。
+  const budget: SizeBudget = { total: 0 };
+
   const slideFiles = zip
     .file(/^ppt\/slides\/slide\d+\.xml$/)
     .map((f) => ({ file: f, n: numberFromXmlName(f.name) ?? 0 }))
     .sort((a, b) => a.n - b.n);
+
+  // slide 頁數上限：擋「灌爆頁數」型炸彈；正常簡報遠低於此。
+  if (slideFiles.length > MAX_SLIDES) {
+    throw new ZipEntryTooLargeError(`ppt/slides（共 ${slideFiles.length} 頁）`, MAX_SLIDES);
+  }
 
   const notesFiles = new Map<number, JSZip.JSZipObject>();
   for (const f of zip.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/)) {
@@ -504,26 +598,31 @@ export async function parsePptx(buffer: Buffer): Promise<SlideSpec[]> {
     if (n !== null) notesFiles.set(n, f);
   }
 
-  const baseTheme = await loadBaseTheme(zip, parser);
+  const baseTheme = await loadBaseTheme(zip, parser, budget);
   const slides: SlideSpec[] = [];
   const layoutNameCache = new Map<string, string | undefined>();
 
   for (let i = 0; i < slideFiles.length; i++) {
     const entry = slideFiles[i]!;
     const { file, n } = entry;
-    const xml = await file.async("string");
+    const xml = await readEntryText(file, MAX_XML_BYTES, budget);
     const parsed = parser.parse(xml);
 
-    const slideRels = await loadRelsFor(zip, file.name, parser);
+    const slideRels = await loadRelsFor(zip, file.name, parser, budget);
     const mediaRelsById = new Map(
       slideRels.filter((r) => r.type.endsWith("/image")).map((r) => [r.id, r.target] as const),
     );
-    const { blocks, imageSkippedTooLarge, imageSkippedOther } = await extractSlideBlocks(parsed, zip, mediaRelsById);
+    const { blocks, imageSkippedTooLarge, imageSkippedOther } = await extractSlideBlocks(
+      parsed,
+      zip,
+      mediaRelsById,
+      budget,
+    );
 
     let notes: string | undefined;
     const notesFile = notesFiles.get(n);
     if (notesFile) {
-      const notesXml = await notesFile.async("string");
+      const notesXml = await readEntryText(notesFile, MAX_XML_BYTES, budget);
       notes = extractNotesText(parser.parse(notesXml));
     }
 
@@ -544,7 +643,7 @@ export async function parsePptx(buffer: Buffer): Promise<SlideSpec[]> {
     const bgOverride = extractSlideBackgroundColor(parsed);
     if (bgOverride) theme.bg = bgOverride;
 
-    const layoutName = await loadSlideLayoutName(zip, slideRels, parser, layoutNameCache);
+    const layoutName = await loadSlideLayoutName(zip, slideRels, parser, layoutNameCache, budget);
     const template = inferTemplate({
       index: i,
       isLast: i === slideFiles.length - 1,

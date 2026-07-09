@@ -37,14 +37,18 @@ import { OpenAIImageProvider } from "../providers/image.js";
 import { createGenerationService, GenerationEmptyError } from "../generation/generation-service.js";
 import { createPptxExporter } from "../generation/pptx-exporter.js";
 import { createImageService } from "../decks/image-service.js";
-import { extractFromUrl, extractFromPdf } from "../import/extract.js";
-import { parsePptx } from "../import/pptx-parser.js";
-import { parsePdf } from "../import/pdf-parser.js";
+import { extractFromUrl } from "../import/extract.js";
+import { runInWorker } from "../import/run-in-worker.js";
 import { detectLanguage } from "../import/detect-language.js";
 import { asyncHandler, orgId, param, str, badRequest, notFound, isOneOf } from "../crm-routes/helpers.js";
 import type { Meter } from "../ops/meter.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+/** 匯入解析（pptx/pdf → SlideSpec[]）在 worker thread 的逾時上限（契約 C2）；到期強制 terminate → 408。 */
+const IMPORT_PARSE_TIMEOUT_MS = 30_000;
+/** /extract-pdf 純文字抽取（供 grounding）的 worker 逾時；輸入較單純，用較短上限。 */
+const PDF_EXTRACT_TIMEOUT_MS = 15_000;
 
 const DECK_LANGUAGES = ["zh-TW", "en"] as const;
 const OBJECTIVES = ["pitch", "introduce", "fundraise", "report", "training"] as const;
@@ -168,11 +172,28 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         const deck = await generation.generateDeck(orgId(req), parsed.input);
         res.status(201).json(deck);
       } catch (err) {
+        // C1：一律 server-side 記錄真實錯誤；回應絕不外洩上游原始訊息（可能含 prompt/內部細節）。
+        console.error("[decks/generate] generation failed:", err);
         if (err instanceof GenerationEmptyError) {
-          res.status(502).json({ error: err.message });
+          res.status(422).json({ error: "生成結果為空，請調整主題或增加頁數後再試" });
           return;
         }
-        res.status(502).json({ error: `deck generation failed: ${(err as Error).message}` });
+        // 狀態優先：真正的限流（ApiError 帶數字 .status 429/503，或訊息含 RESOURCE_EXHAUSTED/quota）→ 429。
+        const status = (err as { status?: unknown }).status;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (status === 429 || status === 503 || /RESOURCE_EXHAUSTED|quota/i.test(msg)) {
+          res.status(429).json({ error: "AI 服務暫時限流，請稍後再試" });
+        } else if (/finishReason=(?:SAFETY|RECITATION)|安全性|recitation/i.test(msg)) {
+          res.status(422).json({ error: "內容可能觸發安全性限制，請調整主題或用語後再試" });
+        } else if (/MAX_TOKENS/i.test(msg)) {
+          res.status(422).json({ error: "輸出過長，請減少頁數或精簡輸入後再試" });
+        } else if (/finishReason/i.test(msg)) {
+          // 非 MAX_TOKENS 的異常結束（OTHER / MALFORMED_FUNCTION_CALL 等）：不要誤標「輸出過長」。
+          res.status(422).json({ error: "生成未正常結束，請調整輸入後再試" });
+        } else {
+          // 其餘（含解析失敗、空回應、網路類）→ 502 通用 zh-TW，不回傳原始訊息。
+          res.status(502).json({ error: "AI 服務暫時無法生成簡報，請稍後再試" });
+        }
       }
     }),
   );
@@ -197,11 +218,29 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         return;
       }
 
+      // 解析在可終止 worker thread 執行（契約 C2）：CPU 密集又可能被惡意輸入拖住，逾時強制 terminate，
+      // 不卡死 express 請求執行緒。逾時 reject "匯入解析逾時" → 下方 catch 映射成 408。
       let slides: SlideSpec[];
       try {
-        slides = isPptx ? await parsePptx(file.buffer) : await parsePdf(file.buffer);
+        slides = await runInWorker<SlideSpec[]>(
+          isPptx ? "pptx" : "pdf",
+          file.buffer,
+          IMPORT_PARSE_TIMEOUT_MS,
+        );
       } catch (err) {
-        res.status(502).json({ error: `import parse failed: ${(err as Error).message}` });
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/逾時|timeout|timed out/i.test(msg)) {
+          res.status(408).json({ error: "匯入解析逾時，請改用較小或較簡單的檔案" });
+          return;
+        }
+        // 不外洩 worker/解析器內部訊息。
+        res.status(502).json({ error: "檔案解析失敗，請確認檔案未毀損後再試" });
+        return;
+      }
+
+      // 全空守門：解析成功但每一頁都掃不出任何文字（掃描/圖片型檔案）→ 422，不建立空殼 deck。
+      if (slides.length === 0 || slides.every((s) => extractSlideText(s).trim() === "")) {
+        res.status(422).json({ error: "檔案未擷取到可用內容（可能是掃描或純圖片型檔案）" });
         return;
       }
 
@@ -391,10 +430,20 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         return;
       }
       try {
-        const { text } = await extractFromPdf(req.file.buffer);
+        // 純文字抽取同樣走可終止 worker（契約 C2）：pdf-parse 對惡意 PDF 可能拖住 CPU。
+        const { text } = await runInWorker<{ text: string }>(
+          "pdf-extract",
+          req.file.buffer,
+          PDF_EXTRACT_TIMEOUT_MS,
+        );
         res.json({ text });
       } catch (err) {
-        res.status(422).json({ error: `pdf import failed: ${(err as Error).message}` });
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/逾時|timeout|timed out/i.test(msg)) {
+          res.status(408).json({ error: "PDF 解析逾時，請改用較小的檔案" });
+          return;
+        }
+        res.status(422).json({ error: "PDF 匯入失敗，請確認檔案為可擷取文字的 PDF" });
       }
     }),
   );

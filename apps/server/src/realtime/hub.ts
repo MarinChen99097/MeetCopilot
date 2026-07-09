@@ -258,6 +258,17 @@ export class RealtimeHub implements BroadcastSink {
 
     // ASR final → speaker inference → transcript (hud/I3) + persist + analysis feed.
     asr.onFinal((seg) => void this.onAsrFinal(runtime, seg));
+    // Genuine ASR outage (transcribe threw/exhausted — NOT blank audio) → notify the presenter's HUD once
+    // per outage so they know live transcription/analysis is degraded (contract C3; dedup lives in the
+    // provider, cleared on the next successful transcribe). I3: hud only, and the payload carries no
+    // transcript content.
+    asr.onUnavailable(() =>
+      this.broadcast(
+        runtime.meetingId,
+        { type: "error", code: "asr_unavailable", message: "語音辨識暫時中斷，系統會自動嘗試恢復" },
+        "hud",
+      ),
+    );
     // Analysis threshold met → signals (hud/I3) + persist + orchestrator retrieval.
     engine.onSignals((items) => this.onSignals(runtime, items));
 

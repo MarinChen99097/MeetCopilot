@@ -36,6 +36,19 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-08 22:40 | extract-url 匯入加固全數做在 v2 並上線（P1 已部署、P2/P3 待部署）＋commit/部署前先問
+- **誰決定**: 使用者（回報 bug、拍板「所有問題都在 v2」、核准 P1 上線、指示「1 3 修一修」）＋Fable（設計/範圍/實作取捨）
+- **脈絡與理由**: 使用者回報 DeckWizard「從網址匯入」回 429。**過程踩坑**：session 工作目錄指向 `c:\...\MeetCopilot`（v1 參考件），Fable 誤在 v1 修了一整輪（UA/charset/429/DNS＋稽核 15 項＋審查 remediation＋worker）並 push 到 GitHub `MarinChen99097/MeetCopilot`，才在處理「部署」時查 GCP 發現 **live 是 v2（Cloud Run＋Cloud SQL）**、v1 未部署。使用者明確：「早就不管 v1 了，所有問題都是在 v2 發生的」。故全部改在 v2 重做。
+- **決策**:
+  1. **修復目標一律 v2**：v1 完全不管；v1 的修復只當「已驗證藍本」移植進 v2（v2 extract.ts 早期從 v1 移植後已分歧，須對齊 v2 契約重寫，不照搬）。
+  2. **P1（extract.ts 6 項）先上線**：瀏覽器 UA／charset 解碼／十六進位 entity 防崩／429 重試／DNS 逾時／pdf `{max:50}`；**v2 更強的 SSRF/DNS-pin 逐字保留**。已 commit `5538ddd`、只重建 server、部署 rev **00009-qcb**、health/ready 200。
+  3. **P2/P3 續做（本筆）**：P2＝gemini per-call 逾時＋finishReason≠STOP 可行動錯誤＋withRetry 退避/Retry-After/retryable 短路＋decks 錯誤映射（不外洩 raw）；P3＝pptx 串流位元組上限（取代可繞過的宣告大小檢查）＋parse 移進可 terminate 的 worker_thread＋ASR 真失敗廣播 `asr_unavailable`（去重、成功即清、空白不報）＋webp 匯出排除（畫面仍可 webp）。
+  4. **實作取捨**：(a) worker 載入因 Node 22.18 原生 strip-types 頂掉 worker 內 tsx，改 **dynamic import 帶副檔名＋workerData 傳 ext**（dev/prod 皆實測過）；(b) webp **只在匯出 sink 排除、不動 shared 驗證器**（畫面預覽保留 webp）；(c) ASR 去重旗標放在 **per-session GeminiAsrProvider**（＝等同 per-runtime）、不廣播「已恢復」；(d) GenerationEmptyError→422（內容問題而非 502）。
+  5. **commit／部署前先問**（使用者立規、已寫進 v1 CLAUDE.md 硬規則 6＋記憶）：寫完只回報＋擬 message，不自行 `git commit`/`git push`/`gcloud` 部署；追加 WORKLOG/CHANGE_TRACKER/ROM 不算 commit。
+- **考慮過的替代**: (a) 把 v1 已 push 的成果直接視為交付——否決：live 是 v2，v1 修了production 不受惠；(b) P3 只做 pptx 串流上限、不做 worker——保留為選項但使用者要「修一修」故一併做（worker 為同步 CPU bomb 真正可硬性中止的唯一解，v1 已證可行）；(c) webp 直接從 shared 驗證器刪除——否決：該驗證器畫面/匯出共用，刪了畫面也不顯示 webp。
+- **影響**: apps/server（gemini/pptx-parser/asr/realtime-hub/generation-pptx-render/decks-routes＋新 import/run-in-worker、parse-worker）。全 workspace typecheck 綠、server 36/36＋CRM 43/43 pass、逐 cluster fresh-context read-back PASS。**部署待使用者同意後**（只重建 server）。I1/I2/I3 未削弱、SSRF 未動。
+- **注意**: v2 無 GitHub remote（純本機 git＋Cloud Run），與 v1（有 origin）不同。v1 那套修復留在 GitHub 當參考，不再維護。
+
 ### 2026-07-08 20:30 | 「研究此公司」URL 可選＝無 URL 就以公司名稱做全網深度研究（＋job 逾時）
 - **誰決定**: 使用者（「這邊邏輯有問題，當他說『可選』時，好歹要藉由公司名稱去做深度研究才對」；且新建無官網公司 CyP 留空 URL 研究跑很久沒結果）＋Fable（設計）
 - **根因**: orchestrator createJob 對**所有模式（含 deep）**在無 url 時 throw「no URL to crawl」；但 DeepResearcher 本就以 company.name 為 grounding 種子、domain/startUrl 皆 optional——根本不需 url，只是被這行擋在門外。且整個 job 無逾時＝卡住永遠「研究中」。
