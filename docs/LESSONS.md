@@ -98,6 +98,19 @@
 - 正確做法：(1) **安全修正後，一定要對「先前證明可用的功能」重跑**，而且**多測一個不同形狀的案例**（單 host vs www→apex），否則會把「安全修正」偷渡成「功能回歸」；(2) SSRF 於瀏覽器爬蟲的正解＝**只 pin 使用者提交的目標 host**（關主要 TOCTOU），其餘公網子資源 host 放行但由 per-request 守衛擋私網——不要 fail-close 全部 host（過度限制、破壞跨 host 重導與 CDN 子資源）。
 - 影響檔案：`apps/server/src/research/crawler.ts`（改回 pin-only）、`crawler-ssrf.test.ts`。與指揮官守則呼應：宣稱修好前派 fresh agent 對「會被弄壞的既有功能」重驗，不只驗「修的那個點」。
 
+## L17 對抗式驗收要涵蓋「帶參數的端點」，別只測 happy-path 空參數（2026-07-09，實踩）
+- 情境：admin 後台交付後我派 fresh-context 對抗驗收，12/12 CONFIRMED-OK；但隔一步的 `/code-review`（5 鏡頭）立刻抓到一個 Critical：admin `/usage`、`/jobs`、明細抽屜首次載入就 400——前端 DateRangePicker 送 `YYYY-MM-DD`、後端 parseEpoch 要 epoch-ms（`Number("2026-06-10")=NaN`→400）。
+- 踩了什麼：驗收的 admin 端點測試（含 admin.test.ts）都**省略了 from/to 參數**，只打空參數的 happy path→200，於是「核心報表頁全打不開」這個 P0 完全漏網。typecheck 也綠（兩邊都 typed，只是 string≠epoch 語意不符）。前後端契約有寫「epoch-ms」，但沒有測試強制對齊。
+- 正確做法：(1) 驗收「有查詢參數的端點」時，**必用前端實際會送的參數形狀**打一次（用 UI 預設值，不是空值/整潔值）；能起前端就實跑該頁看是否真的載入，不能就至少用「前端 default range 產生器的輸出」餵 API。(2) 跨前後端的參數格式（日期/分頁/枚舉）列為「契約對齊」測試點，型別相同不代表語意相同。(3) 這也印證：自建對抗驗收 ≠ 免跑 code-review；兩者鏡頭不同，都要跑。
+- 影響檔案：`apps/admin/src/lib/api.ts`（dayParamToEpochMs 集中轉換）、`api-types.ts`（UsageSummary.from/to 改 number）。與 L6「只測一邊≠整合驗證」同源，補「參數形狀」維度。
+
+## L18 email allowlist 授權旗標絕不能在「未驗證 email 擁有權」的路徑蓋（2026-07-09，實踩）
+- 情境：admin 平台管理員＝`PLATFORM_ADMIN_EMAILS` allowlist；實作把「email∈allowlist→蓋 platformAdmin:true」的 `payloadFor` 同時用在 login／google／**register** 三處。
+- 踩了什麼：register 是公開自助且**不驗證 email 擁有權**。若 admin 是 Google-only（本地無該帳號），攻擊者搶先 POST register 用該 allowlist email→拿到帶 platformAdmin 的 JWT→全 /api/admin/* 洞開（A1 繞過）。login（要密碼）、google（驗證 email）安全，唯獨 register 漏。
+- 正確做法：授權旗標只在「證明 email 擁有權」的路徑蓋（login 需密碼、google 驗證 email）；**任何自助/未驗證註冊路徑一律不衍生特權旗標**。register 改直發 `role:"owner"` 不走 admin 衍生。連帶：測試若「直接拿 register token 當 admin token」＝把洞當正常用法，要改成「register 後 login」取得。
+- **補完（2026-07-09 /simplify altitude 鏡頭揪出）**：只讓 register「不發旗標」**不完整**——攻擊者仍可自助 register allowlist email（設自己密碼）→再 login，login 照樣發 platformAdmin。**治本＝從源頭擋帳號建立：register 直接拒絕 allowlist 內的 email（403 reserved）**，合法管理員走 Google（經 provision 不經 register）或 out-of-band 建帳號。通則：**「排除特權」要排在所有發證路徑的最上游（帳號建立），不是只排某一條發證路徑**——否則攻擊者換另一條路徑照樣拿到。
+- 影響檔案：`apps/server/src/auth/routes.ts`（register 不走 payloadFor＋拒絕 allowlist email）、`register-admin.test.ts`。與硬規則 7（授權用攻擊者憑證測）同源。
+
 ## L11【正面校準】指揮官不下場＋sonnet/high 實測有效（2026-07-04）
 - 情境：全程「主對話只交辦＋收結論，實作/修正/簡化/審查全派 sonnet subagent」蓋完整個 app。
 - 踩了什麼：非踩雷，是校準。原 MODEL_DISPATCH 調度表標「未實測、信心中低」。

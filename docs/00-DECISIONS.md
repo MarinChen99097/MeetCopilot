@@ -16,7 +16,7 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 
 ## 14 項已鎖定決策（2026-07-06；15–18 見下方補充拍板節）
 
-1. **重建方式＝從零重寫**（fresh rewrite）。v1（`c:/Users/Martin/Desktop/MeetCopilot`）保留為參考件，不動；v2 在新目錄 `c:/Users/Martin/Desktop/MeetCopilot_v2`（已 `git init`）。
+1. **重建方式＝從零重寫**（fresh rewrite）。（2026-07-09 更新：v1/v2 已徹底合一——本 repo 遷駐 `c:/Users/Martin/Desktop/MeetCopilot`、origin＝GitHub `MarinChen99097/MeetCopilot`；v1 封存於 GitHub `MeetCopilot-v1-archive`，不再維護。詳 ROM 2026-07-09 11:45。）
 2. **技術棧＝同棧重寫**：Next.js 15（App Router、next-intl zh-TW/en、純 CSS）＋ Express＋ws ＋ better-sqlite3 ＋ Gemini（@google/genai）。v1 舊碼可當參考件直接借。
 3. **傘名沿用 MeetCopilot**；平台下含 DynamicSlide 與 MeetCopilot 兩個 surface。
 4. **兩個產品並行開發**（M2 起三條並行線：DynamicSlide／會中副駕／語音模擬）。

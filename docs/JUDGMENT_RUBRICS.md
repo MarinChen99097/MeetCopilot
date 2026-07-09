@@ -118,3 +118,38 @@
 
 **正例**：PowerShell 行數顯示制度檔剩 6 行、像被截斷 → 先 Read 看實際內容，發現檔案完好（是 `Measure-Object -Line` 對 LF 行尾數錯），沒有誤刪重建。
 **反例**：`app-builder.exe` spawn ENOENT 像安裝壞了 → 反覆 npm install/降版/清 lock 四次（真因是防毒隔離該 exe，重裝永遠沒用，見 L8）。
+
+---
+
+## R8. 審查迴圈與 Plan Gate 判定（改編自 ezpage engineering-sop）
+
+補 R2（何時算完成）與 R5（品質底線）的**流程**：R2/R5 是門檻，本節是「怎麼跑到門檻」與「使用者回應怎麼算核准」。
+
+### 嚴格審查迴圈（改完 code 後，Mandatory）
+
+完整審查鏈（依序）：
+
+1. **scenario-verification skill**（`.claude/skills/scenario-verification/`）→ 驗「對不對」：代入真實值追資料流、可達性、邊界、Write-Reader 交叉驗證。
+2. **`/simplify`**（harness 內建）→ 驗「好不好」：重用性、可讀性、效率、有無多餘程式碼。
+3. **code-review skill**（`.claude/skills/code-review/`）→ 驗「安不安全＋合規」：金鑰洩漏、I1/I2/I3、SSRF/authz、契約一致。
+4. 條件式追加：改動涉及 auth / input validation / file upload / 外部 I/O → 加做安全專項審查。
+
+**迴圈規則（照做）：**
+- [ ] 發現問題（含**非本次改動造成**的）→ 自行修正 → 修正後**從 #1 重跑完整審查鏈**（不是只重跑出問題那一支）。
+- [ ] 重複此迴圈，**直到最後一輪審查零問題**（全 PASS，無任何需修正項目）才算通過。
+- [ ] **不可因「只改了一小處」就跳過重審**——任何修改都可能引入新問題。
+- [ ] 審查由 fresh-context agent（一律 opus，見 MODEL_DISPATCH 覆寫節）執行，不是做事者自評（呼應 R2）。
+
+**正例**：改 deck guard 後 code-review 抓到一個越權面 → 修 → **重跑 scenario-verification＋simplify＋code-review 整條** → 這輪全 PASS 才宣告完成。
+**反例**：code-review 抓到一個問題，只改那一處、只重跑 code-review 一支就交付——漏了新改動可能破壞的資料流（該重跑 #1）。
+
+### Plan Gate 核准判定（複雜任務 plan 呈給使用者後）
+
+| 使用者回應 | 判定 | 動作 |
+|-----------|------|------|
+| 不含修改建議的肯定（"go" / "ok" / "好" / "approve" / "繼續" / "可以" / "沒問題"） | **核准** | 進入執行階段 |
+| 含具體修改建議（「把 X 改成 Y」「不要用 Z」） | **需修正** | 修正 plan → 重新呈現 → 等下一次核准 |
+| 提問（「為什麼選 X？」「Y 是什麼？」） | **需解釋** | 回答問題，**不改 plan**（除非答案改變方案） |
+
+**正例**：使用者回「這個方向可以，但 approval gate 別放前端」→ 判定「需修正」→ 改 plan 重呈，不當作核准就開工。
+**反例**：使用者問「為什麼選 append-only？」就當成核准直接動工——那是提問不是核准。

@@ -36,6 +36,37 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-09 14:10 | 驗收收尾：兩個 P2 邊角取捨接受＋WORKLOG 歸檔
+- **誰決定**: Fable（對抗式驗收 12/12 CONFIRMED-OK 後的殘項裁決）
+- **決策**: (1) **接受** WS 停權閘 fail-closed 取捨——DB 短暫錯誤會 close 4003 斷正常連線，屬 per-connection、重連即恢復，安全性優先；(2) **接受** ASR 記帳冪等 key 邊角——session 完全 dispose 後同 meetingId 復用時 seq 歸零撞舊 key＝**少計不重計**（對使用者有利方向），日後要精確可在 key 加 runtime epoch；(3) WORKLOG 依 MAINTENANCE 三節歸檔（150→56 行，8 節移 `docs/archive/WORKLOG-2026-07-06_08.md`，byte-exact 驗證）。
+- **考慮過的替代**: fail-open 停權閘（否決：停權形同虛設）；立刻加 epoch 進 ASR key（否決：改動熱路徑換取邊角精度，收益低於風險）。
+- **影響**: 無程式改動；WORKLOG/archive 結構變更。
+
+### 2026-07-09 12:40 | ADMIN_CONTRACT v1.1 凍結＋實作排程取捨（Fable 設計決策批）
+- **誰決定**: Fable（依使用者 11:45 拍板的範圍執行設計）
+- **決策**:
+  1. **`docs/ADMIN_CONTRACT.md` v1.0→v1.1 凍結**：平台管理員＝`PLATFORM_ADMIN_EMAILS` env allowlist＋JWT `platformAdmin` 旗標（同 `JWT_SECRET`，v2 再隔離）；migration 012（orgs.status／users.status／usage_events.user_id，SQLite＋PG 雙套）；補四個記帳缺口（ASR／gemini_live／會中分析改 metered／pricing env 覆寫落地）；9 個 `/api/admin/*` 端點形狀全部定死；apps/admin 六頁純 CSS＋自繪 SVG、zh-TW 單語、dev port 3100；CORS 改 allowlist（WEB_ORIGIN＋ADMIN_ORIGIN）。新增不變量 **A1**（admin 路由對非 admin token 必 403）／**A2**（read-mostly，唯二寫入＝org/user 停權復權）／**A3**（不回傳秘密）。
+  2. **ezpage 解剖的吸收面**：驗證模式同構（印證不改）；UI 借模式不借棧（KPI 卡 sparkline／StatusBadge／job 監控頁；不引 Tailwind/recharts/TanStack）；cost-estimator、digest 遙控部署頁、HttpOnly cookie 列 v2 backlog。
+  3. **實作排程＝兩半場**：先跑「非干擾」半場（apps/admin 前端＋migration 012＋Dockerfile.admin/cloudbuild-admin/DEPLOY 增補——不動 apps/server/src，避免觸發本機 dev server 熱重載干擾 UI/UX 自測）；等 UI/UX 自測瀏覽完成後才跑 apps/server 半場（admin routes／jwt／CORS／metering）＋verify。
+  4. **UI/UX 自測跑本機不跑 production**：HEAD 較新、可自由造測試資料、不汙染線上；本機 dev 由專責 agent 啟動並建測試帳號。
+- **考慮過的替代**: (a) admin 用獨立 ADMIN_JWT_SECRET——延後 v2（單操作者 MVP 不值多一組密鑰管理）；(b) admin 前端沿用 ezpage 的 Tailwind+recharts——否決：與 repo 純 CSS 慣例衝突、多三個依賴面；(c) 服務端先行、前端後行——否決：服務端改動會干擾自測，前端先行可與自測平行。
+- **影響**: docs/ADMIN_CONTRACT.md（新檔）；後續 migration 012、apps/admin、Dockerfile×3、cloudbuild-admin.yaml、DEPLOY.md、apps/server（下半場）。
+
+### 2026-07-09 11:45 | v1/v2 徹底合一＋admin 後台立項（形態/範圍）＋UI/UX 與爬蟲處理順序
+- **誰決定**: 使用者（AskUserQuestion 兩輪拍板）＋Fable（執行路徑設計）
+- **決策**:
+  1. **徹底合一**：本機 v1 移除（內容先移 `Desktop/MeetCopilot_v1_archive` 待使用者最後確認刪）；GitHub v1 repo 改名封存 `MeetCopilot-v1-archive`；v2 全量遷入 `c:/Users/Martin/Desktop/MeetCopilot`（原 `MeetCopilot_v2` 目錄消滅）；以合一後資料夾新建 private repo `MarinChen99097/MeetCopilot` 並 push（推前 Opus 秘密掃描 PASS：追蹤檔零金鑰、.gitignore 覆蓋完整）。
+  2. **admin 後台＝獨立 app**：monorepo 新增 `apps/admin`，部署為第三個 Cloud Run service；第一版四塊全做——token 花費儀表板（地基＝usage_events）／帳號管理（跨 org）／研究 job 監控／系統健康頁。參考 ezpage `LandingAI_admin_console`。
+  3. **UI/UX**：全面自測（瀏覽器實跑全頁面）→壞點清單→先快修可用性→再寫給 claude design 的完整需求 md。
+  4. **爬蟲品質**：先立案記錄，等 admin job 監控上線有數據後再專輪處理。
+  5. **模型分工重申**：Fable 決策/立規、Opus（或更低）執行（沿用 2026-07-07 拍板）。
+  6. 使用者另核准：終止本機殘留 v2 server（PID 11332、port 18787，cwd 鎖住 apps/server）；v1 未 commit 誤修殘留丟棄（已備份 session scratchpad `v1-uncommitted-backup/`）。
+  7. **Fable 決策**：把使用者既有立規「commit／部署前先問」（2026-07-08 ROM＋記憶，原只寫進 v1 CLAUDE.md 硬規則 6）同步進本 repo CLAUDE.md 為硬規則 10，並修正硬規則 2 的「立刻 commit」措辭衝突——這是同步既有使用者規則，非新規。
+- **脈絡與理由**: 使用者四大痛點：爬蟲效果不如預期、token 花費不明、UI/UX 醜且多處不可用、v1/v2 並存混淆（2026-07-08 曾因此誤修 v1）。
+- **執行細節（Fable 取捨）**: v1 資料夾根目錄被 VS Code 工作區鎖住無法改名 → 改「內容置換法」：先清出 v1 內容再把 v2 內容 move 進原路徑，資料夾本體不動；`packages`／`apps/server` 兩處子樹鎖分別由 TS server 監看與殘留 server cwd 造成，逐層 move＋終止行程解決。git 歷史完整（HEAD 1e4bf76）、工作樹乾淨。
+- **考慮過的替代**: (a) 只刪本機 v1、保留 `_v2` 名稱——否決：名稱混淆正是痛點；(b) admin 整合進 apps/web 的 /admin——否決：管理與客戶介面同一 build 隔離弱；(c) UI/UX 只修使用者指定壞點——否決：使用者選全面自測。
+- **影響**: 本 repo 從此有 origin（`MarinChen99097/MeetCopilot`）；路徑引用需同步（CLAUDE.md／00-DECISIONS §19-1／ARCHITECTURE_PLAN 樹狀圖／memory）；後續里程碑＝UI/UX 自測快修→apps/admin→skills/SOP 搬運→部署文件補第三 service→設計需求 md。
+
 ### 2026-07-08 22:40 | extract-url 匯入加固全數做在 v2 並上線（P1 已部署、P2/P3 待部署）＋commit/部署前先問
 - **誰決定**: 使用者（回報 bug、拍板「所有問題都在 v2」、核准 P1 上線、指示「1 3 修一修」）＋Fable（設計/範圍/實作取捨）
 - **脈絡與理由**: 使用者回報 DeckWizard「從網址匯入」回 429。**過程踩坑**：session 工作目錄指向 `c:\...\MeetCopilot`（v1 參考件），Fable 誤在 v1 修了一整輪（UA/charset/429/DNS＋稽核 15 項＋審查 remediation＋worker）並 push 到 GitHub `MarinChen99097/MeetCopilot`，才在處理「部署」時查 GCP 發現 **live 是 v2（Cloud Run＋Cloud SQL）**、v1 未部署。使用者明確：「早就不管 v1 了，所有問題都是在 v2 發生的」。故全部改在 v2 重做。

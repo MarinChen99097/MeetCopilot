@@ -37,7 +37,34 @@ gcloud run deploy meetcopilot-web --region=asia-east1 --project=ezpagesite \
   --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/web:latest \
   --min-instances=0 --max-instances=2 --cpu=1 --memory=1Gi \
   --set-env-vars=NEXT_PUBLIC_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app --allow-unauthenticated
+
+# ── admin（第三個 service；改了 apps/admin 才需要。與 web 同構：_API_BASE/_GOOGLE_CLIENT_ID 於 build 時 bake）──
+gcloud builds submit --config=cloudbuild-admin.yaml --region=asia-east1 --project=ezpagesite --async \
+  --substitutions=_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app,_GOOGLE_CLIENT_ID=54139295474-f7cve65n4884ttkcbc2o23hs763q7hm4.apps.googleusercontent.com .
+# 等該 BUILD_ID SUCCESS 後（首次建服務見 E；admin 無 secret/CloudSQL，故首次與後續 deploy 指令相同。
+#   NEXT_PUBLIC_* 是 build 常數 → 每次改 apps/admin 都要重建 image 並重帶 --set-env-vars）：
+gcloud run deploy meetcopilot-admin --region=asia-east1 --project=ezpagesite \
+  --image=asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/admin:latest \
+  --min-instances=0 --max-instances=1 --cpu=1 --memory=1Gi \
+  --set-env-vars=NEXT_PUBLIC_API_BASE=https://meetcopilot-server-54139295474.asia-east1.run.app --allow-unauthenticated
 ```
+
+### A 補充：traffic 沒切到新 revision 時的保險（`update-traffic --to-latest`）
+
+> ⚠️ `gcloud run services update` / `run deploy` 部署了新 revision，但**若該服務的 traffic 曾被釘死在某個特定 revision**（例如先前做過流量拆分或 rollback，`latestRevision` 已從 true 變成固定 revision），新 revision 會拿到 **0% 流量**——你的程式看似沒生效、`curl` 還是舊行為。
+
+**什麼時候要跑**：部署（A 或 D）後跑冒煙測試（C）發現「改了程式卻沒生效、且已確認重建了正確那邊」，先用下面指令查 traffic 是否卡在舊 revision；卡住就切回最新：
+
+```bash
+# 查目前 traffic 分佈（看 LATEST 那列 percent 是否 100）
+gcloud run services describe meetcopilot-server --region=asia-east1 --project=ezpagesite \
+  --format="value(status.traffic)"
+# 若新 revision 不是 100% → 把 traffic 切回最新 revision：
+gcloud run services update-traffic meetcopilot-server --to-latest --region=asia-east1 --project=ezpagesite
+# web 同理（服務名換 meetcopilot-web）
+```
+
+> 正常情況下 `services update --image` / `run deploy` 會自動把 traffic 帶到最新，**不需每次都跑**；此指令是「traffic 被 pin 住」時的修正保險，冒煙測試異常才用。
 
 ### B) 只改一個 env（不必重建 image）
 ```bash
@@ -64,6 +91,25 @@ gcloud run deploy meetcopilot-server --image=asia-east1-docker.pkg.dev/ezpagesit
 # ⚠ WEB_ORIGIN 必帶（CORS）；GOOGLE_CLIENT_ID 必帶（沿用 EZpage 的 client，共用帳號）。
 # ⚠ Google 登入前置（一次性、只有使用者能做）：Console 把 meetcopilot-web 兩個網址加進該 OAuth client 的「已授權 JavaScript 來源」。
 ```
+
+### E) 新增 meetcopilot-admin（第三個 service）：一次性 server 端接線
+
+> admin 是純前端 Next.js 後台（同 web 架構、走 server REST/WS）。**admin service 自身**的 build→deploy 見 A 段的 admin 區塊（無 secret / 無 Cloud SQL，首次即用該 `run deploy`）。以下是**讓 server 認得 admin** 的一次性設定——因 admin 部署在第三個網址、且平台管理員名單放 server env。
+
+```bash
+# 1) server 加兩個 env（**用 --update-env-vars 只動這兩個 key，切勿 --set-env-vars / 完整 run deploy** —— 否則吹光 DB/CORS/Google/Gemini）：
+gcloud run services update meetcopilot-server --region=asia-east1 --project=ezpagesite \
+  --update-env-vars=ADMIN_ORIGIN=https://meetcopilot-admin-54139295474.asia-east1.run.app,PLATFORM_ADMIN_EMAILS=you@example.com
+#   ADMIN_ORIGIN：server CORS allowlist 加入 admin 網址（server 端把單一 WEB_ORIGIN 改成 WEB_ORIGIN+ADMIN_ORIGIN 白名單；見 ADMIN_CONTRACT §6.1）。
+#   PLATFORM_ADMIN_EMAILS：逗號分隔 email 清單；名單內帳號登入時 JWT 帶 platformAdmin=true，才能過 /api/admin/* 的 platformAdminRequired（§1）。
+#   （敏感度低，明文 env 即可；若要更嚴可改放 Secret Manager 再 --set-secrets。）
+
+# 2) 冒煙測試：admin 帳號 login 後打 admin 端點應 200；一般 owner token 打應 403；無 token 401。
+curl -s https://meetcopilot-admin-54139295474.asia-east1.run.app/  -o /dev/null -w "%{http_code}\n"   # 期望 200/307
+```
+
+> ⚠ Google 登入前置（一次性、只有使用者能做）：Console 把 **meetcopilot-admin** 的 run.app 網址也加進該 OAuth client 的「已授權 JavaScript 來源」（不可結尾 `/`，約 5 分鐘生效），否則 admin 的 Google 登入會 `origin_mismatch`。
+> 完整 `run deploy meetcopilot-server`（D 段）若日後需重設全部 env，記得把 `ADMIN_ORIGIN`、`PLATFORM_ADMIN_EMAILS` 一併補進 `--set-env-vars`，否則會漏掉這兩個。
 
 ### 排錯速記（本 session 踩過）
 - **build 卡住/工具逾時** → `gcloud builds submit` 用 `--async`＋`gcloud builds describe <id> --format="value(status)"` 輪詢；build 在雲端續跑，不受本地 2 分逾時影響。

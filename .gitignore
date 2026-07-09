@@ -10,6 +10,13 @@ build/
 .env.*
 !.env.example
 !.env.production.example
+credentials.json
+token.json
+service-account*.json
+client_secret*.json
+oauth*.json
+*.pem
+*.key
 # db (local SQLite)
 *.db
 *.db-journal

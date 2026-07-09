@@ -34,7 +34,7 @@
 ## 2. Monorepo 結構（npm workspaces）
 
 ```
-MeetCopilot_v2/
+MeetCopilot/            # 2026-07-09 起：v1/v2 合一後本 repo 駐 c:/Users/Martin/Desktop/MeetCopilot
 ├─ packages/
 │  ├─ shared/            # 契約：slide-spec、protocol(WS msgs)、signals、crm domain types、trust-rule 純函式
 │  └─ crm/               # ★新核心：DbPort、repositories(介面+SqliteImpl)、migrations、embeddings、provenance
