@@ -7,6 +7,7 @@ import { useRouter } from "@/i18n/navigation";
 import { useToast } from "@/components/ui/Toast";
 import { StateBoundary } from "@/components/ui/StateBoundary";
 import { Spinner } from "@/components/ui/Spinner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideRenderer } from "@/components/slide/SlideRenderer";
 import { BlockEditor } from "./BlockEditor";
 import { ImageJobCard } from "./ImageJobCard";
@@ -41,6 +42,8 @@ export function SlideEditor({ deckId }: { deckId: string }) {
   const [exporting, setExporting] = useState(false);
   const [jobs, setJobs] = useState<JobReq[]>([]);
   const [prompt, setPrompt] = useState("");
+  // AI 生圖預警：點「生成背景圖 / 整頁生圖」後先跳確認（付費外部 API + 耗時），確認才真的排入 job。
+  const [confirmKind, setConfirmKind] = useState<ImageKind | null>(null);
 
   const load = useCallback(() => {
     let alive = true;
@@ -237,9 +240,10 @@ export function SlideEditor({ deckId }: { deckId: string }) {
                   {dirty ? <span className="mc-editor__dirty">尚未儲存</span> : null}
                 </div>
 
-                {/* AI 生圖（pre-meeting） */}
+                {/* AI 生圖（pre-meeting）：常駐一行成本/時間說明 + 點擊前確認（P1：付費且耗時不可零預警） */}
                 <div className="mc-editor__imgtools">
                   <p className="mc-editor__imgh">AI 生圖（背景 / 整頁）</p>
+                  <p className="mc-editor__imgnote">會呼叫外部付費 API：約 10–80 秒、每張約 US$0.04，完成自動套上此頁。</p>
                   <input
                     className="mc-input"
                     placeholder="生圖提示（可空，用頁面內容推斷）"
@@ -247,10 +251,10 @@ export function SlideEditor({ deckId }: { deckId: string }) {
                     onChange={(e) => setPrompt(e.target.value)}
                   />
                   <div className="mc-editor__imgbtns">
-                    <button type="button" className="mc-btn mc-btn--accent mc-btn--sm" onClick={() => launchJob("background")}>
+                    <button type="button" className="mc-btn mc-btn--accent mc-btn--sm" onClick={() => setConfirmKind("background")}>
                       生成背景圖
                     </button>
-                    <button type="button" className="mc-btn mc-btn--accent mc-btn--sm" onClick={() => launchJob("full")}>
+                    <button type="button" className="mc-btn mc-btn--accent mc-btn--sm" onClick={() => setConfirmKind("full")}>
                       整頁生圖
                     </button>
                   </div>
@@ -276,6 +280,27 @@ export function SlideEditor({ deckId }: { deckId: string }) {
           </aside>
         </div>
       </StateBoundary>
+
+      {confirmKind ? (
+        <ConfirmDialog
+          ariaLabel="AI 生圖確認"
+          title={confirmKind === "background" ? "生成背景圖？" : "整頁生圖？"}
+          message={
+            <>
+              這會呼叫外部付費 API（OpenAI）產生圖片：約需 <strong>10–80 秒</strong>、每張約 <strong>US$0.04</strong>。
+              完成後會自動套進目前這一頁；圖片不合意可再重生。確定要繼續嗎？
+            </>
+          }
+          cancelLabel="取消"
+          confirmLabel="確定生成"
+          confirmTone="accent"
+          onCancel={() => setConfirmKind(null)}
+          onConfirm={() => {
+            launchJob(confirmKind);
+            setConfirmKind(null);
+          }}
+        />
+      ) : null}
     </main>
   );
 }

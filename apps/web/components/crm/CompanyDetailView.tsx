@@ -37,9 +37,10 @@ export function CompanyDetailView({ companyId }: { companyId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("overview");
 
-  const load = useCallback(() => {
+  // silent＝背景刷新（研究完成後）：不進 loading，避免整頁換骨架、EnrichPanel 被卸載而完成卡消失（P2-7）。
+  const load = useCallback((opts?: { silent?: boolean }) => {
     let alive = true;
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
     setError(null);
     getCompany(companyId)
       .then((c) => {
@@ -68,7 +69,7 @@ export function CompanyDetailView({ companyId }: { companyId: string }) {
       <StateBoundary loading={loading} error={error} onRetry={load} skeleton={<DetailSkeleton />}>
         {company ? (
           <>
-            <CompanyHead company={company} onEnriched={load} />
+            <CompanyHead company={company} onEnriched={() => load({ silent: true })} />
 
             <nav className="mc-tabs" role="tablist" aria-label="公司詳情分頁">
               {TABS.map((t) => (

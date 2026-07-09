@@ -55,6 +55,12 @@ function TopBar() {
               {t(`${s}.title`)}
             </Link>
           ))}
+          {/* 團隊/設定入口（P1-2）：owner/admin 才需管理成員與邀請。 */}
+          {me && (me.role === "owner" || me.role === "admin") ? (
+            <Link href="/settings/team" className="mc-topbar__navlink">
+              {t("org.nav.team")}
+            </Link>
+          ) : null}
         </nav>
         {me ? <span className="mc-topbar__org">{me.org.name}</span> : null}
       </div>

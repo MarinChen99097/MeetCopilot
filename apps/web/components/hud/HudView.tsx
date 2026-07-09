@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import type { InfoCard, ServerMessage, SignalItem, SlideSpec, Suggestion, TranscriptSegment } from "@meetcopilot/shared";
 import { API_BASE } from "@/lib/api";
-import { useRealtime } from "@/lib/useRealtime";
-import { readMeetingCreds, saveMeetingCreds, parsePastedCreds, type MeetingCreds } from "@/lib/meeting-session";
+import { useRealtime, wsStatusLabel, type WsStatus } from "@/lib/useRealtime";
+import {
+  readMeetingCreds,
+  saveMeetingCreds,
+  clearMeetingCreds,
+  parsePastedCreds,
+  type MeetingCreds,
+} from "@/lib/meeting-session";
 import { ToastProvider, useToast } from "@/components/ui/Toast";
 import { TranscriptStream } from "./TranscriptStream";
 import { InfoCardStream } from "./InfoCardStream";
@@ -35,6 +41,10 @@ function HudInner() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [quota, setQuota] = useState<number | null>(null);
   const [researchLines, setResearchLines] = useState<ResearchLine[]>([]);
+
+  // Latch "we connected at least once" so we never render the live stream panels (which show
+  // "聆聽中，尚無…") for a session that has NEVER connected — that fake "listening" look is the bug.
+  const [everConnected, setEverConnected] = useState(false);
 
   useEffect(() => {
     setCreds(readMeetingCreds());
@@ -72,6 +82,10 @@ function HudInner() {
           setResearchLines((prev) => upsertResearch(prev, { jobId: msg.jobId, status: msg.status }));
           break;
         case "session_state":
+          // First session_state = a *working* connection (a bad-token socket opens then closes 4001
+          // WITHOUT ever sending state). Latch here — NOT on bare socket-open — so a failed auth never
+          // flips us into the live-stream view with empty "聆聽中…" panels.
+          setEverConnected(true);
           // Reconnect resync: DON'T clear the accumulated streams; server just re-affirms session facts.
           break;
         case "error":
@@ -92,6 +106,13 @@ function HudInner() {
     enabled: !!creds,
     onMessage,
   });
+
+  // "重新貼連結": drop the stored creds and fall back to the paste panel (for a stale/expired link).
+  const relink = useCallback(() => {
+    clearMeetingCreds();
+    setEverConnected(false);
+    setCreds(null);
+  }, []);
 
   const onAct = useCallback(
     (id: string, action: SuggestionAction, editedSlide?: SlideSpec) => {
@@ -116,14 +137,42 @@ function HudInner() {
   if (!resolved) return <main className="mc-hud" aria-busy="true" />;
   if (!creds) return <ConnectPanel onConnected={setCreds} />;
 
-  const disconnected = realtime.status !== "open" && realtime.status !== "idle";
+  // Before the FIRST successful connect, never show the live stream panels (they read as "已在聆聽").
+  // Show an honest connection status instead: connecting / reconnecting / failed(+重試/重新貼連結).
+  if (!everConnected) {
+    return (
+      <main className="mc-hud mc-hud--connecting">
+        <ConnectingState
+          status={realtime.status}
+          reason={realtime.failureReason}
+          onRetry={realtime.retry}
+          onRelink={relink}
+        />
+      </main>
+    );
+  }
 
+  // Connected at least once: show streams, plus a banner whenever the link is not currently open.
   return (
     <main className="mc-hud">
-      {disconnected ? (
-        <div className="mc-hud__banner" role="status">
-          {realtime.status === "reconnecting" ? "重新連線中…" : "連線中…"}
-        </div>
+      {realtime.status !== "open" ? (
+        realtime.status === "failed" ? (
+          <div className="mc-hud__banner mc-hud__banner--fail" role="alert">
+            <span>{realtime.failureReason ?? "連線失敗。"}</span>
+            <span className="mc-hud__banner-actions">
+              <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={realtime.retry}>
+                重試
+              </button>
+              <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={relink}>
+                重新貼連結
+              </button>
+            </span>
+          </div>
+        ) : (
+          <div className="mc-hud__banner" role="status">
+            {wsStatusLabel(realtime.status)}
+          </div>
+        )
       ) : null}
 
       <SuggestionQueue suggestions={suggestions} onAct={onAct} onExpire={onExpire} />
@@ -131,6 +180,40 @@ function HudInner() {
       <InfoCardStream cards={cards} />
       <DeepResearchBox remainingQuota={quota} lines={researchLines} onSubmit={onDeepResearch} />
     </main>
+  );
+}
+
+/** Pre-first-connect state: honest connecting/failed UI (no fake "聆聽中…" stream panels). */
+function ConnectingState({
+  status,
+  reason,
+  onRetry,
+  onRelink,
+}: {
+  status: WsStatus;
+  reason: string | null;
+  onRetry: () => void;
+  onRelink: () => void;
+}) {
+  const failed = status === "failed";
+  return (
+    <div className={`mc-hud__connstate${failed ? " is-failed" : ""}`} role={failed ? "alert" : "status"}>
+      {!failed ? <span className="mc-hud__connspinner" aria-hidden="true" /> : null}
+      <p className="mc-hud__connstate-title">{failed ? "無法連上會議 HUD" : wsStatusLabel(status)}</p>
+      <p className="mc-hud__connstate-desc">
+        {failed ? (reason ?? "連線失敗。") : "正在連上會議即時串流，請稍候…"}
+      </p>
+      {failed ? (
+        <div className="mc-hud__connstate-actions">
+          <button type="button" className="mc-btn mc-btn--primary" onClick={onRetry}>
+            重試連線
+          </button>
+          <button type="button" className="mc-btn mc-btn--ghost" onClick={onRelink}>
+            重新貼連結
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

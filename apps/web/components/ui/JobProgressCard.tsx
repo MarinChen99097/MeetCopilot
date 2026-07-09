@@ -2,11 +2,11 @@ import type { ResearchJob } from "@/lib/api";
 import { JobStatusBadge } from "./StatusBadge";
 import { Spinner } from "./Spinner";
 
-/** 研究模式顯示名（deep 為主流程；detailed/quick 為既有/自動研究可能留下的舊 job）。 */
+/** 研究模式顯示名（與 EnrichPanel 三選一致）。 */
 const MODE_LABEL: Record<string, string> = {
   deep: "全網深度研究",
-  detailed: "會前建檔",
-  quick: "輕量研究",
+  detailed: "官網深掃",
+  quick: "快速掃描",
 };
 
 /**

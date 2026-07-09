@@ -35,9 +35,22 @@ export interface WsLifecycle {
   onError?: () => void;
 }
 
-/** Convert an http(s) API base into its ws(s) origin. */
+/** Convert an http(s) API base into its ws(s) origin (scheme-mapped, no trailing slash). */
 function toWsOrigin(apiBase: string): string {
   return apiBase.replace(/^http(s?):\/\//i, (_m, s: string) => `ws${s}://`).replace(/\/+$/, "");
+}
+
+/**
+ * Build the WS endpoint URL, tolerating BOTH input shapes callers pass as `apiBase`:
+ *  - a REST/ws *origin* (e.g. `http://host:8787` or `ws://host:8787`) → append WS_PATH, and
+ *  - the *full* ws endpoint already carrying WS_PATH (POST /api/meetings returns
+ *    `wsUrl = ${wsBase}${WS_PATH}`, i.e. `ws://host:8787/ws`) → use as-is.
+ * Without this guard the latter double-appends to `…/ws/ws`, which the path-scoped
+ * WebSocketServer rejects with a 400 handshake abort → the surface can never connect.
+ */
+function toWsEndpoint(apiBase: string): string {
+  const origin = toWsOrigin(apiBase);
+  return origin.endsWith(WS_PATH) ? origin : `${origin}${WS_PATH}`;
 }
 
 /**
@@ -51,7 +64,7 @@ export function connect(
   role: WsRole,
   lifecycle?: WsLifecycle,
 ): WsConnection {
-  const url = new URL(`${toWsOrigin(apiBase)}${WS_PATH}`);
+  const url = new URL(toWsEndpoint(apiBase));
   url.searchParams.set("token", token);
   url.searchParams.set("meetingId", meetingId);
   url.searchParams.set("role", role);

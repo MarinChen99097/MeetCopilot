@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import type { ServerMessage } from "@meetcopilot/shared";
 import { API_BASE, ApiError, createMeeting } from "@/lib/api";
 import { startCapture, CaptureError, type CaptureController } from "@/lib/audio-capture";
-import { useRealtime } from "@/lib/useRealtime";
+import { useRealtime, wsStatusLabel, type WsStatus } from "@/lib/useRealtime";
 import { readMeetingCreds, saveMeetingCreds, type MeetingCreds } from "@/lib/meeting-session";
 import { ToastProvider, useToast } from "@/components/ui/Toast";
 import { Spinner } from "@/components/ui/Spinner";
@@ -173,9 +173,20 @@ function CopilotInner() {
             <p className="mc-cap__vuhint">會議裡有人講話時音量表會跳動；若一直靜止，代表沒擷取到聲音。</p>
           </div>
 
-          <ConsentGate granted={consentGranted} analyzing={analyzing} onToggle={toggleConsent} />
+          <ConsentGate
+            granted={consentGranted}
+            analyzing={analyzing}
+            status={realtime.status}
+            onToggle={toggleConsent}
+          />
 
-          <StatusBar status={realtime.status} state={serverState} localConsent={consentGranted} />
+          <StatusBar
+            status={realtime.status}
+            failureReason={realtime.failureReason}
+            onRetry={realtime.retry}
+            state={serverState}
+            localConsent={consentGranted}
+          />
 
           <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={stopListening}>
             停止聆聽
@@ -238,54 +249,91 @@ function TabShareTutorial() {
 }
 
 /** Consent gate — analysis does not start until the presenter confirms recording consent. */
-function ConsentGate({ granted, analyzing, onToggle }: { granted: boolean; analyzing: boolean; onToggle: () => void }) {
+function ConsentGate({
+  granted,
+  analyzing,
+  status,
+  onToggle,
+}: {
+  granted: boolean;
+  analyzing: boolean;
+  status: WsStatus;
+  onToggle: () => void;
+}) {
+  const grantedLabel = analyzing
+    ? "分析中"
+    : status === "failed"
+      ? "已同意（連線失敗）"
+      : status === "open"
+        ? "已同意（等待分析）"
+        : "已同意（連線中…）";
   return (
     <div className={`mc-cap__consent ${granted ? "is-on" : ""}`}>
       <label className="mc-cap__consent-row">
         <input type="checkbox" checked={granted} onChange={onToggle} />
         <span>我已取得與會者同意錄音分析</span>
       </label>
-      <span className={`mc-badge ${granted ? "mc-badge--ok" : "mc-badge--warn"}`}>
-        {granted ? (analyzing ? "分析中" : "已同意（連線中…）") : "等待同意 · 分析未啟動"}
+      <span className={`mc-badge ${granted && status !== "failed" ? "mc-badge--ok" : "mc-badge--warn"}`}>
+        {granted ? grantedLabel : "等待同意 · 分析未啟動"}
       </span>
     </div>
   );
 }
 
-/** Session status: WS connection, connected roles, committedIndex, consent (server-truth when known). */
+/** Session status: WS connection, connected roles, committedIndex, consent (server-truth when known).
+ *  A terminal `failed` state shows the reason + a [重試] action — never a silent "未連線". */
 function StatusBar({
   status,
+  failureReason,
+  onRetry,
   state,
   localConsent,
 }: {
-  status: string;
+  status: WsStatus;
+  failureReason: string | null;
+  onRetry: () => void;
   state: SessionState | null;
   localConsent: boolean;
 }) {
-  const connLabel =
-    status === "open" ? "已連線" : status === "connecting" ? "連線中…" : status === "reconnecting" ? "重新連線中…" : "未連線";
-  const connKind = status === "open" ? "mc-badge--ok" : status === "reconnecting" ? "mc-badge--warn" : "mc-badge--muted";
+  const connKind =
+    status === "open"
+      ? "mc-badge--ok"
+      : status === "failed"
+        ? "mc-badge--danger"
+        : status === "reconnecting"
+          ? "mc-badge--warn"
+          : "mc-badge--muted";
   return (
-    <dl className="mc-cap__status">
-      <div>
-        <dt>連線</dt>
-        <dd>
-          <span className={`mc-badge ${connKind}`}>{connLabel}</span>
-        </dd>
-      </div>
-      <div>
-        <dt>已連角色</dt>
-        <dd>{state?.connectedRoles?.length ? state.connectedRoles.join(" · ") : "—"}</dd>
-      </div>
-      <div>
-        <dt>已播頁 (committedIndex)</dt>
-        <dd>{state ? state.committedIndex : "—"}</dd>
-      </div>
-      <div>
-        <dt>同意狀態</dt>
-        <dd>{(state ? state.consent : localConsent) ? "已同意" : "未同意"}</dd>
-      </div>
-    </dl>
+    <>
+      <dl className="mc-cap__status">
+        <div>
+          <dt>連線</dt>
+          <dd>
+            <span className={`mc-badge ${connKind}`}>{wsStatusLabel(status)}</span>
+          </dd>
+        </div>
+        <div>
+          <dt>已連角色</dt>
+          <dd>{state?.connectedRoles?.length ? state.connectedRoles.join(" · ") : "—"}</dd>
+        </div>
+        <div>
+          <dt>已播頁 (committedIndex)</dt>
+          <dd>{state ? state.committedIndex : "—"}</dd>
+        </div>
+        <div>
+          <dt>同意狀態</dt>
+          <dd>{(state ? state.consent : localConsent) ? "已同意" : "未同意"}</dd>
+        </div>
+      </dl>
+      {status === "failed" ? (
+        <div className="mc-cap__connfail" role="alert">
+          <p className="mc-cap__connfail-msg">{failureReason ?? "連線失敗。"}</p>
+          <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={onRetry}>
+            重試連線
+          </button>
+        </div>
+      ) : null}
+    </>
   );
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   MAX_DECK_PAGES,
   MIN_DECK_PAGES,
@@ -15,6 +16,16 @@ import { Spinner } from "@/components/ui/Spinner";
 const MAX_REF_IMAGES = 4;
 const IMAGE_MAX_EDGE = 1280; // 長邊上限（px）
 const IMAGE_QUALITY = 0.82; // JPEG 品質
+
+/**
+ * 目標（objective）5 個後端 enum（decks-routes OBJECTIVES）。用下拉杜絕「自由輸入→後端靜默丟值」的 P1：
+ * 只可能送出 enum 值或空。標籤/說明走 i18n（deckWizard.objectiveOptions.*）。
+ */
+const OBJECTIVE_KEYS = ["pitch", "introduce", "fundraise", "report", "training"] as const;
+
+/** 生成中的「誠實假階段」——單次同步請求無伺服器進度事件，故依耗時推進做為體感回饋（不代表真實後端步驟）。 */
+const GEN_PHASE_KEYS = ["phaseAnalyze", "phaseCompose", "phaseLayout"] as const;
+const GEN_PHASE_STEP_MS = 6000; // 每 ~6 秒推進一階段（封頂在最後一階段）
 
 /** 讀檔 → dataUri。 */
 function readAsDataUri(file: File): Promise<string> {
@@ -61,16 +72,17 @@ async function downscaleImage(file: File, maxEdge = IMAGE_MAX_EDGE, quality = IM
 /**
  * DeckWizard — 三段 wizard 生成 deck（PROMPT 2）。
  * Step 1 方向與素材（含 從網址/PDF 匯入 → 灌 sourceText）；Step 2 受眾與風格（logo/參考圖/companyId）；Step 3 檢視生成。
- * 前後可切、保留已填。生成同步回 Deck（可能久 → loading）。
+ * 前後可切、保留已填。生成同步回 Deck（可能久 → loading 顯示階段/耗時/預估）。字串走 i18n（deckWizard.*）。
  */
 export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCreated: (deckId: string) => void }) {
+  const t = useTranslations("deckWizard");
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   // Step 1
   const [topic, setTopic] = useState("");
   const [pages, setPages] = useState(8);
   const [language, setLanguage] = useState<DeckLanguage>("zh-TW");
-  const [objective, setObjective] = useState("");
+  const [objective, setObjective] = useState(""); // "" = 不指定；否則為 OBJECTIVE_KEYS 之一
   const [keyPoints, setKeyPoints] = useState("");
   const [metrics, setMetrics] = useState("");
   const [sourceText, setSourceText] = useState("");
@@ -90,6 +102,30 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 生成中體驗：已耗時（秒）＋階段索引。generating 期間才計時，結束/取消歸零。
+  const [elapsed, setElapsed] = useState(0);
+  const [phase, setPhase] = useState(0);
+  useEffect(() => {
+    if (!generating) {
+      setElapsed(0);
+      setPhase(0);
+      return;
+    }
+    const started = Date.now();
+    const id = setInterval(() => {
+      const ms = Date.now() - started;
+      setElapsed(Math.floor(ms / 1000));
+      setPhase(Math.min(GEN_PHASE_KEYS.length - 1, Math.floor(ms / GEN_PHASE_STEP_MS)));
+    }, 500);
+    return () => clearInterval(id);
+  }, [generating]);
+
+  /** 換步驟時清掉殘留錯誤 banner（修跨步 stale：step1 匯入失敗的錯誤不該跟到 step2/3）。 */
+  function goToStep(next: 1 | 2 | 3) {
+    setError(null);
+    setStep(next);
+  }
+
   async function doImportUrl() {
     if (!importUrl.trim()) return;
     setImporting(true);
@@ -98,7 +134,7 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
       const { text } = await extractUrl(importUrl.trim());
       setImportPreview(text);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "網址匯入失敗");
+      setError(err instanceof ApiError ? err.message : t("errFallbackUrl"));
     } finally {
       setImporting(false);
     }
@@ -111,7 +147,7 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
       const { text } = await extractPdf(file);
       setImportPreview(text);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "PDF 匯入失敗");
+      setError(err instanceof ApiError ? err.message : t("errFallbackPdf"));
     } finally {
       setImporting(false);
     }
@@ -132,7 +168,7 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
         topic: topic.trim(),
         pages,
         language,
-        objective: objective.trim() || undefined,
+        objective: objective || undefined,
         keyPoints: splitLines(keyPoints),
         metrics: splitLines(metrics),
         audience: audience.trim() || undefined,
@@ -146,26 +182,28 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
       const deck = await generateDeck(input);
       onCreated(deck.id);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "生成失敗");
+      setError(err instanceof ApiError ? err.message : t("errFallbackGen"));
       setGenerating(false);
     }
   }
 
   const canNext1 = topic.trim().length > 0 && pages >= MIN_DECK_PAGES && pages <= MAX_DECK_PAGES;
+  const langShort = language === "zh-TW" ? t("summary.langZhShort") : t("summary.langEnShort");
+  const keyPointsCount = splitLines(keyPoints)?.length ?? 0;
 
   return (
-    <div className="mc-wizard" role="dialog" aria-modal="true" aria-label="新建簡報">
+    <div className="mc-wizard" role="dialog" aria-modal="true" aria-label={t("ariaLabel")}>
       <div className="mc-wizard__panel">
         <header className="mc-wizard__head">
           <ol className="mc-stepper">
-            {[1, 2, 3].map((n) => (
+            {([1, 2, 3] as const).map((n) => (
               <li key={n} className={`mc-stepper__item ${step === n ? "is-on" : ""} ${step > n ? "is-done" : ""}`}>
                 <span className="mc-stepper__num">{n}</span>
-                <span className="mc-stepper__label">{n === 1 ? "方向與素材" : n === 2 ? "受眾與風格" : "檢視生成"}</span>
+                <span className="mc-stepper__label">{t(`steps.s${n}`)}</span>
               </li>
             ))}
           </ol>
-          <button type="button" className="mc-iconbtn" aria-label="關閉" onClick={onCancel}>
+          <button type="button" className="mc-iconbtn" aria-label={t("close")} onClick={onCancel}>
             ×
           </button>
         </header>
@@ -175,12 +213,12 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
         {step === 1 ? (
           <div className="mc-wizard__body">
             <label className="mc-field">
-              <span>主題 *</span>
-              <input className="mc-input" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="例：Q3 產品提案給 Acme" />
+              <span>{t("topic")} *</span>
+              <input className="mc-input" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={t("topicPlaceholder")} />
             </label>
             <div className="mc-blk__row">
               <label className="mc-field mc-field--grow">
-                <span>頁數（{MIN_DECK_PAGES}–{MAX_DECK_PAGES}）</span>
+                <span>{t("pages", { min: MIN_DECK_PAGES, max: MAX_DECK_PAGES })}</span>
                 <input
                   className="mc-input mc-input--num"
                   type="number"
@@ -191,40 +229,52 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
                 />
               </label>
               <label className="mc-field mc-field--grow">
-                <span>語言</span>
+                <span>{t("language")}</span>
                 <select className="mc-input" value={language} onChange={(e) => setLanguage(e.target.value as DeckLanguage)}>
-                  <option value="zh-TW">繁體中文</option>
-                  <option value="en">English</option>
+                  <option value="zh-TW">{t("langZh")}</option>
+                  <option value="en">{t("langEn")}</option>
                 </select>
               </label>
             </div>
             <label className="mc-field">
-              <span>目標 objective（可空）</span>
-              <input className="mc-input" value={objective} onChange={(e) => setObjective(e.target.value)} />
+              <span>{t("objective")}</span>
+              <select className="mc-input" value={objective} onChange={(e) => setObjective(e.target.value)}>
+                <option value="">{t("objectiveNone")}</option>
+                {OBJECTIVE_KEYS.map((k) => (
+                  <option key={k} value={k}>
+                    {t(`objectiveOptions.${k}.label`)}
+                  </option>
+                ))}
+              </select>
+              <span className="mc-field__hint">
+                {objective ? t(`objectiveOptions.${objective}.desc`) : t("objectiveHintDefault")}
+              </span>
             </label>
             <label className="mc-field">
-              <span>要點 keyPoints（一行一個，可空）</span>
+              <span>{t("keyPoints")}</span>
+              <span className="mc-field__hint">{t("keyPointsHint")}</span>
               <textarea className="mc-input mc-textarea" value={keyPoints} onChange={(e) => setKeyPoints(e.target.value)} />
             </label>
             <label className="mc-field">
-              <span>數據 metrics（一行一個，可空）</span>
+              <span>{t("metrics")}</span>
+              <span className="mc-field__hint">{t("metricsHint")}</span>
               <textarea className="mc-input mc-textarea" value={metrics} onChange={(e) => setMetrics(e.target.value)} />
             </label>
 
             <div className="mc-wizard__import">
-              <p className="mc-wizard__importh">從網址 / PDF 匯入素材（灌入下方來源文字）</p>
+              <p className="mc-wizard__importh">{t("importTitle")}</p>
               <div className="mc-blk__row">
                 <input
                   className="mc-input"
-                  placeholder="https://example.com/article"
+                  placeholder={t("importUrlPlaceholder")}
                   value={importUrl}
                   onChange={(e) => setImportUrl(e.target.value)}
                 />
                 <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={doImportUrl} disabled={importing || !importUrl.trim()}>
-                  {importing ? <Spinner size={13} /> : "抓取網址"}
+                  {importing ? <Spinner size={13} /> : t("importFetch")}
                 </button>
                 <label className="mc-btn mc-btn--ghost mc-btn--sm mc-filebtn">
-                  匯入 PDF
+                  {t("importPdf")}
                   <input
                     type="file"
                     accept="application/pdf"
@@ -239,14 +289,14 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
               </div>
               {importPreview != null ? (
                 <div className="mc-wizard__preview">
-                  <p className="mc-wizard__previewh">抽取預覽（{importPreview.length} 字）</p>
+                  <p className="mc-wizard__previewh">{t("previewTitle", { chars: importPreview.length })}</p>
                   <div className="mc-wizard__previewtext">{importPreview.slice(0, 1200)}{importPreview.length > 1200 ? "…" : ""}</div>
                   <div className="mc-wizard__previewacts">
                     <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={() => setImportPreview(null)}>
-                      捨棄
+                      {t("previewDiscard")}
                     </button>
                     <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={acceptImport}>
-                      灌入來源文字
+                      {t("previewAccept")}
                     </button>
                   </div>
                 </div>
@@ -254,7 +304,8 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
             </div>
 
             <label className="mc-field">
-              <span>來源文字 sourceText（可貼長文，可空）</span>
+              <span>{t("sourceText")}</span>
+              <span className="mc-field__hint">{t("sourceTextHint")}</span>
               <textarea className="mc-input mc-textarea mc-textarea--tall" value={sourceText} onChange={(e) => setSourceText(e.target.value)} />
             </label>
           </div>
@@ -263,26 +314,28 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
         {step === 2 ? (
           <div className="mc-wizard__body">
             <label className="mc-field">
-              <span>受眾 audience（可空）</span>
-              <input className="mc-input" value={audience} onChange={(e) => setAudience(e.target.value)} placeholder="例：對方採購與技術主管" />
+              <span>{t("audience")}</span>
+              <span className="mc-field__hint">{t("audienceHint")}</span>
+              <input className="mc-input" value={audience} onChange={(e) => setAudience(e.target.value)} placeholder={t("audiencePlaceholder")} />
             </label>
             <div className="mc-blk__row">
               <label className="mc-field mc-field--grow">
-                <span>語氣 tone（可空）</span>
-                <input className="mc-input" value={tone} onChange={(e) => setTone(e.target.value)} placeholder="專業 / 熱情…" />
+                <span>{t("tone")}</span>
+                <input className="mc-input" value={tone} onChange={(e) => setTone(e.target.value)} placeholder={t("tonePlaceholder")} />
               </label>
               <label className="mc-field mc-field--grow">
-                <span>風格 style（可空）</span>
-                <input className="mc-input" value={style} onChange={(e) => setStyle(e.target.value)} placeholder="簡潔 / 資料密…" />
+                <span>{t("style")}</span>
+                <input className="mc-input" value={style} onChange={(e) => setStyle(e.target.value)} placeholder={t("stylePlaceholder")} />
               </label>
             </div>
             <label className="mc-field">
-              <span>綁定 CRM 公司 companyId（可空，供 grounding）</span>
-              <input className="mc-input" value={companyId} onChange={(e) => setCompanyId(e.target.value)} placeholder="UUID" />
+              <span>{t("companyId")}</span>
+              <span className="mc-field__hint">{t("companyIdHint")}</span>
+              <input className="mc-input" value={companyId} onChange={(e) => setCompanyId(e.target.value)} placeholder={t("companyIdPlaceholder")} />
             </label>
             <div className="mc-blk__row">
               <label className="mc-btn mc-btn--ghost mc-btn--sm mc-filebtn">
-                {logoDataUri ? "已選 Logo（重選）" : "上傳 Logo"}
+                {logoDataUri ? t("logoRepick") : t("logoPick")}
                 <input
                   type="file"
                   accept="image/*"
@@ -295,7 +348,7 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
                 />
               </label>
               <label className={`mc-btn mc-btn--ghost mc-btn--sm mc-filebtn${refImageDataUris.length >= MAX_REF_IMAGES ? " is-disabled" : ""}`}>
-                加入參考圖
+                {t("refAdd")}
                 <input
                   type="file"
                   accept="image/*"
@@ -313,7 +366,7 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
                 />
               </label>
               {refImageDataUris.length ? (
-                <span className="mc-wizard__count">參考圖 {refImageDataUris.length} / {MAX_REF_IMAGES} 張</span>
+                <span className="mc-wizard__count">{t("refCount", { n: refImageDataUris.length, max: MAX_REF_IMAGES })}</span>
               ) : null}
             </div>
           </div>
@@ -322,19 +375,30 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
         {step === 3 ? (
           <div className="mc-wizard__body">
             <div className="mc-wizard__summary">
-              <SummaryRow label="主題" value={topic || "（未填）"} />
-              <SummaryRow label="頁數 / 語言" value={`${pages} 頁 · ${language === "zh-TW" ? "繁中" : "English"}`} />
-              {objective ? <SummaryRow label="目標" value={objective} /> : null}
-              {splitLines(keyPoints)?.length ? <SummaryRow label="要點" value={`${splitLines(keyPoints)!.length} 條`} /> : null}
-              {audience ? <SummaryRow label="受眾" value={audience} /> : null}
-              {companyId ? <SummaryRow label="CRM grounding" value={companyId} /> : null}
-              {sourceText ? <SummaryRow label="來源文字" value={`${sourceText.length} 字`} /> : null}
-              {logoDataUri ? <SummaryRow label="Logo" value="已附" /> : null}
+              <SummaryRow label={t("summary.topic")} value={topic || t("summary.empty")} />
+              <SummaryRow label={t("summary.pagesLang")} value={`${t("pagesUnit", { n: pages })} · ${langShort}`} />
+              {objective ? <SummaryRow label={t("summary.objective")} value={t(`objectiveOptions.${objective}.label`)} /> : null}
+              {keyPointsCount ? <SummaryRow label={t("summary.keyPoints")} value={t("summary.keyPointsCount", { n: keyPointsCount })} /> : null}
+              {audience ? <SummaryRow label={t("summary.audience")} value={audience} /> : null}
+              {companyId ? <SummaryRow label={t("summary.crm")} value={companyId} /> : null}
+              {sourceText ? <SummaryRow label={t("summary.sourceText")} value={t("summary.sourceTextCount", { n: sourceText.length })} /> : null}
+              {logoDataUri ? <SummaryRow label={t("summary.logo")} value={t("summary.logoAttached")} /> : null}
             </div>
             {generating ? (
               <div className="mc-wizard__gen">
                 <Spinner size={20} />
-                <p>正在生成簡報…這可能需要一點時間，請稍候（生成期間別關閉本視窗）。</p>
+                <div className="mc-wizard__geninfo">
+                  <p className="mc-wizard__genphase">{t("generating.phasePrefix")}{t(`generating.${GEN_PHASE_KEYS[phase]}`)}…</p>
+                  <div className="mc-wizard__genbar" aria-hidden="true">
+                    {GEN_PHASE_KEYS.map((k, i) => (
+                      <span key={k} className={`mc-wizard__genseg${i <= phase ? " is-on" : ""}`} />
+                    ))}
+                  </div>
+                  <p className="mc-wizard__genmeta">
+                    {t("generating.elapsed", { secs: elapsed })} · {t("generating.estimate")}
+                  </p>
+                  <p className="mc-wizard__gennote">{t("generating.note")}</p>
+                </div>
               </div>
             ) : null}
           </div>
@@ -342,26 +406,26 @@ export function DeckWizard({ onCancel, onCreated }: { onCancel: () => void; onCr
 
         <footer className="mc-wizard__foot">
           {step > 1 ? (
-            <button type="button" className="mc-btn mc-btn--ghost" onClick={() => setStep((s) => (s === 3 ? 2 : 1))} disabled={generating}>
-              上一步
+            <button type="button" className="mc-btn mc-btn--ghost" onClick={() => goToStep(step === 3 ? 2 : 1)} disabled={generating}>
+              {t("back")}
             </button>
           ) : (
             <button type="button" className="mc-btn mc-btn--ghost" onClick={onCancel}>
-              取消
+              {t("cancel")}
             </button>
           )}
           {step < 3 ? (
             <button
               type="button"
               className="mc-btn mc-btn--primary"
-              onClick={() => setStep((s) => (s === 1 ? 2 : 3))}
+              onClick={() => goToStep(step === 1 ? 2 : 3)}
               disabled={step === 1 && !canNext1}
             >
-              下一步
+              {t("next")}
             </button>
           ) : (
             <button type="button" className="mc-btn mc-btn--primary" onClick={doGenerate} disabled={generating || !topic.trim()}>
-              {generating ? <Spinner size={14} /> : "✨"} 生成簡報
+              {generating ? <Spinner size={14} /> : "✨"} {t("generate")}
             </button>
           )}
         </footer>

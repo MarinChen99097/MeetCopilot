@@ -6,6 +6,7 @@ import { ApiError, listPersonas } from "@/lib/api";
 import { Link } from "@/i18n/navigation";
 import { StateBoundary } from "@/components/ui/StateBoundary";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 /** A persona is practice-ready once it has no missing persona fields (verified gate + complete). */
 export function isReady(p: PersonaOption): boolean {
@@ -42,6 +43,9 @@ export function PersonaPicker({
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState<TrainDifficulty>("neutral");
+  // Pre-start confirmation: pressing 開始語音對練 opens this dialog first (mic + billing + how-to-end),
+  // so we never silently trigger a getUserMedia prompt + a billed Gemini Live session on one click.
+  const [confirming, setConfirming] = useState(false);
 
   const load = useCallback(() => {
     setError(null);
@@ -158,7 +162,7 @@ export function PersonaPicker({
                 type="button"
                 className="mc-btn mc-btn--primary mc-train__start"
                 disabled={!canStart}
-                onClick={() => selected && onStart(selected, difficulty)}
+                onClick={() => canStart && setConfirming(true)}
               >
                 {starting ? "建立對練中…" : "開始語音對練"}
               </button>
@@ -178,6 +182,32 @@ export function PersonaPicker({
               前往 CRM
             </Link>
           }
+        />
+      ) : null}
+
+      {confirming && selected ? (
+        <ConfirmDialog
+          dismissOnBackdrop
+          title="開始語音對練前"
+          message={
+            <>
+              <ul className="mc-confirm__list">
+                <li>會請求並使用你的<strong>麥克風</strong>（瀏覽器會跳出權限視窗）。</li>
+                <li>按下後會立即開始一段<strong>即時語音對練</strong>，並可能產生語音服務費用。</li>
+                <li>過程中可隨時開口<strong>打斷</strong>對方；想結束時按<strong>「掛斷並查看評分」</strong>即可。</li>
+              </ul>
+              <p className="mc-confirm__who">
+                對練對象：<strong>{selected.fullName}</strong>
+              </p>
+            </>
+          }
+          cancelLabel="取消"
+          confirmLabel="同意並開始"
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            onStart(selected, difficulty);
+          }}
         />
       ) : null}
     </section>

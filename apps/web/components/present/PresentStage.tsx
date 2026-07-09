@@ -22,7 +22,7 @@ import { connect, type WsConnection } from "@/lib/ws";
 import { Link } from "@/i18n/navigation";
 import { SlideRenderer } from "@/components/slide/SlideRenderer";
 
-type LinkState = "off" | "connecting" | "open" | "reconnecting";
+type LinkState = "off" | "connecting" | "open" | "reconnecting" | "failed";
 
 export interface PresentStageProps {
   deckId?: string;
@@ -44,6 +44,7 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   const [failed, setFailed] = useState(false);
   const [link, setLink] = useState<LinkState>("off");
   const [reloadKey, setReloadKey] = useState(0); // 重試：bump 後重跑 deck 載入 effect。
+  const [wsNonce, setWsNonce] = useState(0); // 連線重試：bump 後重跑 WS effect（重置重連預算）。
 
   // committedIndex：本地已播出的最高頁（送 page_commit 用；單調遞增，只增不減）。
   const committed = useRef(-1);
@@ -186,7 +187,11 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
 
     const scheduleReconnect = () => {
       if (closed.current || retry.current !== null) return;
-      if (attempts >= MAX_RECONNECT_ATTEMPTS) return; // 放棄自動重連；圓點停在 reconnecting，使用者可刷新
+      if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+        // 自動重連預算耗盡 → 進終態「連線失敗」，等待面板給使用者「重新連線」按鈕（不無限靜默重連）。
+        setLink("failed");
+        return;
+      }
       const backoff = Math.min(RECONNECT_MAX_MS, RECONNECT_MS * 2 ** attempts);
       attempts += 1;
       retry.current = window.setTimeout(() => {
@@ -206,9 +211,15 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
           c.send({ type: "hello", role: "present" });
           refetchDeck();
         },
-        onClose: () => {
+        onClose: (ev) => {
           if (closed.current || conn.current !== c) return;
           conn.current = null;
+          // 憑證無效 / 握手錯誤（4001/4000）＝重試也不會成功 → 立即終態，別耗盡重連預算。
+          const code = ev?.code ?? 1006;
+          if (code === 4001 || code === 4000) {
+            setLink("failed");
+            return;
+          }
           setLink("reconnecting");
           scheduleReconnect();
         },
@@ -230,7 +241,13 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       conn.current?.close();
       conn.current = null;
     };
-  }, [meetingId, token, deckId, onMessage]);
+  }, [meetingId, token, deckId, onMessage, wsNonce]);
+
+  // 連線重試（終態「連線失敗」後）：重置重連預算並重跑 WS effect。
+  const retryWs = useCallback(() => {
+    setLink("connecting");
+    setWsNonce((n) => n + 1);
+  }, []);
 
   // ── render：極簡舞台（僅投影片 + 頁碼 + 連線圓點）──────────
   // 載入中（deck 抓取進行中；已有 LOAD_TIMEOUT_MS 上限，不會無限轉）。
@@ -272,12 +289,35 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       );
     }
     if (isLive) {
-      // 合法觀眾在等報告者推第一頁：友善等待、無按鈕（守 I3、也不像壞掉）。
+      // 連線終態失敗：中性「連線中斷 + 重新連線」（I3：純連線狀態，無任何副駕元素）。
+      if (link === "failed") {
+        return (
+          <main className="mc-present">
+            <div className="mc-present__stage">
+              <div className="mc-present__notice" role="alert">
+                <p className="mc-present__notice-title">{t("connFailedTitle")}</p>
+                <p className="mc-present__notice-desc">{t("connFailedDesc")}</p>
+                <div className="mc-present__notice-actions">
+                  <button type="button" className="mc-btn mc-btn--primary" onClick={retryWs}>
+                    {t("connRetry")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </main>
+        );
+      }
+      // 合法觀眾在等報告者推第一頁：連上前顯示「連線中…」，連上後顯示友善等待（守 I3、也不像壞掉）。
+      const connecting = link !== "open";
       return (
         <main className="mc-present">
           <div className="mc-present__stage">
             <div className="mc-present__empty" role="status">
-              {t("waiting")}
+              <span
+                className={`mc-present__waitdot mc-present__waitdot--${connecting ? "connecting" : "open"}`}
+                aria-hidden="true"
+              />
+              {connecting ? t("connConnecting") : t("waiting")}
             </div>
           </div>
         </main>

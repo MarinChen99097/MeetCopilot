@@ -340,6 +340,8 @@ img {
 .mc-google__btn { display: flex; justify-content: center; min-height: 40px; width: 100%; color-scheme: light; }
 .mc-google__busy { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mc-text-muted); }
 .mc-authcard__alt { background: none; border: none; color: var(--mc-accent); font-size: 13px; cursor: pointer; text-decoration: underline; align-self: center; }
+.mc-authcard__actions { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.mc-authcard__actions .mc-btn { width: 100%; }
 .mc-authdivider { display: flex; align-items: center; gap: 10px; color: var(--mc-text-muted); font-size: 12px; }
 .mc-authdivider::before, .mc-authdivider::after { content: ""; flex: 1; height: 1px; background: var(--mc-border); }
 
@@ -593,6 +595,7 @@ img {
 .mc-enrich__mode.is-on { border-color: var(--mc-accent); background: rgba(139, 92, 246, 0.1); }
 .mc-enrich__mode small { color: var(--mc-text-muted); font-size: 11px; }
 .mc-enrich__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.mc-enrich__warn { margin: 0; padding: 9px 11px; font-size: 12px; color: var(--mc-text); border: 1px solid var(--mc-warn, #d97706); border-radius: var(--mc-radius); background: rgba(217, 119, 6, 0.12); }
 
 @media (max-width: 640px) {
   .mc-companyhead__side { align-items: stretch; min-width: 0; width: 100%; }
@@ -820,11 +823,27 @@ img {
 
 .mc-cap__setupform { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); max-width: 440px; }
 
+/* 擷取端連線終態失敗：清楚的原因 + 重試（取代靜默「未連線」） */
+.mc-cap__connfail { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.35); border-radius: var(--mc-radius); }
+.mc-cap__connfail-msg { margin: 0; font-size: 13px; color: var(--mc-danger); }
+
 /* ════════════════════════════════════════════════════════════════
    /hud — presenter HUD (PROMPT 5). Mobile-portrait first; two columns when wide.
    ════════════════════════════════════════════════════════════════ */
 .mc-hud { max-width: 560px; margin: 0 auto; padding: 14px 14px 40px; display: flex; flex-direction: column; gap: 14px; }
 .mc-hud__banner { position: sticky; top: 0; z-index: 30; text-align: center; padding: 8px; border-radius: 8px; background: rgba(251, 191, 36, 0.16); color: var(--mc-warn); font-size: 13px; font-weight: 600; }
+.mc-hud__banner--fail { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; background: rgba(248, 113, 113, 0.16); color: var(--mc-danger); }
+.mc-hud__banner-actions { display: inline-flex; gap: 8px; }
+
+/* pre-first-connect：誠實的連線狀態（不渲染假「聆聽中…」串流面板） */
+.mc-hud--connecting { min-height: 60vh; justify-content: center; }
+.mc-hud__connstate { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 28px 20px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: 14px; }
+.mc-hud__connstate.is-failed { border-color: rgba(248, 113, 113, 0.4); }
+.mc-hud__connstate-title { margin: 0; font-size: 17px; font-weight: 650; }
+.mc-hud__connstate-desc { margin: 0; font-size: 13px; color: var(--mc-text-muted); line-height: 1.6; }
+.mc-hud__connstate.is-failed .mc-hud__connstate-desc { color: var(--mc-danger); }
+.mc-hud__connstate-actions { display: inline-flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.mc-hud__connspinner { width: 28px; height: 28px; border: 3px solid rgba(230, 235, 245, 0.18); border-top-color: var(--mc-accent); border-radius: 50%; animation: mc-spin 0.8s linear infinite; }
 .mc-hud__panel { padding: 14px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: 14px; }
 .mc-hud__panel-title { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--mc-text-muted); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mc-hud__empty { color: var(--mc-text-muted); font-size: 13px; font-style: italic; margin: 6px 0; }
@@ -944,3 +963,16 @@ kbd { background: #0e1728; border: 1px solid var(--mc-border); border-radius: 5p
 .mc-invitelink__label { display: block; font-size: 12px; color: var(--mc-text-muted); margin-bottom: 6px; }
 .mc-invitelink__row { display: flex; gap: 8px; align-items: center; }
 .mc-invitelink__url { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* ── 共用確認 dialog（components/ui/ConfirmDialog）──────────────────────
+   合併原 .mc-confirm（SlideEditor 生圖預警）＋ .mc-modal（PersonaPicker 對練前確認）
+   兩套幾乎同構的樣式；保留兩者視覺（背景模糊、面板陰影、清單／who 行）。 */
+.mc-confirm { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.mc-confirm__backdrop { position: absolute; inset: 0; background: rgba(5, 7, 15, 0.7); backdrop-filter: blur(2px); }
+.mc-confirm__panel { position: relative; z-index: 1; width: min(460px, 100%); padding: 22px 24px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: 16px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45); display: flex; flex-direction: column; gap: 12px; }
+.mc-confirm__title { margin: 0; font-size: 18px; font-weight: 700; }
+.mc-confirm__body { margin: 0; font-size: 14px; line-height: 1.6; color: var(--mc-text-muted); }
+.mc-confirm__body strong { color: var(--mc-text); }
+.mc-confirm__list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; line-height: 1.55; color: var(--mc-text); }
+.mc-confirm__who { margin: 6px 0 0; font-size: 13px; color: var(--mc-text-muted); }
+.mc-confirm__acts { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 4px; }

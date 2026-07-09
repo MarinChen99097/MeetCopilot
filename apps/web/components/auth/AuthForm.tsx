@@ -1,10 +1,23 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { useTranslations } from "next-intl";
 import { useRouter, Link } from "@/i18n/navigation";
-import { ApiError, apiLogin, apiRegister, setToken } from "@/lib/api";
+import { apiLogin, apiRegister, setToken } from "@/lib/api";
+import { authErrorKey } from "@/lib/error-i18n";
 import { Spinner } from "@/components/ui/Spinner";
 import { GoogleSignInButton, GOOGLE_CLIENT_ID } from "./GoogleSignInButton";
+
+/**
+ * A post-auth redirect target. Only same-origin, absolute paths are honoured (open-redirect guard);
+ * a query string (e.g. an invite `?token=…`) is split out so next-intl keeps it while adding the locale.
+ */
+function redirectTarget(next: string | undefined): string | { pathname: string; query: Record<string, string> } {
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return "/crm";
+  const q = next.indexOf("?");
+  if (q === -1) return next;
+  return { pathname: next.slice(0, q), query: Object.fromEntries(new URLSearchParams(next.slice(q + 1))) };
+}
 
 /**
  * AuthForm — login/register (API_CONTRACT §1). Two paths:
@@ -12,8 +25,9 @@ import { GoogleSignInButton, GOOGLE_CLIENT_ID } from "./GoogleSignInButton";
  *  - Email/password (always present; primary when Google is not configured, e.g. local dev).
  * Both store the returned JWT (setToken) then route to /crm. `mode` toggles the register-only fields.
  */
-export function AuthForm({ mode }: { mode: "login" | "register" }) {
+export function AuthForm({ mode, next }: { mode: "login" | "register"; next?: string }) {
   const router = useRouter();
+  const t = useTranslations("auth");
   const googleOn = Boolean(GOOGLE_CLIENT_ID);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,9 +49,9 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         ? await apiRegister({ email, password, displayName, orgName })
         : await apiLogin({ email, password });
       setToken(res.token);
-      router.replace("/crm");
+      router.replace(redirectTarget(next));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "連線失敗，請稍後再試");
+      setError(t(`errors.${authErrorKey(err)}`));
       setBusy(false);
     }
   }
