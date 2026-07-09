@@ -90,6 +90,27 @@ function toCrawlMode(mode: CrawlMode): "quick" | "detailed" {
 }
 
 /**
+ * Provenance 守則（P2-8）：人工建立/確認的 company.name 不被爬蟲研究結果覆寫。
+ * 判準對齊 crm/provenance-write 的 isTrusted（filled_by='human' 或 verified=1），並補上 company.create 不寫
+ * provenance 的缺口——「既有 name 非空 且 無 name provenance」＝建檔時人工輸入的名稱，視為 human。
+ * 只有既有 name 明確來自爬蟲（filled_by='crawler' 且未人驗）才允許重爬更新。
+ * 命中保護時：從落庫 payload 移除 company.name 與其 name provenance，讓 upsertFromCrawl 保留原名（就地變異）。
+ */
+export function guardHumanCompanyName(
+  payload: CrawlPayload,
+  existingName: string | undefined,
+  nameProvenance: { filledBy: string; verified: number } | undefined,
+): void {
+  const hasHumanName = typeof existingName === "string" && existingName.trim().length > 0;
+  if (!hasHumanName) return; // 新公司（無既有名）→ 讓爬蟲填名
+  const nameFromCrawler =
+    nameProvenance !== undefined && nameProvenance.filledBy === "crawler" && nameProvenance.verified !== 1;
+  if (nameFromCrawler) return; // 既有名本就來自爬蟲、未人驗 → 允許更新
+  if ("name" in payload.company) delete payload.company.name; // human 來源 → 不覆寫
+  payload.provenance = payload.provenance.filter((p) => p.fieldName !== "name");
+}
+
+/**
  * 整體 job 逾時（ms）：env RESEARCH_JOB_TIMEOUT_MS，預設 600000（10 分）。防背景流程掛死→永遠「研究中」。
  * 預設須寬鬆於 deep 最壞路徑：官網爬 300s 硬上限 ∥ grounding 150s（並行）→ 再序列 2 次 Gemini 抽取＋redirect 30s ≈ 450s。
  */
@@ -139,6 +160,8 @@ export interface ResearchOrchestrator {
     domain?: string;
     companyIdForContact?: string;
     companyName?: string;
+    /** 發起使用者歸屬（ADMIN_CONTRACT §2，可選）：回填背景抽取/grounding 記帳的 usage_events.user_id。 */
+    requestedBy?: string;
   }): Promise<void>;
 }
 
@@ -146,30 +169,30 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
   const { core, crawler, extractor, jobs } = deps;
 
   /** 現包一個 per-job metered gemini（記 kind），idemPrefix 帶 jobId 保跨請求唯一、跨呼叫不誤去重。 */
-  const meteredGeminiFor = (orgId: string, idemPrefix: string, kind: "gemini_extract") => {
-    return meteredGeminiClient(deps.gemini!, deps.meter!, { orgId, kind, idemPrefix });
+  const meteredGeminiFor = (orgId: string, idemPrefix: string, kind: "gemini_extract", userId?: string) => {
+    return meteredGeminiClient(deps.gemini!, deps.meter!, { orgId, kind, idemPrefix, userId });
   };
 
   /** 選（site）抽取器：有 meter+gemini 就現包 metered（記 gemini_extract）；否則用預設。 */
-  const extractorFor = (orgId: string, jobId: string): CrawlExtractor => {
+  const extractorFor = (orgId: string, jobId: string, userId?: string): CrawlExtractor => {
     if (deps.meter && deps.gemini) {
-      return createCrawlExtractor(meteredGeminiFor(orgId, `extract:${jobId}`, "gemini_extract"), deps.extractModel);
+      return createCrawlExtractor(meteredGeminiFor(orgId, `extract:${jobId}`, "gemini_extract", userId), deps.extractModel);
     }
     return extractor;
   };
 
   /** 選 deep 抽取器（獨立 idemPrefix，避與 site 抽取撞鍵而被誤去重）。 */
-  const deepExtractorFor = (orgId: string, jobId: string): DeepExtractor => {
+  const deepExtractorFor = (orgId: string, jobId: string, userId?: string): DeepExtractor => {
     if (deps.deepExtractor) return deps.deepExtractor;
     if (deps.meter && deps.gemini) {
-      return createDeepExtractor(meteredGeminiFor(orgId, `deep-extract:${jobId}`, "gemini_extract"), deps.extractModel);
+      return createDeepExtractor(meteredGeminiFor(orgId, `deep-extract:${jobId}`, "gemini_extract", userId), deps.extractModel);
     }
     if (deps.gemini) return createDeepExtractor(deps.gemini, deps.extractModel);
     throw new Error("deep research unavailable: GEMINI not configured");
   };
 
   /** grounding 記帳包裝（best-effort：generateGrounded 無 token 回報 → 以字元數粗估，與 embedding「無則估」一致）。 */
-  const meteredGrounding = (base: GroundingProvider, orgId: string, jobId: string): GroundingProvider => {
+  const meteredGrounding = (base: GroundingProvider, orgId: string, jobId: string, userId?: string): GroundingProvider => {
     if (!deps.meter) return base;
     const meter = deps.meter;
     let seq = 0;
@@ -188,17 +211,37 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
             };
           },
           `deep-ground:${jobId}:${seq++}`,
+          userId,
         ),
     };
   };
 
   /** 現組 DeepResearcher（grounding 加記帳包裝 + SSRF 安全 fetcher）。 */
-  const deepResearcherFor = (orgId: string, jobId: string): DeepResearcher => {
+  const deepResearcherFor = (orgId: string, jobId: string, userId?: string): DeepResearcher => {
     if (deps.deepResearcher) return deps.deepResearcher;
     if (!deps.grounding) throw new Error("deep research unavailable: no grounding provider");
-    const grounding = meteredGrounding(deps.grounding, orgId, jobId);
+    const grounding = meteredGrounding(deps.grounding, orgId, jobId, userId);
     return createDeepResearcher(grounding, deps.fetcher ?? safeFetcher);
   };
+
+  /** 落庫前套「人工名稱不被爬蟲覆寫」守則：查 name 欄 provenance → guardHumanCompanyName（就地變異 payload）。 */
+  async function protectHumanCompanyName(
+    orgId: string,
+    targetId: string,
+    existingName: string | undefined,
+    payload: CrawlPayload,
+  ): Promise<void> {
+    let nameProv: { filledBy: string; verified: number } | undefined;
+    try {
+      const provList = await core.provenance.listForEntity(orgId, "company", targetId);
+      const p = provList.find((r) => r.fieldName === "name");
+      if (p) nameProv = { filledBy: p.filledBy, verified: p.verified };
+    } catch (e) {
+      // provenance 查詢失敗 → 保守：視為 human（nameProv=undefined），寧可不覆寫既有名。
+      console.error("[research] name-guard provenance lookup failed:", e);
+    }
+    guardHumanCompanyName(payload, existingName, nameProv);
+  }
 
   return {
     async createJob(req) {
@@ -282,16 +325,20 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     url?: string;
     domain?: string;
     companyIdForContact?: string;
+    requestedBy?: string;
   }): Promise<RunResult> {
     const { orgId, jobId, targetType, mode, url, domain } = args;
     // standard 路徑必須有可爬的 url（分派已保證：只有 company 有 url 或 contact 才會進來；此為型別收斂＋防呆）。
     if (!url) throw new Error("no URL to crawl");
-    const jobExtractor = extractorFor(orgId, jobId);
+    const jobExtractor = extractorFor(orgId, jobId, args.requestedBy);
     const raw = await crawler.crawl({ url, mode: toCrawlMode(mode), screenshots: false });
 
     let fieldsFilled = 0;
     if (targetType === "company") {
       const payload: CrawlPayload = await jobExtractor.toCompany(raw);
+      // provenance 守則：人工建立/確認的公司名不被爬蟲覆寫（P2-8）。
+      const existing = await core.companies.findById(orgId, args.targetId);
+      await protectHumanCompanyName(orgId, args.targetId, existing?.name, payload);
       const upsertDomain = domain ?? payload.company.domain ?? domainFromUrl(raw.finalUrl ?? url) ?? "";
       const saved = await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId: args.targetId });
       fieldsFilled = payload.provenance.length;
@@ -337,6 +384,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     targetId: string;
     url?: string;
     domain?: string;
+    requestedBy?: string;
   }): Promise<RunResult> {
     const { orgId, jobId, targetId, url } = args;
     const company = await core.companies.findById(orgId, targetId);
@@ -344,9 +392,9 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     const companyName = company.name;
     const dom = args.domain ?? company.domain ?? domainFromUrl(url);
 
-    const deepResearcher = deepResearcherFor(orgId, jobId);
-    const deepExtractor = deepExtractorFor(orgId, jobId);
-    const siteExtractor = extractorFor(orgId, jobId);
+    const deepResearcher = deepResearcherFor(orgId, jobId, args.requestedBy);
+    const deepExtractor = deepExtractorFor(orgId, jobId, args.requestedBy);
+    const siteExtractor = extractorFor(orgId, jobId, args.requestedBy);
 
     // 並行：web 研究（純靠 companyName 就能扇出，startUrl 可選）＋（若有 url）官網 detailed 爬蟲取產品。
     // 無 url → 跳過官網 crawl（siteRaw=undefined），只跑 DeepResearcher by name。各自有界、個別失敗容忍。
@@ -398,10 +446,12 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
 
     const upsertDomain = dom ?? domainFromUrl(siteRaw?.finalUrl ?? url) ?? "";
     const payload: CrawlPayload = { company: mergedCompany, contacts: [], products, news: [], provenance };
+    // provenance 守則：人工建立/確認的公司名不被爬蟲/全網研究覆寫（P2-8）。
+    await protectHumanCompanyName(orgId, targetId, companyName, payload);
     const saved = await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId });
     const companyId = saved.id;
 
-    let fieldsFilled = provenance.length;
+    let fieldsFilled = payload.provenance.length;
 
     if (deep && deep.news.length > 0) {
       await core.companyChildren.bulkUpsertNews(orgId, companyId, deep.news as NewCompanyNews[]);

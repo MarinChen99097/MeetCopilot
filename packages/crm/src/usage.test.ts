@@ -46,6 +46,21 @@ describe("UsageRepository.record idempotency", () => {
     expect(roll.totalCostUsd).toBeCloseTo(0.001, 6);
   });
 
+  it("persists optional user_id (012_admin attribution) and leaves it NULL when omitted", async () => {
+    await core.usage.record(ORG, ev({ idempotencyKey: "with-user", userId: "user-123" }));
+    await core.usage.record(ORG, ev({ idempotencyKey: "no-user" })); // userId omitted
+    const withUser = await core.db.get<{ user_id: string | null }>(
+      "SELECT user_id FROM usage_events WHERE org_id = ? AND idempotency_key = ?",
+      [ORG, "with-user"],
+    );
+    const noUser = await core.db.get<{ user_id: string | null }>(
+      "SELECT user_id FROM usage_events WHERE org_id = ? AND idempotency_key = ?",
+      [ORG, "no-user"],
+    );
+    expect(withUser?.user_id).toBe("user-123");
+    expect(noUser?.user_id ?? null).toBeNull();
+  });
+
   it("same idempotency_key is allowed across different orgs (scope is per-org)", async () => {
     await core.usage.record(ORG, ev({ idempotencyKey: "shared" }));
     await core.usage.record(OTHER, ev({ idempotencyKey: "shared" }));

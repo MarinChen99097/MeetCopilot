@@ -13,7 +13,19 @@
  */
 import type { GeminiClient, GenerateJsonOptions, Metered } from "../gemini.js";
 import type { UsageKind } from "@meetcopilot/shared";
-import type { Meter } from "./meter.js";
+import type { Meter, MeterResult } from "./meter.js";
+
+/** Map a provider `{value,usage}` result into the Meter callback's MeterResult (one mapping, reused by both paths). */
+function toMeterResult<T>(metered: Metered<T>, meetingId?: string): MeterResult<T> {
+  const { value, usage } = metered;
+  return {
+    result: value,
+    model: usage.model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    meetingId,
+  };
+}
 
 export interface MeteredGeminiCtx {
   orgId: string;
@@ -21,6 +33,8 @@ export interface MeteredGeminiCtx {
   kind: UsageKind;
   /** 歸屬會議（會中呼叫帶入；否則省略）。 */
   meetingId?: string;
+  /** 發起使用者歸屬（ADMIN_CONTRACT §2，可選；request-scoped 寫入點帶 req.auth.userId → usage_events.user_id）。 */
+  userId?: string;
   /** idempotency_key 前綴（建議帶 jobId/uuid，確保跨請求唯一）。 */
   idemPrefix: string;
 }
@@ -39,17 +53,9 @@ export function meteredGeminiClient(base: GeminiClient, meter: Meter, ctx: Meter
       return meter.meter<T>(
         ctx.orgId,
         ctx.kind,
-        async () => {
-          const { value, usage }: Metered<T> = await base.generateJsonMetered<T>(opts);
-          return {
-            result: value,
-            model: usage.model,
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            meetingId: ctx.meetingId,
-          };
-        },
+        async () => toMeterResult(await base.generateJsonMetered<T>(opts), ctx.meetingId),
         nextKey("gen"),
+        ctx.userId,
       );
     },
 
@@ -57,17 +63,9 @@ export function meteredGeminiClient(base: GeminiClient, meter: Meter, ctx: Meter
       return meter.meter<number[]>(
         ctx.orgId,
         "embedding",
-        async () => {
-          const { value, usage } = await base.embedMetered(text);
-          return {
-            result: value,
-            model: usage.model,
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            meetingId: ctx.meetingId,
-          };
-        },
+        async () => toMeterResult(await base.embedMetered(text), ctx.meetingId),
         nextKey("embed"),
+        ctx.userId,
       );
     },
   };

@@ -13,10 +13,11 @@ import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { generateDeckSlides, regenerateOneSlide } from "./slide-gen.js";
 
 export interface GenerationService {
-  /** Wizard generate → a persisted Deck (slides written via DeckRepository). */
-  generateDeck(orgId: string, input: GenerateDeckInput): Promise<Deck>;
+  /** Wizard generate → a persisted Deck (slides written via DeckRepository). userId 為 ADMIN_CONTRACT §2 的
+   *  request-scoped 使用者歸屬（可選，回填 usage_events.user_id；既有呼叫不傳 → 行為不變）。 */
+  generateDeck(orgId: string, input: GenerateDeckInput, userId?: string): Promise<Deck>;
   /** Auto-QA regenerate a single slide (borrows v1 slideQaIssues/reviseSlides); optional steering hint. */
-  regenerateSlide(orgId: string, deckId: string, idx: number, hint?: string): Promise<SlideSpec>;
+  regenerateSlide(orgId: string, deckId: string, idx: number, hint?: string, userId?: string): Promise<SlideSpec>;
 }
 
 /** Thrown when the model produced nothing usable (all slides filtered to 0 blocks). Route → 502. */
@@ -34,14 +35,14 @@ export function createGenerationService(
   meter?: Meter,
 ): GenerationService {
   /** 有 meter 就現包一個 per-request metered client（記為 gemini_text）；否則透傳原 client。 */
-  const forOrg = (orgId: string): GeminiClient =>
+  const forOrg = (orgId: string, userId?: string): GeminiClient =>
     meter
-      ? meteredGeminiClient(gemini, meter, { orgId, kind: "gemini_text", idemPrefix: `gen:${randomUUID()}` })
+      ? meteredGeminiClient(gemini, meter, { orgId, kind: "gemini_text", userId, idemPrefix: `gen:${randomUUID()}` })
       : gemini;
 
   return {
-    async generateDeck(orgId, input) {
-      const slides = await generateDeckSlides(forOrg(orgId), model, input);
+    async generateDeck(orgId, input, userId) {
+      const slides = await generateDeckSlides(forOrg(orgId, userId), model, input);
       if (slides.length === 0) throw new GenerationEmptyError();
       return core.decks.create(orgId, {
         title: input.topic,
@@ -52,13 +53,13 @@ export function createGenerationService(
       });
     },
 
-    async regenerateSlide(orgId, deckId, idx, hint) {
+    async regenerateSlide(orgId, deckId, idx, hint, userId) {
       const found = await core.decks.findWithSlides(orgId, deckId);
       if (!found) throw new Error("deck not found");
       const { deck, slides } = found;
       const anchor = idx > 0 ? slides[idx - 1]?.spec : undefined;
       const current = slides.find((s) => s.idx === idx)?.spec;
-      const next = await regenerateOneSlide(forOrg(orgId), model, deck.language, anchor, current, hint);
+      const next = await regenerateOneSlide(forOrg(orgId, userId), model, deck.language, anchor, current, hint);
       // updateSlide 守 I1（idx ≤ committedIndex → I1ViolationError）；會前 committedIndex=-1 不受限。
       const saved = await core.decks.updateSlide(orgId, deckId, idx, next);
       return saved.spec;

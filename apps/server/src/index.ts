@@ -9,6 +9,9 @@ import { loadConfig } from "./config.js";
 import { initCrm } from "./crm.js";
 import { createAuthRouter } from "./auth/index.js";
 import { authRequired } from "./auth/jwt.js";
+import { activeAccountRequired } from "./auth/active-account.js";
+import { createAdminRouter } from "./admin-routes/index.js";
+import { loadPricingOverrides } from "./ops/pricing.js";
 import { createCrmRouter } from "./crm-routes/index.js";
 import { createResearchRouter } from "./research/routes.js";
 import { createTrainRouter } from "./train/routes.js";
@@ -35,6 +38,13 @@ async function main(): Promise<void> {
   const core = await initCrm(config.dbPath);
   await core.migrate();
 
+  // Pricing env overrides (ADMIN_CONTRACT §3.4): fold PRICING__<MODEL>__* into the central PRICING constants
+  // once at boot so estimateCostUsd + GET /api/admin/pricing reflect operator calibration.
+  const pricingChanged = loadPricingOverrides();
+  if (pricingChanged.length > 0) {
+    console.log(`[pricing] env overrides applied for: ${pricingChanged.join(", ")}`);
+  }
+
   // TTL purge of persisted transcript segments past their meeting's retention_days (M5 §A): once on boot + daily.
   const retention = startTranscriptRetention(core.db);
 
@@ -57,11 +67,18 @@ async function main(): Promise<void> {
   // Per-org + per-IP token bucket for the expensive endpoints (LLM/image/crawl). In-memory (single VM).
   const rateLimiter = new TokenBucketRateLimiter().start();
 
-  // Minimal dev CORS: allow the Next.js dev origin. (Prod origin handling revisited at deploy time.)
-  const ALLOWED_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+  // CORS allowlist (ADMIN_CONTRACT §6.1): the product web origin (WEB_ORIGIN) + the admin console origin
+  // (ADMIN_ORIGIN) + dev defaults (:3000 web, :3100 admin). Single-value → Set.has() allowlist; all other
+  // header behaviour (credentials / methods / allowed headers / OPTIONS 204) is unchanged.
+  const ALLOWED_ORIGINS = new Set<string>([
+    process.env.WEB_ORIGIN ?? "http://localhost:3000",
+    "http://localhost:3000",
+    "http://localhost:3100",
+    ...(config.adminOrigin ? [config.adminOrigin] : []),
+  ]);
   app.use((req, res, next) => {
     const origin = req.headers.origin;
-    if (origin === ALLOWED_ORIGIN) {
+    if (origin && ALLOWED_ORIGINS.has(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
@@ -79,6 +96,9 @@ async function main(): Promise<void> {
   // per-org bucket; it also runs again inside the routers (idempotent). Exact paths only — sub-paths like
   // /train/sessions/:id/finish are intentionally NOT limited. GET polling endpoints are left unlimited.
   const jwtGuard = authRequired(config.jwtSecret);
+  // Suspension gate (ADMIN_CONTRACT §2): runs after jwtGuard on the protected product routers below; a
+  // suspended org or user → 403. Kept out of health/ready/auth (and /api/usage, per §2's router list).
+  const activeGuard = activeAccountRequired(core);
   const limit = rateLimit(rateLimiter);
   app.post("/api/decks/generate", jwtGuard, limit);
   app.post("/api/decks/:id/image-jobs", jwtGuard, limit);
@@ -106,33 +126,43 @@ async function main(): Promise<void> {
     }
   });
 
-  app.use("/api/auth", createAuthRouter(core, config.jwtSecret, { googleClientId: config.googleClientId }));
+  app.use(
+    "/api/auth",
+    createAuthRouter(core, config.jwtSecret, {
+      googleClientId: config.googleClientId,
+      platformAdminEmails: config.platformAdminEmails,
+    }),
+  );
 
-  // CRM routes (API_CONTRACT §2) — all require a valid Bearer token; tenant scope from req.auth.orgId.
-  app.use("/api/crm", authRequired(config.jwtSecret), createCrmRouter(core));
+  // CRM routes (API_CONTRACT §2) — Bearer token + active-account gate (§2); tenant scope from req.auth.orgId.
+  app.use("/api/crm", jwtGuard, activeGuard, createCrmRouter(core));
 
-  // Research engine (API_CONTRACT §3) — Bearer auth applied inside the router; tenant scope from req.auth.orgId.
-  app.use("/api/research", createResearchRouter(core, config, config.jwtSecret, {}, meter));
+  // Research engine (API_CONTRACT §3) — Bearer + active-account gate at the mount (router re-checks auth).
+  app.use("/api/research", jwtGuard, activeGuard, createResearchRouter(core, config, config.jwtSecret, {}, meter));
 
-  // Usage rollup (M5 §B) — Bearer auth inside the router; org-scoped cost/usage reporting.
+  // Usage rollup (M5 §B) — Bearer auth inside the router; org-scoped cost/usage reporting. (§2 omits usage.)
   app.use("/api/usage", createUsageRouter(core, config.jwtSecret));
 
-  // Train / voice simulation (API_CONTRACT §7) — Bearer auth inside the router; ephemeral Live token minted here,
-  // but voice audio goes browser-direct to Gemini Live (never through this server).
-  app.use("/api/train", createTrainRouter(core, config, config.jwtSecret));
+  // Train / voice simulation (API_CONTRACT §7) — Bearer + active-account gate; ephemeral Live token minted here,
+  // but voice audio goes browser-direct to Gemini Live (never through this server). meter → gemini_live billing.
+  app.use("/api/train", jwtGuard, activeGuard, createTrainRouter(core, config, config.jwtSecret, {}, meter));
 
-  // Org / invite-based membership (API_CONTRACT §D) — Bearer auth inside the router; owner/admin gate
-  // per-route (except accept). Invite accept resolves the org from the invite token, never from req.auth.orgId.
-  app.use("/api/org", createOrgRouter(core, config.jwtSecret));
+  // Org / invite-based membership (API_CONTRACT §D) — Bearer + active-account gate; owner/admin gate per-route.
+  app.use("/api/org", jwtGuard, activeGuard, createOrgRouter(core, config.jwtSecret));
+
+  // Platform admin console (ADMIN_CONTRACT §4) — mounted BEFORE the generic /api catch-all so /api/admin/* is
+  // handled by platformAdminRequired (A1), not the decks router. Cross-org; no active-account gate (admins
+  // manage suspended accounts). Its own middleware enforces admin-only.
+  app.use("/api/admin", createAdminRouter(core, config));
 
   // Meetings + realtime copilot (API_CONTRACT §5/§6). The RealtimeHub is the per-process orchestration center
   // (session registry, ASR/analysis/orchestrator wiring, I1/I2/I3 enforcement); shared by the HTTP router and WS.
   const realtimeHub = new RealtimeHub(core, config, createGeminiClient(config.gemini), meter);
-  app.use("/api/meetings", createMeetingsRouter(realtimeHub, core, config.jwtSecret, config.port));
+  app.use("/api/meetings", jwtGuard, activeGuard, createMeetingsRouter(realtimeHub, core, config.jwtSecret, config.port));
 
   // Decks / DynamicSlide (API_CONTRACT §4): /decks/*, /image-jobs/:id, /extract-url, /extract-pdf.
   // Bearer auth here; tenant scope from req.auth.orgId. Disjoint paths from the routers above.
-  app.use("/api", authRequired(config.jwtSecret), createDecksRouter(core, config, meter));
+  app.use("/api", jwtGuard, activeGuard, createDecksRouter(core, config, meter));
 
   // 404 for unmatched /api routes (keep {error} contract instead of Express default HTML).
   app.use("/api", (_req, res) => {
@@ -158,7 +188,7 @@ async function main(): Promise<void> {
   );
 
   const server = http.createServer(app);
-  const wss = attachRealtimeWs(server, realtimeHub, config.jwtSecret);
+  const wss = attachRealtimeWs(server, realtimeHub, config.jwtSecret, core);
 
   server.listen(config.port, () => {
     console.log(`[server] listening on :${config.port}`);

@@ -28,6 +28,8 @@ export interface MeetingContext {
   dealId?: string;
   /** 歸屬會議（計費 usage_event.meeting_id）。 */
   meetingId?: string;
+  /** 發起使用者歸屬（ADMIN_CONTRACT §2，可得則帶；會中＝報告者 presenterUserId，拿不到則 undefined）。 */
+  userId?: string;
 }
 
 function kindOf(entityType: string): InfoCardKind {
@@ -88,6 +90,7 @@ export async function retrieveInfoCards(
             orgId: ctx.orgId,
             kind: "embedding",
             meetingId: ctx.meetingId,
+            userId: ctx.userId,
             idemPrefix: `retr:${randomUUID()}`,
           })
         : deps.gemini;

@@ -27,11 +27,15 @@ export interface Meter {
   /**
    * 包裝一次計費呼叫並冪等記帳。回傳 fn 的 result（計費為副作用）。
    * @param idemKey 冪等鍵（呼叫端決定；(orgId, idemKey) 唯一）——重試同一邏輯呼叫不重複計費。
+   * @param userId （ADMIN_CONTRACT §2，可選）發起使用者歸屬，回填 usage_events.user_id。request-scoped
+   *   寫入點從 `req.auth.userId` 傳入；背景 job 內部步驟無 request 脈絡時省略（→ user_id NULL）。
+   *   可選以不破壞既有呼叫（既有呼叫端不傳 → 行為完全不變）。
    */
   meter<T>(
     orgId: string,
     kind: UsageKind,
     fn: () => Promise<MeterResult<T>>,
     idemKey: string,
+    userId?: string,
   ): Promise<T>;
 }

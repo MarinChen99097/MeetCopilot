@@ -16,7 +16,9 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import type { Server } from "node:http";
 import type { ClientMessage, SlideSpec } from "@meetcopilot/shared";
 import { WS_PATH } from "@meetcopilot/shared";
+import type { CrmCore } from "@meetcopilot/crm";
 import { verifyWsToken } from "./ws-token.js";
+import { isAccountActive } from "../auth/active-account.js";
 import type { RealtimeHub } from "./hub.js";
 import type { ConnMeta } from "./types.js";
 
@@ -44,10 +46,22 @@ function asEditedSlide(v: unknown): SlideSpec | undefined {
   return v as SlideSpec;
 }
 
-export function attachRealtimeWs(server: Server, hub: RealtimeHub, jwtSecret: string): WebSocketServer {
+export function attachRealtimeWs(server: Server, hub: RealtimeHub, jwtSecret: string, core: CrmCore): WebSocketServer {
   const wss = new WebSocketServer({ server, path: WS_PATH });
 
   wss.on("connection", (ws: WebSocket, req) => {
+    // Uptime + no-leak: attach 'error' (and 'close') listeners SYNCHRONOUSLY, before the first await below.
+    //  - 'error': ws@8's EventEmitter re-throws a socket error as an UNCAUGHT exception when no 'error' listener
+    //    is registered. index.ts installs no uncaughtException handler, so an error emitted during the async
+    //    account check would crash the whole process and drop every live meeting. One permanent logger covers
+    //    the pre-attach window AND the rest of the connection's life.
+    //  - 'close': if the socket drops DURING the account check, its 'close' fires before hub.attach runs; the
+    //    listener must already be live so the socket is detached (hub.detach is a safe no-op until attach) and
+    //    never lingers as a ghost room entry that pins the runtime/ASR open. Registered once here (not re-added
+    //    after the check) to avoid double-detach.
+    ws.on("error", (err) => console.error("[realtime] ws error:", err));
+    ws.on("close", () => hub.detach(ws));
+
     const query = parseQuery(req.url);
     const token = query.get("token");
     const meetingId = query.get("meetingId");
@@ -82,27 +96,44 @@ export function attachRealtimeWs(server: Server, hub: RealtimeHub, jwtSecret: st
       isPresenter: claims.userId === claims.presenterUserId && role === "present",
     };
 
-    hub.attach(ws, meta);
+    // Account-suspension gate (ADMIN_CONTRACT §2): a suspended org/user is denied at the WS upgrade too, the
+    // same as the HTTP activeAccountRequired middleware. Async (two tiny indexed lookups); fail-closed on error.
+    // Attach the hub + message/close listeners ONLY after the check passes, so a suspended socket never joins a
+    // room. Mirrors this file's send-error-then-close rejection style.
+    isAccountActive(core, meta.orgId, meta.userId)
+      .then((active) => {
+        if (!active) {
+          ws.send(JSON.stringify({ type: "error", code: "account_suspended", message: "帳號已停權，無法連線" }));
+          ws.close(4003, "account suspended");
+          return;
+        }
 
-    ws.on("message", (data: RawData, isBinary: boolean) => {
-      const buf = toBuffer(data);
-      if (isBinary) {
-        // Audio: only from capture; hub applies the consent gate.
-        if (meta.role === "capture") hub.pushAudio(meta, buf);
-        return;
-      }
-      let msg: ClientMessage;
-      try {
-        msg = JSON.parse(buf.toString("utf8")) as ClientMessage;
-      } catch {
-        sendError(ws, "bad_message", "malformed JSON");
-        return;
-      }
-      handleMessage(ws, hub, meta, msg);
-    });
+        // hub.attach guards against a socket that closed during the check above (readyState !== OPEN → no-op),
+        // so a dead socket never becomes a ghost room member. 'error'/'close' were bound synchronously above.
+        hub.attach(ws, meta);
 
-    ws.on("close", () => hub.detach(ws));
-    ws.on("error", (err) => console.error("[realtime] ws error:", err));
+        ws.on("message", (data: RawData, isBinary: boolean) => {
+          const buf = toBuffer(data);
+          if (isBinary) {
+            // Audio: only from capture; hub applies the consent gate.
+            if (meta.role === "capture") hub.pushAudio(meta, buf);
+            return;
+          }
+          let msg: ClientMessage;
+          try {
+            msg = JSON.parse(buf.toString("utf8")) as ClientMessage;
+          } catch {
+            sendError(ws, "bad_message", "malformed JSON");
+            return;
+          }
+          handleMessage(ws, hub, meta, msg);
+        });
+      })
+      .catch((err) => {
+        console.error("[realtime] active-account check failed:", err);
+        sendError(ws, "account_suspended", "帳號狀態檢查失敗");
+        if (ws.readyState === ws.OPEN) ws.close(4003, "account check failed");
+      });
   });
 
   return wss;

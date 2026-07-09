@@ -25,6 +25,7 @@ export type UsageKind = (typeof USAGE_KINDS)[number];
 export interface UsageEvent {
   id: string;
   orgId: string;
+  userId?: string; // 012_admin：發起使用者歸屬（nullable；背景 job 無 request 脈絡時省略）
   kind: UsageKind;
   model?: string;
   inputTokens?: number;
@@ -46,6 +47,7 @@ export interface NewUsageEvent {
   outputTokens?: number;
   estCostUsd: number;
   meetingId?: string;
+  userId?: string; // 012_admin：可選使用者歸屬（Meter.meter 擴充後由 request-scoped 寫入點帶入）
   idempotencyKey: string;
 }
 

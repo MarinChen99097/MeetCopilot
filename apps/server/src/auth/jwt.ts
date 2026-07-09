@@ -12,6 +12,12 @@ export interface AuthPayload {
   userId: string;
   orgId: string;
   role: MembershipRole;
+  /**
+   * Platform-admin flag (ADMIN_CONTRACT §1). Set at token issuance when the login email ∈
+   * PLATFORM_ADMIN_EMAILS. Optional so existing (non-admin) tokens omit it entirely. `platformAdminRequired`
+   * gates every /api/admin/* route on `platformAdmin === true`.
+   */
+  platformAdmin?: boolean;
 }
 
 declare global {
@@ -34,7 +40,10 @@ export function verifyToken(secret: string, token: string): AuthPayload {
   if (!decoded.userId || !decoded.orgId || !decoded.role) {
     throw new Error("invalid token payload");
   }
-  return { userId: decoded.userId, orgId: decoded.orgId, role: decoded.role };
+  const payload: AuthPayload = { userId: decoded.userId, orgId: decoded.orgId, role: decoded.role };
+  // Preserve the platform-admin flag when present (only ever true; absence ⇒ not an admin).
+  if (decoded.platformAdmin === true) payload.platformAdmin = true;
+  return payload;
 }
 
 /** Express middleware: require a valid Bearer token; sets req.auth or responds 401. */
@@ -52,5 +61,24 @@ export function authRequired(secret: string) {
     } catch {
       res.status(401).json({ error: "invalid or expired token" });
     }
+  };
+}
+
+/**
+ * Express middleware for /api/admin/* (ADMIN_CONTRACT §1.3, invariant A1): require a valid Bearer token AND
+ * `platformAdmin === true`. A missing/invalid token → 401; a valid NON-admin token (any normal logged-in
+ * user) → **403 `{error:"admin only"}`** (deliberately 403, not 404 — the contract wants an explicit deny).
+ * Composes authRequired's verification so it can guard the admin router on its own.
+ */
+export function platformAdminRequired(secret: string) {
+  const requireAuth = authRequired(secret);
+  return (req: Request, res: Response, next: NextFunction): void => {
+    requireAuth(req, res, () => {
+      if (req.auth?.platformAdmin === true) {
+        next();
+        return;
+      }
+      res.status(403).json({ error: "admin only" });
+    });
   };
 }

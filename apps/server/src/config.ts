@@ -50,6 +50,17 @@ export interface AppConfig {
    * active; when empty, that route returns 501 and only local email/password auth (register/login) is available.
    */
   googleClientId: string;
+  /**
+   * Platform-admin allowlist (ADMIN_CONTRACT §1). Comma-separated emails; a login/register/google whose
+   * verified email ∈ this set gets `platformAdmin:true` in its JWT. Empty ⇒ no platform admins (admin app
+   * unusable, which is the safe default until an operator sets it). Compared lowercased+trimmed.
+   */
+  platformAdminEmails: string[];
+  /**
+   * Extra CORS origin for the admin front-end (ADMIN_CONTRACT §6.1). Added to the allowlist alongside
+   * WEB_ORIGIN and the dev defaults (localhost:3000 / :3100). Empty ⇒ not added.
+   */
+  adminOrigin: string;
   gemini: GeminiConfig;
   openai: OpenAiImageConfig;
 }
@@ -105,12 +116,27 @@ export function loadConfig(): AppConfig {
     );
   }
 
+  const platformAdminEmails = (process.env.PLATFORM_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.length > 0);
+  if (platformAdminEmails.length === 0) {
+    console.warn(
+      "[config] PLATFORM_ADMIN_EMAILS not set — no platform admins; the admin console (/api/admin/*) " +
+        "will reject every login with 403 until an operator sets this allowlist.",
+    );
+  }
+
+  const adminOrigin = (process.env.ADMIN_ORIGIN ?? "").trim();
+
   return {
     port: Number(process.env.PORT ?? 8787),
     jwtSecret,
     dbPath: resolvePath(process.env.DB_PATH ?? "./data/meetcopilot.db"),
     researchAutoLimitPerMeeting: Number(process.env.RESEARCH_AUTO_LIMIT_PER_MEETING ?? 10),
     googleClientId,
+    platformAdminEmails,
+    adminOrigin,
     gemini: {
       apiKey: geminiApiKey,
       textModel: process.env.GEMINI_TEXT_MODEL ?? "gemini-3.1-flash-lite",

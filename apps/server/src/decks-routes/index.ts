@@ -40,7 +40,7 @@ import { createImageService } from "../decks/image-service.js";
 import { extractFromUrl } from "../import/extract.js";
 import { runInWorker } from "../import/run-in-worker.js";
 import { detectLanguage } from "../import/detect-language.js";
-import { asyncHandler, orgId, param, str, badRequest, notFound, isOneOf } from "../crm-routes/helpers.js";
+import { asyncHandler, orgId, userId, param, str, badRequest, notFound, isOneOf } from "../crm-routes/helpers.js";
 import type { Meter } from "../ops/meter.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -113,6 +113,48 @@ function contentDisposition(title: string): string {
   return `attachment; filename="${ascii}.pptx"; filename*=UTF-8''${encoded}`;
 }
 
+/**
+ * 把 extractFromUrl 丟出的技術錯誤映成「人話」中文＋合適狀態碼（P2：網址匯入錯誤分案）。
+ * 四類分案：來源限流 / 被擋（內網·拒絕存取）/ 逾時 / 格式不符；其餘走通用可行動 fallback。
+ * 一律不外洩上游原始開發字串（去掉舊的 `url import failed:` 前綴）。
+ */
+function classifyExtractError(err: unknown): { status: number; error: string } {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  const name = err instanceof Error ? err.name : "";
+  // 來源限流（429/503）
+  if (/限流|\b429\b|\b503\b/.test(msg)) {
+    return { status: 429, error: "無法匯入：來源網站暫時限流，請稍等幾分鐘後再試，或改用其他來源。" };
+  }
+  // 被擋——內部/保留位址（SSRF 守門）
+  if (/內部|保留位址|解析到內部/.test(msg)) {
+    return { status: 422, error: "無法匯入：這看起來是內部或保留網路位址，請改用可公開存取的完整網頁網址。" };
+  }
+  // 被擋——來源網站拒絕存取（401/403/451）
+  if (/來源回應\s*(401|403|451)/.test(msg)) {
+    return {
+      status: 422,
+      error: "無法匯入：來源網站拒絕存取（可能有防爬蟲保護或需登入），請改用其他公開來源，或直接把內文貼到下方來源文字。",
+    };
+  }
+  // 逾時（總預算 abort / DNS 逾時）
+  if (name === "AbortError" || /逾時|timeout|timed out|aborted/i.test(msg)) {
+    return { status: 504, error: "無法匯入：連線逾時，來源網站回應太慢，請稍後再試或改用其他來源。" };
+  }
+  // 來源伺服器錯誤（5xx）
+  if (/來源回應\s*5\d\d/.test(msg)) {
+    return { status: 502, error: "無法匯入：來源網站目前發生錯誤，請稍後再試或改用其他來源。" };
+  }
+  // 格式不符——非網頁內容型別 / 非 http(s) / 無法解析網域 / 網頁過大 / 重導異常
+  if (/不支援的內容型別|只允許 http|無法解析網域|網頁過大|重導/.test(msg)) {
+    return {
+      status: 422,
+      error: "無法匯入：這個網址不是可讀取的網頁（或格式不支援），請確認是公開網頁的完整網址（含 https://）。",
+    };
+  }
+  // 其餘：通用可行動 fallback（不外洩原始訊息）
+  return { status: 422, error: "無法匯入：抓取失敗，請確認網址正確、頁面可公開存取後再試。" };
+}
+
 export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Meter): Router {
   const router = Router();
   const gemini = createGeminiClient(config.gemini);
@@ -169,7 +211,7 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         return;
       }
       try {
-        const deck = await generation.generateDeck(orgId(req), parsed.input);
+        const deck = await generation.generateDeck(orgId(req), parsed.input, userId(req));
         res.status(201).json(deck);
       } catch (err) {
         // C1：一律 server-side 記錄真實錯誤；回應絕不外洩上游原始訊息（可能含 prompt/內部細節）。
@@ -350,7 +392,7 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         return;
       }
       const prompt = str(body.prompt);
-      const { jobId } = await imageService.enqueue(oid, deckId, slideIndex, body.kind, prompt);
+      const { jobId } = await imageService.enqueue(oid, deckId, slideIndex, body.kind, prompt, userId(req));
       res.status(202).json({ jobId });
     }),
   );
@@ -410,12 +452,15 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
       try {
         const { title, text } = await extractFromUrl(url);
         if (!text.trim()) {
-          res.status(422).json({ error: "source has no extractable text" });
+          res
+            .status(422)
+            .json({ error: "無法匯入：這個頁面沒有可擷取的文字內容（可能是圖片或需登入的頁面）。" });
           return;
         }
         res.json({ title, text });
       } catch (err) {
-        res.status(422).json({ error: `url import failed: ${(err as Error).message}` });
+        const { status, error } = classifyExtractError(err);
+        res.status(status).json({ error });
       }
     }),
   );

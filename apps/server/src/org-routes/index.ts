@@ -81,7 +81,8 @@ export function createOrgRouter(core: CrmCore, jwtSecret: string): Router {
         invitedBy: req.auth!.userId,
         expiresAt,
       });
-      const acceptUrl = `${WEB_ORIGIN}/invite?token=${encodeURIComponent(invite.token)}`;
+      // 指向實際存在的 web 路由 [locale]/invite（localePrefix:"always"→必帶 locale，預設 zh-TW）。P0-1。
+      const acceptUrl = `${WEB_ORIGIN}/zh-TW/invite?token=${encodeURIComponent(invite.token)}`;
       res.status(201).json({ invite, acceptUrl });
     }),
   );

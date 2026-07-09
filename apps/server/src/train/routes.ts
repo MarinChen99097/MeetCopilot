@@ -20,6 +20,7 @@ import type { AppConfig } from "../config.js";
 import { createTrainService, TrainError, type TrainService } from "./train-service.js";
 import { createLiveTokenMinter } from "./live-token.js";
 import { createTrainScorer } from "./scoring.js";
+import type { Meter } from "../ops/meter.js";
 
 type Json = Record<string, unknown>;
 
@@ -54,6 +55,7 @@ export function createTrainRouter(
   config: AppConfig,
   jwtSecret: string,
   deps: TrainRouterDeps = {},
+  meter?: Meter,
 ): Router {
   const gemini = createGeminiClient(config.gemini);
   const service =
@@ -63,6 +65,7 @@ export function createTrainRouter(
       minter: createLiveTokenMinter(config.gemini.apiKey),
       scorer: createTrainScorer(gemini, config.gemini.extractModel),
       liveModel: config.gemini.liveModel,
+      meter,
     });
 
   const router = Router();
@@ -96,7 +99,7 @@ export function createTrainRouter(
     }
     const difficulty = (rawDifficulty as TrainDifficulty | null) ?? undefined;
     try {
-      res.json(await service.startSession(orgId, { contactId, dealId, difficulty }));
+      res.json(await service.startSession(orgId, { contactId, dealId, difficulty }, req.auth!.userId));
     } catch (err) {
       sendTrainError(res, err);
     }

@@ -23,8 +23,8 @@ export class SqliteUsageRepository implements UsageRepository {
   async record(orgId: string, event: NewUsageEvent): Promise<void> {
     await this.db.run(
       `INSERT INTO usage_events
-         (id, org_id, kind, model, input_tokens, output_tokens, est_cost_usd, meeting_id, idempotency_key, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, org_id, kind, model, input_tokens, output_tokens, est_cost_usd, meeting_id, user_id, idempotency_key, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (org_id, idempotency_key) DO NOTHING`,
       [
         uuidv7(),
@@ -35,6 +35,7 @@ export class SqliteUsageRepository implements UsageRepository {
         event.outputTokens ?? null,
         event.estCostUsd,
         event.meetingId ?? null,
+        event.userId ?? null, // 012_admin：發起使用者歸屬（可選 → NULL）
         event.idempotencyKey,
         Date.now(),
       ],

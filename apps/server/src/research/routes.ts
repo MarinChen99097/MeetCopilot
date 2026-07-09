@@ -135,6 +135,7 @@ export function createResearchRouter(
         domain: created.domain,
         companyIdForContact: created.companyIdForContact,
         companyName: created.companyName,
+        requestedBy: req.auth!.userId,
       })
       .catch((e) => console.error("[research] runJob crashed:", e));
 

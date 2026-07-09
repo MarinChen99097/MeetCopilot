@@ -22,6 +22,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/crm/package.json ./packages/crm/
 COPY apps/server/package.json ./apps/server/
 COPY apps/web/package.json ./apps/web/
+COPY apps/admin/package.json ./apps/admin/
 RUN npm ci
 
 # Sources needed to build web (+ shared, which web transpiles from source).

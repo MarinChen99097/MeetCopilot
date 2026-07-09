@@ -22,6 +22,7 @@ export function createMeter(usage: UsageRepository): Meter {
       kind: UsageKind,
       fn: () => Promise<MeterResult<T>>,
       idemKey: string,
+      userId?: string,
     ): Promise<T> {
       const out = await fn(); // 失敗即向上拋（不記帳）
       const estCostUsd =
@@ -34,6 +35,7 @@ export function createMeter(usage: UsageRepository): Meter {
           outputTokens: out.outputTokens,
           estCostUsd,
           meetingId: out.meetingId,
+          userId, // ADMIN_CONTRACT §2：發起使用者歸屬（可選；省略 → NULL）
           idempotencyKey: idemKey,
         });
       } catch (err) {

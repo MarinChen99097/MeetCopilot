@@ -63,6 +63,9 @@ export class LiveSessionRuntime implements SessionRuntime {
   /** Deck length mirror (grows on append) — needed for the I1 patchMinIndex(op, deckLength) guard. */
   deckLength: number;
 
+  /** 單調遞增的 ASR chunk 序號（計費冪等 key 用；每個 final 逐字段 +1，隨 runtime 一起 dispose）。 */
+  asrChunkSeq = 0;
+
   private research: number;
   private readonly queue = new Map<string, QueuedSuggestion>();
   private disposed = false;

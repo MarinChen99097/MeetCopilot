@@ -25,6 +25,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/crm/package.json ./packages/crm/
 COPY apps/server/package.json ./apps/server/
 COPY apps/web/package.json ./apps/web/
+COPY apps/admin/package.json ./apps/admin/
 
 # 2) Full install (dev deps included — tsc is needed to build to dist).
 #    NODE_ENV=production (set above) makes npm ci omit devDependencies by default,

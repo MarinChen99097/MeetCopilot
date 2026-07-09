@@ -16,6 +16,7 @@ import type { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import type { CrmCore } from "@meetcopilot/crm";
 import { authRequired, issueToken } from "./jwt.js";
+import { isAccountActive } from "./active-account.js";
 import { createUserWithOrg, provisionUser } from "./provision.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -38,6 +39,11 @@ export interface AuthRouterOptions {
   googleClientId?: string;
   /** Override the verifier (tests). Default verifies via google-auth-library OAuth2Client. */
   verifyGoogleIdToken?: GoogleIdTokenVerifier;
+  /**
+   * Platform-admin email allowlist (ADMIN_CONTRACT §1). A login/register/google whose email ∈ this set gets
+   * `platformAdmin:true` in its JWT. Compared lowercased; empty/undefined ⇒ no admins.
+   */
+  platformAdminEmails?: string[];
 }
 
 /** Default verifier: lazy-load google-auth-library and verify the token audience against our client id. */
@@ -58,6 +64,13 @@ export function createAuthRouter(core: CrmCore, jwtSecret: string, opts: AuthRou
   const router = Router();
   const googleClientId = (opts.googleClientId ?? "").trim();
   const verifyGoogleIdToken = opts.verifyGoogleIdToken ?? (googleClientId ? defaultVerifier(googleClientId) : null);
+
+  // Platform-admin allowlist (ADMIN_CONTRACT §1): tokens for these emails carry platformAdmin:true.
+  const adminEmails = new Set((opts.platformAdminEmails ?? []).map((e) => e.trim().toLowerCase()));
+  const isPlatformAdmin = (email: string): boolean => adminEmails.has(email.trim().toLowerCase());
+  /** Build the JWT payload, stamping platformAdmin when the email is on the allowlist (else omit the field). */
+  const payloadFor = (userId: string, orgId: string, role: "owner" | "admin" | "member", email: string) =>
+    isPlatformAdmin(email) ? { userId, orgId, role, platformAdmin: true as const } : { userId, orgId, role };
 
   router.post("/register", async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Json;
@@ -89,6 +102,21 @@ export function createAuthRouter(core: CrmCore, jwtSecret: string, opts: AuthRou
       return;
     }
 
+    // Invariant A1 (ADMIN_CONTRACT §1): platform-admin allowlist emails are RESERVED — they may not create a new
+    // local password account here. login/google stamp platformAdmin because they PROVE email ownership (a password
+    // on an account a legitimate owner already created / a verified Google credential). But an allowlist email can
+    // be Google-only (no local account yet), so its email is unclaimed; without this block an attacker could self-
+    // register that email, set their own password, then login to mint a platformAdmin token (A1 bypass — merely
+    // not-stamping-admin-on-register was incomplete). Legitimate admins arrive via Google sign-in (provision.ts,
+    // which never routes through register) or operator pre-provisioning. Existing admin accounts are unaffected:
+    // a real one already returned 409 above; this only blocks CREATING a new reserved-email account.
+    if (isPlatformAdmin(email)) {
+      res.status(403).json({
+        error: "this email is reserved for a platform administrator; please contact your administrator",
+      });
+      return;
+    }
+
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     let created: { userId: string; orgId: string; orgName: string };
@@ -104,6 +132,11 @@ export function createAuthRouter(core: CrmCore, jwtSecret: string, opts: AuthRou
       throw err;
     }
 
+    // ADMIN_CONTRACT §1 / invariant A1: platformAdmin is stamped ONLY on login/google — both of which prove the
+    // caller OWNS the email (password check / verified Google credential). Register proves nothing: a platform
+    // admin defined via the allowlist may be Google-only (no local account yet), so its email is unclaimed and an
+    // attacker could POST /register with it to mint a platformAdmin token (A1 bypass). Register therefore issues a
+    // plain owner token, NEVER deriving admin from the email (do not route through payloadFor here).
     const token = issueToken(jwtSecret, { userId: created.userId, orgId: created.orgId, role: "owner" });
     res.status(201).json({
       token,
@@ -145,11 +178,13 @@ export function createAuthRouter(core: CrmCore, jwtSecret: string, opts: AuthRou
       return;
     }
 
-    const token = issueToken(jwtSecret, {
-      userId: user.id,
-      orgId: membership.orgId,
-      role: membership.role,
-    });
+    // Suspension gate (ADMIN_CONTRACT §2): a suspended user or org cannot obtain a token.
+    if (!(await isAccountActive(core, membership.orgId, user.id))) {
+      res.status(403).json({ error: "account suspended" });
+      return;
+    }
+
+    const token = issueToken(jwtSecret, payloadFor(user.id, membership.orgId, membership.role, user.email));
     res.json({
       token,
       user: { id: user.id, email: user.email, displayName: user.displayName },
@@ -189,11 +224,12 @@ export function createAuthRouter(core: CrmCore, jwtSecret: string, opts: AuthRou
     }
 
     const provisioned = await provisionUser(core, { email, displayName: payload.name ?? null });
-    const token = issueToken(jwtSecret, {
-      userId: provisioned.userId,
-      orgId: provisioned.orgId,
-      role: provisioned.role,
-    });
+    // Suspension gate (ADMIN_CONTRACT §2): a suspended user or org cannot obtain a token, even via Google.
+    if (!(await isAccountActive(core, provisioned.orgId, provisioned.userId))) {
+      res.status(403).json({ error: "account suspended" });
+      return;
+    }
+    const token = issueToken(jwtSecret, payloadFor(provisioned.userId, provisioned.orgId, provisioned.role, email));
     res.json({
       token,
       user: { id: provisioned.userId, email: provisioned.email, displayName: provisioned.displayName },

@@ -13,6 +13,8 @@ import { SIGNAL_KINDS, type SignalItem, type SignalKind } from "@meetcopilot/sha
 import type { GeminiClient } from "../gemini.js";
 import type { AnalysisEngine } from "./analysis-engine.js";
 import type { AsrSegment } from "../asr/asr-provider.js";
+import type { Meter } from "../ops/meter.js";
+import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { clamp01, withDeadline } from "../realtime/util.js";
 
 const WINDOW_MAX_SEGMENTS = 10;
@@ -53,17 +55,39 @@ interface WindowSeg {
   text: string;
 }
 
+/**
+ * 計費歸屬（ADMIN_CONTRACT §3.3）。有 meter+orgId 時，analysis 的 gemini_text 呼叫改走 metered client
+ * （kind=gemini_text、歸屬 meetingId=sessionId）。realtime hub 於建構本 engine 時可傳入
+ * `{ meter, orgId }` 啟用；不傳則沿用未計費行為（會中分析成本不進帳，同今日）。
+ */
+export interface AnalysisMetering {
+  meter: Meter;
+  orgId: string;
+}
+
 export class RollingWindowAnalysisEngine implements AnalysisEngine {
   private window: WindowSeg[] = [];
   private lastAnalysisAt = 0;
   private analyzing = false;
   private signalsCb: ((items: SignalItem[]) => void) | null = null;
+  /** 實際發話的 client：有 metering 則為 per-session metered wrapper，否則原 client（透傳）。 */
+  private readonly client: GeminiClient;
 
   constructor(
     private readonly gemini: GeminiClient,
     private readonly model: string,
     private readonly sessionId: string,
-  ) {}
+    metering?: AnalysisMetering,
+  ) {
+    this.client = metering
+      ? meteredGeminiClient(gemini, metering.meter, {
+          orgId: metering.orgId,
+          kind: "gemini_text",
+          meetingId: sessionId,
+          idemPrefix: `analysis:${sessionId}`,
+        })
+      : gemini;
+  }
 
   onSignals(cb: (items: SignalItem[]) => void): void {
     this.signalsCb = cb;
@@ -105,7 +129,7 @@ export class RollingWindowAnalysisEngine implements AnalysisEngine {
     if (!transcript.trim()) return [];
     try {
       const raw = await withDeadline(
-        this.gemini.generateJson<RawSignals>({
+        this.client.generateJson<RawSignals>({
           model: this.model,
           system:
             "你是 B2B 銷售會議的即時分析引擎。依最近逐字稿，抽出對報告者有用的商機訊號。" +

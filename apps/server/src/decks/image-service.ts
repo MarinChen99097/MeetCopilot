@@ -15,13 +15,15 @@ import { OpenAIImageRefusedError, type ImageProvider } from "../providers/image.
 import type { Meter } from "../ops/meter.js";
 
 export interface ImageService {
-  /** Enqueue a pre-meeting image job → { jobId } (202). Runs async; poll via GET /api/image-jobs/:id. */
+  /** Enqueue a pre-meeting image job → { jobId } (202). Runs async; poll via GET /api/image-jobs/:id.
+   *  userId 為 ADMIN_CONTRACT §2 的 request-scoped 使用者歸屬（可選，回填 usage_events.user_id）。 */
   enqueue(
     orgId: string,
     deckId: string,
     slideIdx: number,
     kind: ImageKind,
     prompt?: string,
+    userId?: string,
   ): Promise<{ jobId: string }>;
 }
 
@@ -44,7 +46,7 @@ export function createImageService(
   meter?: Meter,
   imageModel?: string,
 ): ImageService {
-  async function run(orgId: string, jobId: string, deckId: string, slideIdx: number, kind: ImageKind, prompt?: string) {
+  async function run(orgId: string, jobId: string, deckId: string, slideIdx: number, kind: ImageKind, prompt?: string, userId?: string) {
     try {
       await core.decks.updateImageJob(orgId, jobId, { status: "running" });
 
@@ -73,6 +75,7 @@ export function createImageService(
               "openai_image",
               async () => ({ result: await generate(), model: imageModel }),
               `img:${jobId}`,
+              userId,
             )
           : await generate();
       } finally {
@@ -97,10 +100,10 @@ export function createImageService(
   }
 
   return {
-    async enqueue(orgId, deckId, slideIdx, kind, prompt) {
+    async enqueue(orgId, deckId, slideIdx, kind, prompt, userId) {
       const job = await core.decks.createImageJob(orgId, { deckId, slideIdx, kind, prompt });
       // Fire-and-forget background run; errors are captured into the job row, never thrown to the request.
-      void run(orgId, job.id, deckId, slideIdx, kind, prompt).catch((e) =>
+      void run(orgId, job.id, deckId, slideIdx, kind, prompt, userId).catch((e) =>
         console.error("[image] runJob crashed:", e),
       );
       return { jobId: job.id };

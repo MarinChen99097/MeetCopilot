@@ -1,3 +1,6 @@
+# ⚠️ 未採用的 GCE VM 替代方案殘留 — 現行部署＝Cloud Run ×2 ＋ Cloud SQL（TLS 由 Cloud Run 代管），見 docs/DEPLOY.md。
+# ⚠️ 此 Caddyfile 屬單 GCE VM ＋ Docker Compose 方案，非現行架構，僅供參考，勿據此部署。
+#
 # MeetCopilot v2 — reverse proxy + automatic HTTPS (Let's Encrypt).
 # DOMAIN / ACME_EMAIL come from the caddy container environment (see docker-compose.yml).
 #

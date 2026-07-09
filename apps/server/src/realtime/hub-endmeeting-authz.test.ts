@@ -23,6 +23,8 @@ function testConfig(): AppConfig {
     dbPath: ":memory:",
     researchAutoLimitPerMeeting: 5,
     googleClientId: "",
+    platformAdminEmails: [],
+    adminOrigin: "",
     gemini: { apiKey: "", textModel: "t", extractModel: "e", embedModel: "m", liveModel: "l" },
     openai: { apiKey: "", imageModel: "i", imageSize: "1x1", imageQuality: "low" },
   };

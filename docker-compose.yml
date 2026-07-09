@@ -1,3 +1,6 @@
+# ⚠️ 未採用的 GCE VM 替代方案殘留 — 現行部署＝Cloud Run ×2 ＋ Cloud SQL，見 docs/DEPLOY.md。
+# ⚠️ 本 docker-compose（單 GCE VM ＋ Docker Compose ＋ Caddy TLS）並非現行架構，僅為早期方案保留參考，勿據此部署。
+#
 # MeetCopilot v2 — production topology (single GCE VM, decision 20).
 #
 #   caddy (:80/:443, auto-TLS)  ──►  web  (Next.js standalone, :3000)   → "/"

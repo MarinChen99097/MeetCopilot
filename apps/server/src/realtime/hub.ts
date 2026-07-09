@@ -62,7 +62,7 @@ export class RealtimeHub implements BroadcastSink {
     private readonly core: CrmCore,
     private readonly config: AppConfig,
     private readonly gemini: GeminiClient,
-    meter?: Meter,
+    private readonly meter?: Meter,
   ) {
     this.store = new MeetingStore(core.db);
     this.orchestrator = new CrmCopilotOrchestrator({
@@ -94,6 +94,12 @@ export class RealtimeHub implements BroadcastSink {
 
   // ── connection lifecycle ────────────────────────────────────────────────
   attach(ws: WebSocket, meta: ConnMeta): void {
+    // Defensive against the WS pre-attach account-check race (ws-server.ts): if the socket already closed during
+    // that async window, its 'close' event has already fired and no future close will detach it. Enrolling it now
+    // would leave a ghost entry that keeps the room Set above size 0 forever → scheduleReclaim/disposeSession
+    // never fire → the LiveSessionRuntime + Gemini ASR provider leak. Refuse to enroll a non-open socket.
+    if (ws.readyState !== ws.OPEN) return;
+
     const timer = this.graceTimers.get(meta.meetingId);
     if (timer) {
       clearTimeout(timer);
@@ -236,7 +242,14 @@ export class RealtimeHub implements BroadcastSink {
     }
 
     const asr = new GeminiAsrProvider(this.config.gemini, meta.meetingId);
-    const engine = new RollingWindowAnalysisEngine(this.gemini, this.config.gemini.extractModel, meta.meetingId);
+    // 會中分析記帳（ADMIN_CONTRACT §3.3）：有 meter 時，analysis 的 gemini_text 呼叫改走 metered client
+    // （歸屬 orgId + meetingId）；不傳則沿用未計費行為。
+    const engine = new RollingWindowAnalysisEngine(
+      this.gemini,
+      this.config.gemini.extractModel,
+      meta.meetingId,
+      this.meter ? { meter: this.meter, orgId: meta.orgId } : undefined,
+    );
 
     const runtime = new LiveSessionRuntime({
       meetingId: meta.meetingId,
@@ -279,6 +292,18 @@ export class RealtimeHub implements BroadcastSink {
   private async onAsrFinal(runtime: LiveSessionRuntime, seg: AsrSegment): Promise<void> {
     // Consent gate (M5 §A): no analysis, no persistence, no LLM egress before consent — drop the segment.
     if (!runtime.consent) return;
+    // ASR 記帳（ADMIN_CONTRACT §3.1）：每個成功轉寫的 final 逐字段記一筆 asr（chunk 計費，無 token）。
+    // 冪等 key = meetingId + 單調 chunk 序號（同一段重試不重複計費）。fire-and-forget 副作用，
+    // 絕不阻塞逐字稿遞送（meter 內部已吞 record 錯誤）。
+    if (this.meter) {
+      const seq = runtime.asrChunkSeq++;
+      void this.meter.meter(
+        runtime.orgId,
+        "asr",
+        async () => ({ result: undefined, meetingId: runtime.meetingId }),
+        `asr:${runtime.meetingId}:${seq}`,
+      );
+    }
     // Redact PII before ANY LLM egress; speaker inference is an LLM call, so it sees redacted text too.
     const redactedText = redactPii(seg.text);
     const speaker = await this.orchestrator.inferSpeaker(runtime.meetingId, redactedText);

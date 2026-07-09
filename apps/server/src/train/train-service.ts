@@ -19,13 +19,15 @@ import type {
 } from "@meetcopilot/shared";
 import type { LiveTokenMinter } from "./live-token.js";
 import type { TrainScorer } from "./scoring.js";
+import type { Meter } from "../ops/meter.js";
 import { buildPersonaPrompt, personaReadiness, trustedFieldSet, passesGate } from "./persona.js";
 
 export interface TrainService {
   /** List trainable contacts (only those whose persona fields pass the verified gate). */
   personas(orgId: string, companyId?: string): Promise<PersonaOption[]>;
-  /** Start a session → ephemeral Live token + persona summary (browser connects to Gemini Live directly). */
-  startSession(orgId: string, input: NewTrainSession): Promise<StartTrainSessionResult>;
+  /** Start a session → ephemeral Live token + persona summary (browser connects to Gemini Live directly).
+   *  userId（可選）為 ADMIN_CONTRACT §2 使用者歸屬，回填 gemini_live 記帳的 usage_events.user_id。 */
+  startSession(orgId: string, input: NewTrainSession, userId?: string): Promise<StartTrainSessionResult>;
   /** Upload the two-way transcript (during / at end of practice). */
   saveTranscript(orgId: string, sessionId: string, turns: TrainTurn[]): Promise<void>;
   /** Finish → trigger LLM scoring over the two-way transcript → { reportId }. */
@@ -50,6 +52,12 @@ export interface TrainServiceDeps {
   minter: LiveTokenMinter;
   scorer: TrainScorer;
   liveModel: string;
+  /**
+   * 成本記帳（ADMIN_CONTRACT §3.2）。有 meter 則於 startSession 鑄 Live token 成功時記一筆 `gemini_live`
+   * （idemKey=`live:<sessionId>`，冪等）。Live 音訊瀏覽器直連 Gemini、token 數不經我方 server，故只記**次數**
+   * ＋估值（無 token → est_cost 依 pricing fallback 為 0；註明估算）。省略 meter → 不記帳（行為不變）。
+   */
+  meter?: Meter;
   /** 無 companyId 時掃全 org 的公司頁上限（有界枚舉）。 */
   maxCompaniesScan?: number;
 }
@@ -58,7 +66,7 @@ const DEFAULT_MAX_COMPANIES = 500;
 const COMPANY_PAGE_SIZE = 100;
 
 export function createTrainService(deps: TrainServiceDeps): TrainService {
-  const { core, minter, scorer, liveModel } = deps;
+  const { core, minter, scorer, liveModel, meter } = deps;
   const maxCompanies = deps.maxCompaniesScan ?? DEFAULT_MAX_COMPANIES;
 
   /** 有界枚舉本 org 的公司（無 companyId 時用）——經 repo 層，不繞過。 */
@@ -102,7 +110,7 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
       return out;
     },
 
-    async startSession(orgId: string, input: NewTrainSession): Promise<StartTrainSessionResult> {
+    async startSession(orgId: string, input: NewTrainSession, userId?: string): Promise<StartTrainSessionResult> {
       const contact = await core.contacts.findById(orgId, input.contactId);
       if (!contact) throw new TrainError("not_found", "contact not found");
 
@@ -136,6 +144,22 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
         dealId: input.dealId,
         difficulty,
       });
+
+      // 記帳（ADMIN_CONTRACT §3.2）：一次 Live token 簽發＝一次 gemini_live 使用（記次數＋估值）。
+      // idemKey=`live:<sessionId>` 冪等（同一 session 不重複計費）。記帳為副作用，失敗不影響回傳（meter 內部吞錯）。
+      if (meter) {
+        try {
+          await meter.meter(
+            orgId,
+            "gemini_live",
+            async () => ({ result: undefined, model: minted.model }),
+            `live:${session.id}`,
+            userId,
+          );
+        } catch {
+          /* 記帳瑕疵不影響訓練啟動 */
+        }
+      }
 
       return {
         sessionId: session.id,

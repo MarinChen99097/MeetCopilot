@@ -81,7 +81,13 @@ export class CrmCopilotOrchestrator implements CopilotOrchestrator {
     // 1) CRM retrieval → info_card(s) for the HUD.
     retrieveInfoCards(
       this.retrieval,
-      { orgId: runtime.orgId, companyId: runtime.companyId, dealId: runtime.dealId, meetingId: sessionId },
+      {
+        orgId: runtime.orgId,
+        companyId: runtime.companyId,
+        dealId: runtime.dealId,
+        meetingId: sessionId,
+        userId: runtime.presenterUserId,
+      },
       items,
     )
       .then((cards) => {
