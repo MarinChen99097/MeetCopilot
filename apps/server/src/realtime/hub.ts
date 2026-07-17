@@ -306,10 +306,11 @@ export class RealtimeHub implements BroadcastSink {
     }
     // Redact PII before ANY LLM egress; speaker inference is an LLM call, so it sees redacted text too.
     const redactedText = redactPii(seg.text);
-    const speaker = await this.orchestrator.inferSpeaker(runtime.meetingId, redactedText);
+    // speakerLabel (§4.2) is optional; when absent the segment carries only the frozen speaker enum (back-compat).
+    const { speaker, speakerLabel } = await this.orchestrator.inferSpeaker(runtime.meetingId, redactedText);
     // Re-check: consent may have been revoked during the async speaker inference above.
     if (!runtime.consent) return;
-    const ts: TranscriptSegment = { id: randomUUID(), t: seg.t, speaker, text: seg.text, final: true };
+    const ts: TranscriptSegment = { id: randomUUID(), t: seg.t, speaker, speakerLabel, text: seg.text, final: true };
 
     const route = routeTranscriptSegment({
       consent: runtime.consent,

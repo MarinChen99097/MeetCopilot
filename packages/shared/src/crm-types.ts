@@ -87,8 +87,12 @@ export type DealContactStance = "supporter" | "neutral" | "detractor";
 /** 筆記所屬實體（notes.entity_type，CRM_SCHEMA §8）。 */
 export type NoteEntityType = "company" | "contact" | "deal" | "meeting";
 
-/** 筆記類型（notes.note_type，CRM_SCHEMA §8）。 */
-export type NoteType = "general" | "call" | "email" | "research";
+/**
+ * 筆記類型（notes.note_type，CRM_SCHEMA §8）。
+ * general/call/email/research＝使用者可經 API 建立；narrative/observations＝研究引擎產出的單例 AI 筆記
+ * （migration 013 已放寬 CHECK；orchestrator writeSingletonNotes 落庫），非 API 可建，但讀取端需辨識。
+ */
+export type NoteType = "general" | "call" | "email" | "research" | "narrative" | "observations";
 
 /** 活動類型（activities.type，CRM_SCHEMA §8）。 */
 export type ActivityType = "email" | "call" | "meeting" | "linkedin" | "task" | "note" | "crawl";

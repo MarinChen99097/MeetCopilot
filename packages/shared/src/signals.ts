@@ -16,6 +16,11 @@ export const SIGNAL_KINDS = [
   "pricing",
   "next_step",
   "landmine",
+  // 會中 CRM 消費（RESEARCH_UPGRADE_CONTRACT §4.2）：以下兩類為「檢索觸發」訊號——
+  // 用來把最新交談焦點餵給會中 CRM 檢索，**觸發 CRM 補充卡但不觸發自動研究 job**
+  // （auto-research 觸發條件不變，見 realtime/orchestrator.ts AUTO_RESEARCH_KINDS）。
+  "person_mention", // 提到人名（對方在場/被提及的人）
+  "topic_shift", // 話題轉換（討論焦點改變）
 ] as const;
 export type SignalKind = (typeof SIGNAL_KINDS)[number];
 

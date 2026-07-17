@@ -55,7 +55,10 @@ export function TranscriptStream({
         ) : (
           segments.map((seg) => (
             <div key={seg.id} className={`mc-line mc-line--${seg.speaker} ${seg.final ? "" : "is-interim"}`}>
-              <span className="mc-line__who">{SPEAKER_LABEL[seg.speaker]}</span>
+              {/* speakerLabel（選填，§4.2）優先；空/缺席時退回既有 presenter/client 標籤——缺席不壞版面。 */}
+              <span className="mc-line__who">
+                {seg.speakerLabel && seg.speakerLabel.trim() ? seg.speakerLabel : SPEAKER_LABEL[seg.speaker]}
+              </span>
               <span className="mc-line__text">
                 {seg.text}
                 {seg.final ? null : <span className="mc-line__dots" aria-label="正在聽">…</span>}

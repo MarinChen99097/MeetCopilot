@@ -3,7 +3,7 @@
  * org-scoped；Deal.update 走 human-provenance（entityType='deal'，deals 無 verified_status 故不 bump）。
  */
 import type { DbPort } from "./ports.js";
-import type { DealRepository, NoteRepository, DealFilter, Page, Paged, ByUser } from "./ports.js";
+import type { DealRepository, NoteRepository, SingletonNoteInput, DealFilter, Page, Paged, ByUser } from "./ports.js";
 import type {
   Deal,
   NewDeal,
@@ -197,6 +197,34 @@ export class SqliteNoteRepository implements NoteRepository {
 
   async delete(orgId: string, id: string): Promise<void> {
     await this.db.run("DELETE FROM notes WHERE org_id = ? AND id = ?", [orgId, id]);
+  }
+
+  async upsertSingletonNote(orgId: string, input: SingletonNoteInput): Promise<Note> {
+    const now = Date.now();
+    const pinned = input.pinned ? 1 : 0;
+    // 冪等鍵＝(org_id, entity_type, entity_id, note_type)：命中最早一筆（若歷史上意外有多筆，穩定更新同一筆）。
+    const existing = await this.db.get<{ id: string }>(
+      `SELECT id FROM notes WHERE org_id = ? AND entity_type = ? AND entity_id = ? AND note_type = ?
+       ORDER BY created_at ASC LIMIT 1`,
+      [orgId, input.entityType, input.entityId, input.noteType],
+    );
+    if (existing) {
+      await this.db.run("UPDATE notes SET body = ?, pinned = ?, updated_at = ? WHERE org_id = ? AND id = ?", [
+        input.body,
+        pinned,
+        now,
+        orgId,
+        existing.id,
+      ]);
+      return (await this.findById(orgId, existing.id))!;
+    }
+    const id = uuidv7();
+    await this.db.run(
+      `INSERT INTO notes (id, org_id, entity_type, entity_id, author_user_id, body, note_type, pinned, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, orgId, input.entityType, input.entityId, null, input.body, input.noteType, pinned, now, now],
+    );
+    return (await this.findById(orgId, id))!;
   }
 
   private async findById(orgId: string, id: string): Promise<Note | null> {

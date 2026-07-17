@@ -20,6 +20,12 @@ export interface TranscriptSegment {
   id: string;
   t: number; // ms
   speaker: TranscriptSpeaker;
+  /**
+   * 選填說話者標籤（RESEARCH_UPGRADE_CONTRACT §4.2）：雙方可能各不只一位時的細分標註，
+   * 由 speaker 推斷帶入該場公司 CRM contacts 名單後產生（例「客戶-A」「客戶-王經理」「報告者」）。
+   * **向後相容**：wire 枚舉 `speaker` 不變；本欄選填，缺席時前端沿用 presenter/client（舊 client payload 不壞）。
+   */
+  speakerLabel?: string;
   text: string;
   final: boolean;
 }

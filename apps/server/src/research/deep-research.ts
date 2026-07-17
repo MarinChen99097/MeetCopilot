@@ -9,7 +9,7 @@
  *     取回真實來源全文＋逐跳重導後的真實 URL（finalUrl）。
  *  d. 回結構化 bundle：{ groundedFindings:[{angle,answer,citations}], sourceTexts:[{url,title,text}] }。
  *
- * 有界：整場受 DEEP_RESEARCH_BUDGET_MS（預設 150s，env 覆寫）軟 deadline 約束；grounding 扇出與來源深讀
+ * 有界：整場受 DEEP_RESEARCH_BUDGET_MS（預設 1_200_000ms＝20 分，env 覆寫，clamp 30s–1800s）軟 deadline 約束；grounding 扇出與來源深讀
  * 皆有界平行，個別失敗容忍（partial 結果可接受）。與官網爬蟲（≤5min）並行，故 wall-clock 取兩者最大值。
  */
 import type { GroundingProvider } from "./grounding.js";
@@ -17,9 +17,12 @@ import type { GroundingCitation } from "../gemini.js";
 import type { SafeFetcher } from "../import/extract.js";
 
 // ── 有界參數（呼叫時讀 env，clamp；.env 於 bootstrap 已載入）──
-const DEFAULT_BUDGET_MS = 150_000; // 整場軟 deadline（env DEEP_RESEARCH_BUDGET_MS，clamp 30s–300s）
+// WP3「深與廣（30–60 分鐘級）」：整場軟 deadline 大幅放寬（多輪研究＋社群模板需更多時間）。
+const DEFAULT_BUDGET_MS = 1_200_000; // 整場軟 deadline（env DEEP_RESEARCH_BUDGET_MS，clamp 30s–1800s）
+const BUDGET_CEIL_MS = 1_800_000; // clamp 上界（30 分鐘）
 const DEFAULT_MAX_QUERIES = 9; // grounding 扇出上限（env DEEP_RESEARCH_MAX_QUERIES，clamp 3–12）
 const DEFAULT_MAX_SOURCES = 6; // 深讀來源上限（env DEEP_RESEARCH_MAX_SOURCES，clamp 0–10）
+const DEFAULT_ROUNDS = 3; // 多輪研究輪數（env DEEP_RESEARCH_ROUNDS，clamp 1–5）；一輪無新事實即提早停
 const GROUNDING_CONCURRENCY = 3; // grounding 平行度
 const SOURCE_CONCURRENCY = 3; // 深讀平行度
 const MIN_SOURCE_TEXT_CHARS = 200; // 太短（多半是攔截頁/空頁）不收
@@ -30,13 +33,23 @@ function clampEnvInt(name: string, def: number, min: number, max: number): numbe
   return Math.min(Math.max(Math.trunc(raw), min), max);
 }
 export function deepBudgetMs(): number {
-  return clampEnvInt("DEEP_RESEARCH_BUDGET_MS", DEFAULT_BUDGET_MS, 30_000, 300_000);
+  return clampEnvInt("DEEP_RESEARCH_BUDGET_MS", DEFAULT_BUDGET_MS, 30_000, BUDGET_CEIL_MS);
+}
+/** 多輪研究輪數（env DEEP_RESEARCH_ROUNDS，clamp 1–5；預設 3）。一輪無新增事實即提早停（見 deep-rounds.ts）。 */
+export function deepResearchRounds(): number {
+  return clampEnvInt("DEEP_RESEARCH_ROUNDS", DEFAULT_ROUNDS, 1, 5);
 }
 
 export interface DeepResearchInput {
   companyName: string;
   domain?: string;
   startUrl?: string;
+  /** 納入 FB/IG「社群模板」＋ official social accounts grounding 查詢（WP1 §1.2/§1.3）。預設 true。 */
+  includeSocial?: boolean;
+  /** 多輪研究（WP3 §3）：是否納入基礎角度查詢（round 1=true；follow-up round 傳 false 只跑 extraQueries）。預設 true。 */
+  includeBaseQueries?: boolean;
+  /** 多輪研究：本輪額外的 follow-up 查詢（缺口分析產生）。 */
+  extraQueries?: { angle: string; query: string }[];
 }
 
 export interface GroundedFinding {
@@ -127,6 +140,37 @@ export function buildQueries(input: DeepResearchInput, maxQueries: number): { an
   }
   for (const a of ANGLES) out.push({ angle: a.key, query: a.en(n) });
   return out.slice(0, maxQueries);
+}
+
+/**
+ * 社群模板查詢（WP1 §1.2/§1.3）：FB/IG「只用 grounding」＋ 一條 official social media accounts 發現查詢。
+ * ≥6 條雙語（含 site:facebook.com、Instagram 近期貼文、粉專評價/口碑、徵才動態）。angle='social'。
+ */
+export function buildSocialQueries(input: DeepResearchInput): { angle: string; query: string }[] {
+  const n = input.companyName;
+  return [
+    { angle: "social", query: `${n} official social media accounts Facebook Instagram YouTube Threads` },
+    { angle: "social", query: `site:facebook.com "${n}"` },
+    { angle: "social", query: `"${n}" Facebook 官方粉絲專頁 最新動態 貼文` },
+    { angle: "social", query: `"${n}" Instagram 近期貼文 活動` },
+    { angle: "social", query: `"${n}" 粉絲專頁 評價 口碑 討論` },
+    { angle: "social", query: `"${n}" 徵才 招聘 職缺 社群 動態` },
+    { angle: "social", query: `"${n}" social media recent posts campaign engagement` },
+  ];
+}
+
+/** 單輪 grounding 查詢的整體上限（多輪＋社群模板疊加時仍有界，避免扇出爆量）。 */
+const ROUND_QUERY_CEIL = 24;
+
+/** 依 input（含 includeBaseQueries/includeSocial/extraQueries）組出本輪要跑的 grounding 查詢集。 */
+function queriesForRound(input: DeepResearchInput, maxQueries: number): { angle: string; query: string }[] {
+  const out: { angle: string; query: string }[] = [];
+  if (input.includeBaseQueries !== false) {
+    out.push(...buildQueries(input, maxQueries));
+    if (input.includeSocial !== false) out.push(...buildSocialQueries(input));
+  }
+  if (input.extraQueries) out.push(...input.extraQueries);
+  return out.slice(0, ROUND_QUERY_CEIL);
 }
 
 // ── 來源分類與排序 ────────────────────────────────────────
@@ -253,8 +297,8 @@ export function createDeepResearcher(
       const maxQueries = options.maxQueries ?? clampEnvInt("DEEP_RESEARCH_MAX_QUERIES", DEFAULT_MAX_QUERIES, 3, 12);
       const maxSources = options.maxSources ?? clampEnvInt("DEEP_RESEARCH_MAX_SOURCES", DEFAULT_MAX_SOURCES, 0, 10);
 
-      // a. 扇出 grounding 查詢（有界平行）。
-      const queries = buildQueries(input, maxQueries);
+      // a. 扇出 grounding 查詢（有界平行）。round 1＝基礎角度＋社群模板；follow-up round＝只跑 extraQueries。
+      const queries = queriesForRound(input, maxQueries);
       const groundedFindings = await runPool<{ angle: string; query: string }, GroundedFinding>(
         queries,
         GROUNDING_CONCURRENCY,

@@ -180,3 +180,11 @@ for (const part of res.candidates![0].content!.parts!)
 
 ### F6. 對從 Gemini 來的工程師的驚訝點（照抄進實作備忘）
 base64-only（無 CDN url）；quality 預設 auto 可能挑 high（貴＋慢）——顯式給值；不支援透明背景；`input_fidelity` 在 gpt-image-2 不可調（edit 時輸入 token 偏貴）；Responses tool 的 model 欄位不是 gpt-image-2。
+
+## G. 社群平台資料取得（2026-07-13 查證，完整報告＝`SOCIAL_CRAWL_FINDINGS.md`）
+
+- **YouTube（VERIFIED）**：Data API v3 免費 10,000 units/日（channel/video/留言多為 1 unit、search 100 units）；Gemini 可原生理解公開 YouTube URL 內容。→ 本專案採官方 API（env `YOUTUBE_API_KEY`，缺則優雅跳過）。
+- **Facebook／Instagram**：官方讀「他人」公開粉專需 PPCA（App Review＋商業驗證，門檻高、欄位有限）；無登入自爬封鎖最兇（三層反爬）。**2025-07-10 起 Google 開始索引 FB/IG 公開專業帳號** → Gemini grounding 成為最低成本情報層。→ 本專案採 **grounding-only**（使用者 2026-07-13 拍板）。
+- **Threads**：官方 API 僅 keyword search 可讀公開貼文（需 review）、無「他人時間軸」端點；公開 profile/貼文頁**無登入可爬**（資料在頁內 `<script>` JSON），封鎖較 FB/IG 寬鬆。→ 本專案自建 Playwright best-effort。
+- **ToS/法律**：Meta v. Bright Data（2024-01）裁決——ToS 只禁**登入態**爬取。→ 本專案一律不做登入態爬取。
+- 第三方資料服務（Apify 約 $0.5–2 美元/千則貼文、Bright Data $1.5/千則）已查證**未採用**；FB/IG 深度日後不足時的升級路徑。

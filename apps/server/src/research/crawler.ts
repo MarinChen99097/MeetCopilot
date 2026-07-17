@@ -24,6 +24,7 @@
  */
 import { chromium, type Browser, type BrowserServer, type Page, type Route, type Request as PwRequest } from "playwright";
 import { isPrivateIp, resolveAndValidate } from "../import/extract.js";
+import { classifySocialUrl } from "./social/discover.js";
 
 /**
  * 建 Chromium `--host-resolver-rules` 值：**只把已驗證的目標 host pin 到它的公網 IP**（不 fail-close 其餘 host）。
@@ -49,19 +50,21 @@ const NAV_TIMEOUT_MAX_MS = 120_000;
 const RETRY_NAV_TIMEOUT_MS = 10_000;
 const SETTLE_TIMEOUT_MS = 4_000; // networkidle 等待上限（超時不視為失敗）
 const MAX_TEXT_CHARS = 12_000; // 每頁抽取文字上限
-// detailed BFS 參數：
-const MAX_CRAWL_PAGES_DEFAULT = 28; // 整場總頁數（含首頁）預設；env MAX_CRAWL_PAGES 覆寫，clamp [2,40]
+// detailed BFS 參數（RESEARCH_UPGRADE_CONTRACT WP3「深與廣」：頁數/深度大幅放寬）：
+const MAX_CRAWL_PAGES_DEFAULT = 150; // 整場總頁數（含首頁）預設；env MAX_CRAWL_PAGES 覆寫，clamp [2,300]
+const MAX_CRAWL_PAGES_CEIL = 300; // clamp 上界（配合 30 分鐘 deadline 才有意義）
 const CRAWL_CONCURRENCY_DEFAULT = 5; // 平行 worker 數預設；env CRAWL_CONCURRENCY 覆寫，clamp [1,8]
-const MAX_CRAWL_DEPTH = 2; // 從首頁往下追連結的層數（level 1 產品列表 → level 2 產品明細）
+const MAX_CRAWL_DEPTH_DEFAULT = 3; // 從首頁往下追連結的層數預設（分類 → 產品列表 → 產品明細）；env MAX_CRAWL_DEPTH 覆寫，clamp [1,6]
+const MAX_CRAWL_DEPTH_CEIL = 6; // clamp 上界（過深易吃光頁數預算，且仍受整場 deadline 硬止血）
 const LEVEL1_FRACTION = 0.35; // 非末層取用預算比例——留較多餘額給更深層的產品明細頁（否則 level-1 分類頁就把預算吃光）
 // softDeadline 相對硬 deadline 的安全邊際：留給「回傳 partial ＋有界 teardown（≤10s）」在硬上限前收尾，
 // 避免整場 crawl 被外層硬 guard reject（會丟掉已抓到的頁）。
 const DEADLINE_SAFETY_MARGIN_MS = 15_000;
 // 整場 crawl 硬 deadline（仍有界，L13：hung navigation/close 不能卡死背景 enrich job）。
-// 使用者「慢慢爬沒事」→放寬讓慢頁爬得完：quick 單頁 120s、detailed（最多 5 子頁）300s。
+// WP3「深與廣（30–60 分鐘級）」→ 硬上限放寬到 30 分鐘；detailed 預設＝硬上限（讓深/廣爬得完），quick 仍 120s。
 // 可經 env CRAWL_DEADLINE_QUICK_MS / CRAWL_DEADLINE_DETAILED_MS 覆寫（於呼叫時讀，見 crawlDeadlineMs）。
 const CRAWL_DEADLINE_QUICK_DEFAULT_MS = 120_000;
-const CRAWL_DEADLINE_DETAILED_DEFAULT_MS = 300_000;
+const CRAWL_DEADLINE_DETAILED_DEFAULT_MS = 1_800_000; // 30 min（＝CRAWL_HARD_CAP_MS）
 
 /**
  * 從 env（`CRAWL_NAV_TIMEOUT_MS`）解析單頁導航逾時，clamp 到 [5s,120s]；未設/非法 → 45s。
@@ -78,21 +81,21 @@ export function navTimeoutMs(): number {
   return clampEnvMs("CRAWL_NAV_TIMEOUT_MS", DEFAULT_NAV_TIMEOUT_MS, NAV_TIMEOUT_MIN_MS, NAV_TIMEOUT_MAX_MS);
 }
 /**
- * 整場 crawl deadline（呼叫時讀 env）。使用者要求「爬官網限 5 分鐘以內」→ **硬上限 300s（5 分鐘）**：
- * detailed 預設 300s、上限 300s；quick 預設 120s、上限 300s。env 可調低但**不得超過 5 分鐘**。
+ * 整場 crawl deadline（呼叫時讀 env）。WP3「深與廣（30–60 分鐘級）」→ **硬上限 1800s（30 分鐘）**：
+ * detailed 預設＝硬上限、上限 1800s；quick 預設 120s、上限 1800s。env 可調低但**不得超過 30 分鐘**。
  */
-export const CRAWL_HARD_CAP_MS = 300_000; // 5 分鐘硬上限（使用者需求）
+export const CRAWL_HARD_CAP_MS = 1_800_000; // 30 分鐘硬上限（WP3 深與廣）
 export function crawlDeadlineMs(mode: "quick" | "detailed"): number {
   return mode === "detailed"
     ? clampEnvMs("CRAWL_DEADLINE_DETAILED_MS", CRAWL_DEADLINE_DETAILED_DEFAULT_MS, 30_000, CRAWL_HARD_CAP_MS)
     : clampEnvMs("CRAWL_DEADLINE_QUICK_MS", CRAWL_DEADLINE_QUICK_DEFAULT_MS, 15_000, CRAWL_HARD_CAP_MS);
 }
 /**
- * detailed BFS 的總頁數上限（含首頁；呼叫時讀 env MAX_CRAWL_PAGES）。預設 28、clamp [2,40]。
- * 真正的硬止血仍是整場 crawl deadline（≤5 分鐘）：無論頁數上限多少，逼近 deadline 就停止加頁。匯出供測試。
+ * detailed BFS 的總頁數上限（含首頁；呼叫時讀 env MAX_CRAWL_PAGES）。預設 150、clamp [2,300]。
+ * 真正的硬止血仍是整場 crawl deadline（≤30 分鐘）：無論頁數上限多少，逼近 deadline 就停止加頁。匯出供測試。
  */
 export function maxCrawlPages(): number {
-  return clampEnvMs("MAX_CRAWL_PAGES", MAX_CRAWL_PAGES_DEFAULT, 2, 40);
+  return clampEnvMs("MAX_CRAWL_PAGES", MAX_CRAWL_PAGES_DEFAULT, 2, MAX_CRAWL_PAGES_CEIL);
 }
 /**
  * detailed BFS 的平行 worker 數（呼叫時讀 env CRAWL_CONCURRENCY）。預設 5、clamp [1,8]——
@@ -100,6 +103,13 @@ export function maxCrawlPages(): number {
  */
 export function crawlConcurrency(): number {
   return clampEnvMs("CRAWL_CONCURRENCY", CRAWL_CONCURRENCY_DEFAULT, 1, 8);
+}
+/**
+ * detailed BFS 的追連結層數（呼叫時讀 env MAX_CRAWL_DEPTH）。預設 3、clamp [1,6]——
+ * 分類→產品列表→產品明細；過深易吃光頁數預算，仍受整場 crawl deadline 硬止血。匯出供測試。
+ */
+export function maxCrawlDepth(): number {
+  return clampEnvMs("MAX_CRAWL_DEPTH", MAX_CRAWL_DEPTH_DEFAULT, 1, MAX_CRAWL_DEPTH_CEIL);
 }
 // browser.close() 在此機器上會永久卡住 → 給它 5s，逾時就 SIGKILL 底層 Chromium process。
 const BROWSER_CLOSE_TIMEOUT_MS = 5_000;
@@ -122,6 +132,11 @@ export interface RawCrawl {
   pages: CrawledPage[];
   /** 打過的所有 URL（寫入 crawl_jobs.sources_json）。 */
   sourcesVisited: string[];
+  /**
+   * 官網 `<a href>` 中指向社群平台（facebook/instagram/threads/youtube）的連結（去重、完整 URL）。
+   * WP1 §1.2 帳號發現：官網爬取時抽社群連結，供 social_links 落庫與社群 fetcher handle discovery。
+   */
+  socialLinks?: string[];
 }
 
 /** crawl 選項（API_CONTRACT §3 enrich 的 mode 對映）。 */
@@ -132,9 +147,23 @@ export interface CrawlOptions {
   screenshots?: boolean; // detailed 才有意義；預設關（省時）
 }
 
+/** 單頁原始抓取結果（社群無登入解析用：含 `<script>` JSON 的 outerHTML）。 */
+export interface RawPageFetch {
+  html: string;
+  text: string;
+  finalUrl: string;
+}
+
 export interface CrawlProvider {
   crawl(opts: CrawlOptions): Promise<RawCrawl>;
+  /**
+   * SSRF-safe 單頁原始抓取（Threads 無登入解析用，WP1 §1.3）：回 outerHTML（含 `<script>` JSON）＋ innerText。
+   * 走與 crawl 同一套 SSRF 閘（host-resolver-rules pin ＋ context.route 逐請求 SSRF 判定）。失敗/逾時 → 回 null。
+   */
+  fetchRaw(url: string): Promise<RawPageFetch | null>;
 }
+
+const RAW_FETCH_DEADLINE_MS = 45_000; // 單頁原始抓取硬 deadline（有界；社群頁 JS 重）
 
 /**
  * 子頁連結評分關鍵字——**雙語（英/中）**，且對「pathname＋連結可見文字」一起評分（borrow ezpagesite 權重法，
@@ -193,6 +222,38 @@ function scoreLink(pathname: string, text: string): number {
   for (const k of LINK_KEYWORDS) if (k.re.test(hay)) score += k.weight;
   for (const k of LINK_DETAIL_BOOST) if (k.re.test(hay)) score += k.weight;
   return score;
+}
+
+/**
+ * 從一批原始 href 篩出指向社群平台（facebook/instagram/threads/youtube）的連結：只收 http/https ＋
+ * classifySocialUrl 命中四平台者，去 #hash、跨批去重。純函式（無 IO）——供 collectSocialHrefs 逐頁呼叫、
+ * 多頁合併與單測。社群網域判別單一來源＝social/discover.classifySocialUrl（與帳號發現同一組網域，避免枚舉漂移）。
+ */
+export function filterSocialHrefs(hrefs: readonly unknown[]): string[] {
+  const out = new Set<string>();
+  for (const href of hrefs) {
+    if (typeof href !== "string") continue;
+    try {
+      const u = new URL(href);
+      if ((u.protocol === "http:" || u.protocol === "https:") && classifySocialUrl(href) !== undefined) {
+        u.hash = "";
+        out.add(u.toString());
+      }
+    } catch {
+      /* skip malformed */
+    }
+  }
+  return [...out];
+}
+
+/** 從一個已導航的 Page 抓所有指向社群平台的 `<a href>`（完整 URL，頁內去重）。失敗回 []。 */
+async function collectSocialHrefs(browserPage: Page): Promise<string[]> {
+  const raw = await browserPage
+    .evaluate(
+      "Array.prototype.slice.call(document.querySelectorAll('a[href]')).map(function(a){return a.href;})",
+    )
+    .catch(() => [] as unknown);
+  return filterSocialHrefs(Array.isArray(raw) ? raw : []);
 }
 
 /** 已評分的候選連結（url 已正規化）。 */
@@ -407,6 +468,8 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
     const home = await extractPage(page, opts.url, wantShots, navTimeout);
     const sourcesVisited = [home.url];
     const pages: CrawledPage[] = [home];
+    // 社群帳號發現（WP1 §1.2）：從官網首頁 `<a href>` 抽社群平台連結（footer 社群 icon 常在首頁）。
+    const socialSet = new Set<string>(await collectSocialHrefs(page));
     const metaRaw = await page
       .evaluate(
         "(function(){var m=document.querySelector('meta[name=description]');return m?(m.getAttribute('content')||''):''})()",
@@ -446,8 +509,8 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
       const fetchMany = async (
         urls: string[],
         collect: boolean,
-      ): Promise<{ page: CrawledPage; links: ScoredLink[] }[]> => {
-        const results: { page: CrawledPage; links: ScoredLink[] }[] = [];
+      ): Promise<{ page: CrawledPage; links: ScoredLink[]; social: string[] }[]> => {
+        const results: { page: CrawledPage; links: ScoredLink[]; social: string[] }[] = [];
         if (urls.length === 0 || Date.now() > softDeadline) return results;
         const workers = await ensurePages(Math.min(concurrency, urls.length));
         let idx = 0;
@@ -460,7 +523,10 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
             try {
               const cp = await extractPage(wp, url, wantShots, navTimeout);
               const links = collect ? await collectScoredLinks(wp, origin) : [];
-              results.push({ page: cp, links });
+              // 社群帳號發現（WP1 §1.2）：**每頁**都掃社群連結——footer 社群 icon 常在所有頁，且首頁可能 JS
+              // 渲染/非錨點導致漏抓；不受 collect（是否展開連結）約束，末層頁也掃。
+              const social = await collectSocialHrefs(wp);
+              results.push({ page: cp, links, social });
             } catch {
               // 單一子頁失敗不致命——續抓其餘。
             }
@@ -483,11 +549,13 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
       // frontier = 已排入、依分數降冪的候選（尚未抓）。首頁連結 → level-1 候選。
       let frontier = markNew(await collectScoredLinks(page, origin)).sort((a, b) => b.score - a.score);
 
-      // 2 層 BFS：depth 1 抓 level-1（限量、保留預算）並展開其連結；depth 2 抓 level-2（不再展開）。
-      for (let depth = 1; depth <= MAX_CRAWL_DEPTH; depth++) {
+      // 多層 BFS（層數＝maxDepth，env MAX_CRAWL_DEPTH 覆寫）：depth 1 抓 level-1（限量、保留預算）並展開其連結；
+      // 中間層續展開；末層抓後不再展開。maxDepth 於此讀一次（呼叫時 env 已就緒）。
+      const maxDepth = maxCrawlDepth();
+      for (let depth = 1; depth <= maxDepth; depth++) {
         if (Date.now() > softDeadline || pages.length >= pageBudget || frontier.length === 0) break;
         const remaining = pageBudget - pages.length;
-        const collect = depth < MAX_CRAWL_DEPTH; // 末層不再展開連結
+        const collect = depth < maxDepth; // 末層不再展開連結
         const take = collect
           ? Math.min(frontier.length, remaining, Math.max(1, Math.ceil((pageBudget - 1) * LEVEL1_FRACTION)))
           : Math.min(frontier.length, remaining);
@@ -496,7 +564,7 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
         if (process.env.CRAWL_DEBUG) {
           // 診斷用（env-gated，production 預設關）：印各層抓取量，供 ops/驗證觀察 BFS 深度與頁數。
           console.error(
-            `[crawl] depth ${depth}/${MAX_CRAWL_DEPTH}: fetching ${batch.length} (visited ${pages.length}/${pageBudget}, frontier left ${frontier.length}, concurrency ${concurrency})`,
+            `[crawl] depth ${depth}/${maxDepth}: fetching ${batch.length} (visited ${pages.length}/${pageBudget}, frontier left ${frontier.length}, concurrency ${concurrency})`,
           );
         }
         const results = await fetchMany(batch.map((b) => b.url), collect);
@@ -513,6 +581,7 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
           fetchedFinals.add(finalNorm);
           pages.push(r.page);
           sourcesVisited.push(r.page.url);
+          for (const s of r.social) socialSet.add(s); // 併入本頁社群連結（跨頁去重 by Set）
           if (collect) children.push(...r.links);
         }
         // 下一輪：本層新子連結（更深的產品明細）＋未取同層候選，重新去重＋降冪排序。
@@ -527,6 +596,7 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
       metaDescription: metaDescription || undefined,
       pages,
       sourcesVisited,
+      socialLinks: socialSet.size > 0 ? [...socialSet] : undefined,
     };
   } finally {
     // 有界拆除：close 逾時就 server.kill() 強殺——保證此函式一定回傳/丟錯，永不 hang（即使 connect/close 拋錯，server 也一定被 kill）。
@@ -534,8 +604,61 @@ async function runCrawl(opts: CrawlOptions, deadlineMs: number): Promise<RawCraw
   }
 }
 
+/** SSRF-safe 單頁原始抓取（outerHTML＋innerText）；整場有界 deadline，永不 hang。失敗回 null。 */
+async function runRawFetch(rawUrl: string): Promise<RawPageFetch | null> {
+  const start = new URL(rawUrl);
+  if (start.protocol !== "http:" && start.protocol !== "https:") return null;
+  const validated = await resolveAndValidate(start.hostname); // 私網 → throw（呼叫端 catch → null）
+  let server: BrowserServer | null = null;
+  let browser: Browser | null = null;
+  const routeCache = new Map<string, Promise<boolean>>();
+  try {
+    server = await chromium.launchServer({
+      headless: true,
+      args: ["--no-sandbox", `--host-resolver-rules=${hostResolverRules(start.hostname, validated.ip, validated.family)}`],
+    });
+    browser = await chromium.connect(server.wsEndpoint());
+    const context = await browser.newContext({
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+      viewport: { width: 1366, height: 900 },
+    });
+    await context.route("**/*", makeRouteGuard(routeCache));
+    const page = await context.newPage();
+    const navTimeout = navTimeoutMs();
+    page.setDefaultNavigationTimeout(navTimeout);
+    try {
+      await page.goto(stripHash(rawUrl), { waitUntil: "domcontentloaded", timeout: navTimeout });
+    } catch {
+      await page.goto(stripHash(rawUrl), { waitUntil: "commit", timeout: RETRY_NAV_TIMEOUT_MS }).catch(() => {});
+    }
+    await page.waitForLoadState("networkidle", { timeout: SETTLE_TIMEOUT_MS }).catch(() => {});
+    const html = String(
+      (await page.evaluate("document.documentElement ? document.documentElement.outerHTML : ''").catch(() => "")) ?? "",
+    );
+    const text = String((await page.evaluate("document.body ? document.body.innerText : ''").catch(() => "")) ?? "").trim();
+    const finalUrl = page.url() || rawUrl;
+    if (!html && !text) return null;
+    return { html, text, finalUrl };
+  } finally {
+    await teardown(browser, server);
+  }
+}
+
 export function createCrawlProvider(): CrawlProvider {
   return {
+    async fetchRaw(url: string): Promise<RawPageFetch | null> {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const guard = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), RAW_FETCH_DEADLINE_MS);
+      });
+      const work = runRawFetch(url).catch(() => null);
+      try {
+        return await Promise.race([work, guard]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
     async crawl(opts: CrawlOptions): Promise<RawCrawl> {
       // 整場 crawl 硬 deadline：hung navigation/close 也不得卡死背景 enrich job。逾時 → 明確 Error。
       const deadlineMs = crawlDeadlineMs(opts.mode);

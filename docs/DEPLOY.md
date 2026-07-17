@@ -12,6 +12,9 @@
 
 **目前版本（2026-07-08）**：server `meetcopilot-server-00009-qcb`、web `meetcopilot-web-00007-vs6`。
 
+> ⚠️ **長研究 job 需 CPU always-allocated（RESEARCH_UPGRADE_CONTRACT WP3，2026-07-13 註記）**：研究引擎現走「深與廣（30–60 分鐘級）」——`RESEARCH_JOB_TIMEOUT_MS` 預設 60 分、`CRAWL_HARD_CAP_MS` 30 分、多輪 grounding ≤20 分、社群 fetch ≤10 分。Cloud Run 預設**只在處理請求時分配 CPU**（enrich 走背景 fire-and-forget，HTTP 回應在 202 後結束）→ 回應一結束背景 job 就會被凍結/停擺。部署此版時**必須**對 `meetcopilot-server` 加 `--no-cpu-throttling`（CPU always allocated），否則長 job 永遠跑不完（卡在「研究中」）。本輪不改部署，實際部署時再處理。
+> 範例：`gcloud run services update meetcopilot-server --region=asia-east1 --project=ezpagesite --no-cpu-throttling`（注意：CPU always-allocated 會提高閒置成本，需搭配 min-instances/max-instances 評估）。
+
 ---
 
 ## 🚀 重新部署 SOP（改程式後——這是 2026-07-08 session 實際用、驗證可行的流程）

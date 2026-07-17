@@ -45,6 +45,12 @@ export interface AppConfig {
   dbPath: string;
   researchAutoLimitPerMeeting: number;
   /**
+   * YouTube Data API v3 key (research social layer, WP1). Optional: empty/undefined ⇒ the YouTube social
+   * fetcher is skipped (one job-log warning, NOT a job failure — see SOCIAL_CRAWL_FINDINGS §1). Only ever
+   * read here into env; never logged, never persisted. When set, the YouTube platform fetcher runs during deep research.
+   */
+  youtubeApiKey?: string;
+  /**
    * Google OAuth client id used to verify the audience of Google ID tokens (same client id as EZpage, so the
    * two apps share one Google identity by verified email). Feature flag: when set, POST /api/auth/google is
    * active; when empty, that route returns 501 and only local email/password auth (register/login) is available.
@@ -129,11 +135,20 @@ export function loadConfig(): AppConfig {
 
   const adminOrigin = (process.env.ADMIN_ORIGIN ?? "").trim();
 
+  const youtubeApiKey = (process.env.YOUTUBE_API_KEY ?? "").trim();
+  if (!youtubeApiKey) {
+    console.warn(
+      "[config] YOUTUBE_API_KEY not set — research social layer will SKIP the YouTube platform " +
+        "(one warning per job; not a failure). Threads + FB/IG (grounding) still run.",
+    );
+  }
+
   return {
     port: Number(process.env.PORT ?? 8787),
     jwtSecret,
     dbPath: resolvePath(process.env.DB_PATH ?? "./data/meetcopilot.db"),
     researchAutoLimitPerMeeting: Number(process.env.RESEARCH_AUTO_LIMIT_PER_MEETING ?? 10),
+    youtubeApiKey,
     googleClientId,
     platformAdminEmails,
     adminOrigin,

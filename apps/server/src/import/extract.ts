@@ -100,8 +100,11 @@ export async function resolveAndValidate(hostname: string): Promise<{ ip: string
   return { ip: chosen.address, family: chosen.family === 6 ? 6 : 4 };
 }
 
-/** 建一個把 DNS 釘死到已驗證 IP 的 undici Agent——關掉 DNS rebinding 的漏洞。 */
-function pinnedAgent(ip: string, family: 4 | 6): Agent {
+/**
+ * 建一個把 DNS 釘死到已驗證 IP 的 undici Agent——關掉 DNS rebinding 的漏洞。
+ * `timeoutMs` 統一設 connect/headers/body 逾時（單一安全防線來源，research/social/http.ts 亦匯入複用，各傳自己的預算）。
+ */
+export function pinnedAgent(ip: string, family: 4 | 6, timeoutMs: number): Agent {
   const lookup = (
     _hostname: string,
     options: { all?: boolean } | undefined,
@@ -111,9 +114,9 @@ function pinnedAgent(ip: string, family: 4 | 6): Agent {
     else cb(null, ip, family);
   };
   return new Agent({
-    connect: { lookup: lookup as never, timeout: FETCH_TIMEOUT_MS },
-    headersTimeout: FETCH_TIMEOUT_MS,
-    bodyTimeout: FETCH_TIMEOUT_MS,
+    connect: { lookup: lookup as never, timeout: timeoutMs },
+    headersTimeout: timeoutMs,
+    bodyTimeout: timeoutMs,
   });
 }
 
@@ -127,7 +130,7 @@ async function safeFetch(
   const u = new URL(rawUrl);
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("只允許 http/https 網址");
   const { ip, family } = await resolveAndValidate(u.hostname);
-  const dispatcher = pinnedAgent(ip, family);
+  const dispatcher = pinnedAgent(ip, family, FETCH_TIMEOUT_MS);
   dispatchers.push(dispatcher);
 
   const init: RequestInit = {

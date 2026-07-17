@@ -22,6 +22,8 @@ import type {
 } from "@meetcopilot/shared";
 import type { DeepResearchBundle } from "./deep-research.js";
 import { classifySourceType } from "./deep-research.js";
+import { classifySocialUrl } from "./social/discover.js";
+import { cleanStr, dedupUncat, NARRATIVE_UNCAT_SCHEMA, type UncategorizedIntel } from "./extract-shared.js";
 
 const MAX_PROMPT_CHARS = 180_000;
 const PER_SOURCE_PROMPT_CHARS = 6_000;
@@ -71,6 +73,10 @@ interface ExtractedDeep {
   }[];
   people?: { fullName?: string; title?: string; titleZh?: string; seniority?: string; sourceIndex?: number }[];
   competitors?: { name?: string; sourceIndex?: number }[];
+  /** 公司官方社群帳號 URL（每平台選填完整 URL；WP 缺口 1b）。 */
+  socialLinks?: { youtube?: string; facebook?: string; instagram?: string; threads?: string };
+  narrativeZh?: string;
+  uncategorized?: { text?: string; sourceIndex?: number }[];
 }
 
 export interface DeepPerson {
@@ -91,6 +97,15 @@ export interface DeepExtraction {
   techStack: NewCompanyTech[];
   /** 對方部門（company_departments 子表）→ orchestrator 走 bulkUpsertDepartments。 */
   departments: NewCompanyDepartment[];
+  /**
+   * 擷取器判定的公司**官方**社群 URL（已過機械保險：只 https＋四平台網域）→ orchestrator 以「補缺」優先序
+   * 併入 social_links（官網爬到的優先）。WP 缺口 1b/1c。可能為 []（來源無或不確定即不填）。
+   */
+  socialLinks: string[];
+  /** zh-TW 平鋪直敘敘事（8–20 句）→ 筆記區 narrative 單例（WP2 §2）。 */
+  narrativeZh?: string;
+  /** 未歸類情報（≤25，每條帶來源 URL）→ 筆記區 observations 單例（WP2 §2）。 */
+  uncategorized: UncategorizedIntel[];
 }
 
 export interface DeepExtractInput {
@@ -228,6 +243,18 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         required: ["name"],
       },
     },
+    // WP 缺口 1b：公司官方社群帳號 URL（每平台選填完整 URL；模型不確定即省略——見 SYSTEM 指示）。
+    socialLinks: {
+      type: S.OBJECT,
+      properties: {
+        youtube: { type: S.STRING },
+        facebook: { type: S.STRING },
+        instagram: { type: S.STRING },
+        threads: { type: S.STRING },
+      },
+    },
+    // WP2 §2：narrativeZh + uncategorized（共用片段，見 extract-shared.NARRATIVE_UNCAT_SCHEMA）。
+    ...NARRATIVE_UNCAT_SCHEMA,
   },
   required: ["company"],
 };
@@ -241,8 +268,11 @@ const SYSTEM = [
   "funding: rounds if mentioned (roundType, amount as a number, currency, announcedDate, leadInvestor, investors[]).",
   "people: named executives/leaders with their title and seniority.",
   "competitors: named competitor companies.",
+  "socialLinks (OPTIONAL): the company's OFFICIAL social-media account URLs — youtube, facebook, instagram, threads. For each platform, give the FULL https URL of the account/page ONLY when a source explicitly confirms it is THIS company's own official account. If you are unsure, or cannot confirm the official account from the provided sources, OMIT that platform entirely — do NOT guess or fabricate handles.",
   "company.techStack[] (only when stated): technologies/vendors/products the company uses or is built on ({category, vendor, product, detectedFrom}); company.departments[] (only when stated): internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns original (e.g. AWS, React, Kubernetes). Cap: at most 12 techStack items and at most 10 departments.",
   "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the language of the sources (Traditional Chinese for zh sources; do NOT translate the primary fields; keep values concise; never repeat text). IN ADDITION, emit a concise Traditional-Chinese (zh-TW) gloss in each `*Zh` field: company.descriptionZh (of description), news[].titleZh/summaryZh (of that item's title/summary), and people[].titleZh (of that person's title) — each at most 2 sentences; if the source is already zh-TW you may condense it.",
+  "narrativeZh: write a Traditional-Chinese (zh-TW), plain-language narrative of 8-20 sentences that synthesizes the company's type, business model, current situation/recent developments, and its social-media presence & sentiment (from the social findings). Keep proper nouns (brand/product/person names) in their original form. This is a readable briefing, NOT a bullet list.",
+  "uncategorized: CRITICAL — EVERY important fact you found in the sources that does NOT fit any structured field above (company/news/funding/people/competitors/techStack/departments) MUST be captured here as {text, sourceIndex} — DO NOT discard it. Examples: partnerships, awards, controversies, market share, notable customers, hiring drives, event/campaign activity, community sentiment. At most 25 items; each `text` one concise sentence with its supporting [S#] as sourceIndex.",
   "Field NAMES stay English per the schema. Return ONLY valid JSON matching the schema.",
 ].join(" ");
 
@@ -323,11 +353,6 @@ function parseLooseDate(s: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function cleanStr(v: unknown): string | undefined {
-  if (typeof v !== "string") return undefined;
-  const t = v.trim();
-  return t.length > 0 ? t : undefined;
-}
 function cleanHttpUrl(v: unknown): string | undefined {
   const t = cleanStr(v);
   if (!t) return undefined;
@@ -386,6 +411,34 @@ function toDeepDepartments(v: unknown): NewCompanyDepartment[] {
     if (typeof hc === "number" && Number.isFinite(hc) && hc >= 0) row.headcountEstimate = Math.round(hc);
     out.push(row);
     if (out.length >= MAX_DEPARTMENTS) break;
+  }
+  return out;
+}
+
+/**
+ * 模型 socialLinks（unknown 物件）→ 過濾後的社群 URL 清單。機械保險（WP 缺口 1c）：**只接受 https ＋
+ * classifySocialUrl 命中的四平台網域**；其餘（http、非四平台、非法 URL）一律丟棄。key 與實際平台不符不影響——
+ * orchestrator 的 discoverHandles 會依 URL 本身重新分類。跨 key 去重。
+ */
+function toDeepSocialLinks(v: unknown): string[] {
+  if (!v || typeof v !== "object") return [];
+  const obj = v as Record<string, unknown>;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const key of ["youtube", "facebook", "instagram", "threads"]) {
+    const raw = cleanStr(obj[key]);
+    if (!raw) continue;
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      continue; // 非法 URL
+    }
+    if (u.protocol !== "https:") continue; // 只接受 https（機械保險）
+    if (classifySocialUrl(raw) === undefined) continue; // 只接受四平台網域
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    out.push(raw);
   }
   return out;
 }
@@ -519,7 +572,26 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
         competitors.push({ name, sourceUrl: ref?.url, sourceType: ref?.sourceType ?? "web" });
       }
 
-      return { company, companyProvenance, news, funding, people, competitors, techStack, departments };
+      // ── WP 缺口 1b/1c：公司官方社群 URL（機械保險：只 https＋四平台；orchestrator 以「補缺」併入）──
+      const socialLinks = toDeepSocialLinks(ex.socialLinks);
+
+      // ── WP2：zh-TW 敘事 + 未歸類情報（每條錨定其 [S#] 的真實 URL；共用 dedupUncat）──
+      const narrativeZh = cleanStr(ex.narrativeZh);
+      const uncategorized = dedupUncat(ex.uncategorized, (u) => (resolve(u.sourceIndex) ?? primary)?.url);
+
+      return {
+        company,
+        companyProvenance,
+        news,
+        funding,
+        people,
+        competitors,
+        techStack,
+        departments,
+        socialLinks,
+        narrativeZh,
+        uncategorized,
+      };
     },
   };
 }

@@ -71,6 +71,15 @@ MeetCopilot 從「單一會中簡報 Copilot」擴為**一個平台傘名下的�
 19. **建立 ROM 決策總帳**（2026-07-07 追加）：記錄使用者或 Claude 的**所有決策**——比 memory 更大更雜、不精簡、帶脈絡與替代方案；每 500 行歸檔 `rom_archives/ROM_NNN.md`（序號命名），ROM.md 頂部維護每檔簡介的歸檔目錄。與本檔分工：本檔＝蒸餾後前提（衝突時為準）、ROM＝全量帳。（**已落地**：`docs/ROM.md`＋CLAUDE.md 硬規則 9。）
 20. **SaaS 成品化**（2026-07-07 追加）：目標是**上線營運的 SaaS 成品，不是 demo**。四項細部拍板——(a) **資料庫維持 SQLite 起步**（repo 層已隔離，量大再遷 Postgres）；(b) **部署 GCP**；(c) **計費先不做，邀請制**（org.plan 欄位留鉤子，要收費再接 Stripe）；(d) **前端成品全由我方 agent 設計＋實作**（Claude Design prompt 包轉為「設計規格」供 agent 與使用者參考，前端進度不等原型）。**技術現實（Fable 點破）**：SQLite×GCP 的可行形態＝**單一 Compute Engine VM＋持久磁碟**（Docker Compose：server 含 Playwright、web、Caddy 自動 TLS；每日磁碟 snapshot 備份）——Cloud Run 檔案系統短暫、放不了 SQLite；未來量大 → Cloud SQL Postgres（不動業務碼）。**使用者前置**：開 GCP 專案＋帳單帳戶、準備網域。
 
+## 2026-07-13 補充拍板（爬蟲專輪：社群×筆記×深廣×會中消費，決策 21–24）
+
+21. **研究爬蟲擴社群媒體，取得路線分平台鎖定**：YouTube＝官方 Data API v3（env `YOUTUBE_API_KEY`，缺則優雅跳過）＋Gemini 原生 YT URL 理解；Threads＝自建無登入 Playwright 爬公開頁（best-effort，撞牆即 skip）；**FB/IG＝只用 Gemini grounding**（不接第三方、不自爬；2025-07 起 Google 索引 FB/IG 公開專業帳號）；**一律禁止登入態爬取**（ToS/封號）。社群內容化為 `SourceText` 注入 deep 研究 bundle 繼承 [S#] provenance；帳號自動發現落 `companies.social_links`（migration 013）。詳 `research/SOCIAL_CRAWL_FINDINGS.md`＋ROM 2026-07-13。
+22. **CRM 筆記區**：沿用多型 `notes` 表，每公司兩個 AI 單例筆記——`narrative`（zh-TW 平鋪直敘公司型態與狀況，pinned 置頂）＋`observations`（歸類不進結構化欄位的情報逐條帶來源連結）；擷取器 schema 加 `narrativeZh`＋`uncategorized` 並明令**不准丟棄情報**。
+23. **深與廣優先、廢除「快速爬蟲」概念**：研究 UI 只留單一深度入口（standard 模式僅內部 URL 匯入沿用）；預算重設——job 60 分鐘、爬蟲 30 分鐘/150 頁/3 層、grounding 20 分鐘、多輪研究 `DEEP_RESEARCH_ROUNDS=3`（無新事實提早停），全部 env 可調。**部署注意**：Cloud Run 需 CPU always-allocated，否則長 job 回應結束後停擺（DEPLOY.md 已註記；pg migration 013/014 上 Cloud SQL 前先冒煙）。
+24. **會中補充資訊 based on CRM**：研究收尾自動建 embedding 索引（補實 CRM_SCHEMA §9 管線，原生產未實作）＋手動 `POST /api/research/companies/:id/reindex`（org 隔離）；會中檢索白名單擴 notes/products/news；新訊號 `person_mention`／`topic_shift`（觸發檢索、**不**觸發自動研究）；說話者升級多人標註 `speakerLabel`（wire enum 不變，LLM 帶 CRM contacts 名冊推斷「客戶-姓名」或「客戶-A/B」）；CRM 補充卡沿用 InfoCard、同場同實體去重。
+
+（21–24 於同日實作完成，經 fresh-context 對抗驗證 10/10＋真 API live 冒煙；gap 裁決細節見 ROM 2026-07-13 各則。）
+
 ## 研究回填（2026-07-06 工作流查證，詳見 `research/API_FINDINGS.md`）
 
 四項載重假設已查證，其中**三項修正/釐清了原決策**（動工前務必吸收）：

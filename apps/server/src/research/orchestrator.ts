@@ -24,15 +24,28 @@ import type {
   ProvenanceInput,
 } from "@meetcopilot/shared";
 import type { CrawlProvider, RawCrawl } from "./crawler.js";
-import { createCrawlExtractor, type CrawlExtractor } from "./extractor.js";
+import { createCrawlExtractor, type CrawlExtractor, type CompanyExtraction } from "./extractor.js";
+import { cleanStr, type UncategorizedIntel } from "./extract-shared.js";
 import { createDeepExtractor, type DeepExtractor, type DeepExtraction } from "./deep-extractor.js";
 import {
   createDeepResearcher,
   resolveRedirects,
   classifySourceType,
+  deepResearchRounds,
   type DeepResearcher,
   type DeepResearchBundle,
+  type SourceText,
 } from "./deep-research.js";
+import { runDeepRounds, buildFollowUpQueries } from "./deep-rounds.js";
+import {
+  runSocialFetch,
+  socialFetchBudgetMs,
+  discoverHandles,
+  socialLinksJson,
+  parseSocialLinksColumn,
+  type SocialFetcher,
+} from "./social/index.js";
+import { buildCompanyIndex } from "./indexer.js";
 import type { GroundingProvider } from "./grounding.js";
 import type { CrawlJobStore } from "./jobs.js";
 import type { GeminiClient } from "../gemini.js";
@@ -63,6 +76,10 @@ export interface ResearchDeps {
   extractModel?: string;
   /** grounding 記帳用的 textModel（估價 key；缺則走 kind fallback 定價）。 */
   textModel?: string;
+  /** 嵌入模型 id（WP4.1 indexer 寫 embeddings.model；缺→用 gemini 預設 embed model 前先讀 config 帶入）。 */
+  embedModel?: string;
+  /** 社群來源 fetcher（youtube/threads；WP1）。缺→deep 不跑社群 fetch（FB/IG 仍走 grounding）。 */
+  socialFetchers?: SocialFetcher[];
   // ── deep（全網研究）相依 ──
   /** Google-Search grounding provider（DeepResearcher 扇出用）。缺 → deep 無法跑（route 已於 gemini 未設時擋）。 */
   grounding?: GroundingProvider;
@@ -90,6 +107,15 @@ function toCrawlMode(mode: CrawlMode): "quick" | "detailed" {
 }
 
 /**
+ * 減半頁面（保前半、至少 1 頁）：大站（MAX_CRAWL_PAGES 已放寬到 150）standard 擷取的輸出 JSON 可能被
+ * MAX_TOKENS 截斷 → toCompany throw。砍一半頁面內容再擷取，縮小待列舉的產品/欄位量以繞過截斷。
+ */
+function halveCrawlPages(raw: RawCrawl): RawCrawl {
+  const keep = Math.max(1, Math.ceil(raw.pages.length / 2));
+  return { ...raw, pages: raw.pages.slice(0, keep) };
+}
+
+/**
  * Provenance 守則（P2-8）：人工建立/確認的 company.name 不被爬蟲研究結果覆寫。
  * 判準對齊 crm/provenance-write 的 isTrusted（filled_by='human' 或 verified=1），並補上 company.create 不寫
  * provenance 的缺口——「既有 name 非空 且 無 name provenance」＝建檔時人工輸入的名稱，視為 human。
@@ -111,12 +137,13 @@ export function guardHumanCompanyName(
 }
 
 /**
- * 整體 job 逾時（ms）：env RESEARCH_JOB_TIMEOUT_MS，預設 600000（10 分）。防背景流程掛死→永遠「研究中」。
- * 預設須寬鬆於 deep 最壞路徑：官網爬 300s 硬上限 ∥ grounding 150s（並行）→ 再序列 2 次 Gemini 抽取＋redirect 30s ≈ 450s。
+ * 整體 job 逾時（ms）：env RESEARCH_JOB_TIMEOUT_MS，預設 3600000（60 分）。防背景流程掛死→永遠「研究中」。
+ * WP3「深與廣（30–60 分鐘級）」：官網爬 ≤30min 硬上限 ∥ 多輪 grounding ≤20min ∥ 社群 fetch ≤10min（並行）
+ * → 再序列多輪 Gemini 抽取＋redirect 解析。預設須寬鬆於此最壞路徑。
  */
 function jobTimeoutMs(): number {
   const raw = Number.parseInt(process.env.RESEARCH_JOB_TIMEOUT_MS ?? "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 600_000;
+  return Number.isFinite(raw) && raw > 0 ? raw : 3_600_000;
 }
 
 /** 以 Promise.race 對一項工作施加硬逾時；逾時→reject（呼叫端既有 catch 會 markFailed 記「研究逾時」）。 */
@@ -163,6 +190,11 @@ export interface ResearchOrchestrator {
     /** 發起使用者歸屬（ADMIN_CONTRACT §2，可選）：回填背景抽取/grounding 記帳的 usage_events.user_id。 */
     requestedBy?: string;
   }): Promise<void>;
+  /**
+   * 建立/更新一家公司的嵌入索引（WP4.1）。POST /reindex 端點用；Gemini 未設 → throw（route 對映 502）。
+   * org 隔離由呼叫端（route）先以 companyId 在該 org 下 findById 驗證（非成員 → company 不存在 → 403）。
+   */
+  reindex(orgId: string, companyId: string, requestedBy?: string): Promise<{ chunks: number }>;
 }
 
 export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestrator {
@@ -243,7 +275,74 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     guardHumanCompanyName(payload, existingName, nameProv);
   }
 
+  /**
+   * 寫兩個單例 AI 筆記（WP2 §2）：narrative（pinned，公司型態與狀況敘事）＋ observations（未歸類情報，每條附來源連結）。
+   * 冪等（upsertSingletonNote：同公司同 note_type 只更新不重建）。回寫入筆數。
+   */
+  async function writeSingletonNotes(
+    orgId: string,
+    companyId: string,
+    data: { narrativeZh?: string; uncategorized?: UncategorizedIntel[] },
+  ): Promise<number> {
+    let written = 0;
+    const narrative = cleanStr(data.narrativeZh);
+    if (narrative) {
+      await core.notes.upsertSingletonNote(orgId, {
+        entityType: "company",
+        entityId: companyId,
+        noteType: "narrative",
+        body: `## AI 敘事：公司型態與狀況\n\n${narrative}`,
+        pinned: true,
+      });
+      written++;
+    }
+    // 上游擷取器（dedupUncat）已 trim／去重／cap ≤25 → 直接用（免冗餘 re-filter/slice）。
+    const uncat = data.uncategorized ?? [];
+    if (uncat.length > 0) {
+      const bullets = uncat
+        .map((u) => (u.sourceUrl ? `- ${u.text}（[來源](${u.sourceUrl})）` : `- ${u.text}`))
+        .join("\n");
+      await core.notes.upsertSingletonNote(orgId, {
+        entityType: "company",
+        entityId: companyId,
+        noteType: "observations",
+        body: `## 未歸類情報\n\n${bullets}`,
+      });
+      written++;
+    }
+    return written;
+  }
+
+  /** 建/更新一家公司的嵌入索引（WP4.1）。Gemini 未設 → throw。idem 前綴保跨呼叫唯一。 */
+  async function doReindex(orgId: string, companyId: string, idemPrefix: string, userId?: string): Promise<{ chunks: number }> {
+    if (!deps.gemini || !deps.gemini.isConfigured()) {
+      throw new Error("index unavailable: GEMINI_API_KEY not configured");
+    }
+    // 單一 metered client（記 embedding）：seq 遞增保 idem key 不撞；per-job/請求 prefix 保跨呼叫唯一。
+    const client =
+      deps.meter !== undefined
+        ? meteredGeminiClient(deps.gemini, deps.meter, { orgId, kind: "embedding", idemPrefix, userId })
+        : deps.gemini;
+    const embedModel = deps.embedModel ?? "gemini-embedding-001";
+    return buildCompanyIndex({ core, embed: (t) => client.embed(t), embedModel }, orgId, companyId);
+  }
+
+  /** runJob 收尾的索引（best-effort，不拋——索引失敗不該讓已完成的研究 job 變 failed）。 */
+  async function reindexAfterJob(orgId: string, companyId: string, jobId: string, userId?: string): Promise<void> {
+    if (!deps.gemini || !deps.gemini.isConfigured()) return; // 無 gemini → 靜默 skip
+    try {
+      const res = await doReindex(orgId, companyId, `index:${jobId}`, userId);
+      console.log(`[research:index] company=${companyId} chunks=${res.chunks}`);
+    } catch (e) {
+      console.error("[research:index] post-job index failed (non-fatal):", e);
+    }
+  }
+
   return {
+    async reindex(orgId, companyId, requestedBy) {
+      return doReindex(orgId, companyId, `reindex:${companyId}:${Date.now()}`, requestedBy);
+    },
+
     async createJob(req) {
       // 解析目標的 URL 與 domain：url 參數優先，否則從既有列取 websiteUrl/domain。
       let url = req.url;
@@ -307,6 +406,9 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
         const work = useDeep ? runDeep(args) : runStandard(args);
         const result = await withTimeout(work, jobTimeoutMs());
         await jobs.markDone(orgId, jobId, result);
+        // WP4.1：成功收尾後建/更新該公司嵌入索引（會中檢索消費）。best-effort，不影響 job 終態。
+        const companyToIndex = targetType === "company" ? args.targetId : args.companyIdForContact;
+        if (companyToIndex) await reindexAfterJob(orgId, companyToIndex, jobId, args.requestedBy);
       } catch (err) {
         await jobs
           .markFailed(orgId, jobId, err instanceof Error ? err.message : String(err))
@@ -335,7 +437,23 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
 
     let fieldsFilled = 0;
     if (targetType === "company") {
-      const payload: CrawlPayload = await jobExtractor.toCompany(raw);
+      // 容錯（對齊 deep 路徑 runDeep 的 try/catch）：大站擷取輸出可能被 MAX_TOKENS 截斷 → toCompany throw。
+      // 先試全量；失敗則**減半頁面重試一次**（縮小輸出繞過截斷）；仍失敗才上拋可行動錯誤（指明內容過大），
+      // 由 runJob 的 catch → markFailed。避免單一大站截斷讓整個 enrich job 失敗。
+      let payload: CompanyExtraction; // 含 narrativeZh/uncategorized
+      try {
+        payload = await jobExtractor.toCompany(raw);
+      } catch (err) {
+        console.error("[research] standard extract failed, retrying with halved pages:", err);
+        try {
+          payload = await jobExtractor.toCompany(halveCrawlPages(raw));
+        } catch (err2) {
+          const detail = err2 instanceof Error ? err2.message : String(err2);
+          throw new Error(
+            `擷取失敗：來源內容過大，減半頁面重試後輸出仍被截斷（可能產品/頁數過多）。請改用更精簡的來源頁，或調低 MAX_CRAWL_PAGES 後再試。原因：${detail}`,
+          );
+        }
+      }
       // provenance 守則：人工建立/確認的公司名不被爬蟲覆寫（P2-8）。
       const existing = await core.companies.findById(orgId, args.targetId);
       await protectHumanCompanyName(orgId, args.targetId, existing?.name, payload);
@@ -350,6 +468,12 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       if (payload.departments && payload.departments.length > 0) {
         await core.companyChildren.bulkUpsertDepartments(orgId, saved.id, payload.departments);
         fieldsFilled += payload.departments.length;
+      }
+      // WP2：單例筆記（narrative + observations）。best-effort，不因筆記失敗而讓研究失敗。
+      try {
+        await writeSingletonNotes(orgId, saved.id, { narrativeZh: payload.narrativeZh, uncategorized: payload.uncategorized });
+      } catch (e) {
+        console.error("[research] singleton notes (standard) failed:", e);
       }
     } else {
       const contacts = await jobExtractor.toContacts(raw);
@@ -396,18 +520,56 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     const deepExtractor = deepExtractorFor(orgId, jobId, args.requestedBy);
     const siteExtractor = extractorFor(orgId, jobId, args.requestedBy);
 
-    // 並行：web 研究（純靠 companyName 就能扇出，startUrl 可選）＋（若有 url）官網 detailed 爬蟲取產品。
-    // 無 url → 跳過官網 crawl（siteRaw=undefined），只跑 DeepResearcher by name。各自有界、個別失敗容忍。
+    // 社群帳號種子（WP1 §1.2）：既有 social_links 欄 + 公司 social 欄（youtube/facebook）。官網 hrefs 於爬完後再併入落庫。
+    const existingSocial = await core.db.get<{ social_links: string | null }>(
+      "SELECT social_links FROM companies WHERE org_id = ? AND id = ?",
+      [orgId, targetId],
+    );
+    const seedSocialUrls = [
+      ...parseSocialLinksColumn(existingSocial?.social_links),
+      ...(company.socialYoutube ? [company.socialYoutube] : []),
+      ...(company.socialFacebook ? [company.socialFacebook] : []),
+    ];
+    const socialHandles = discoverHandles(seedSocialUrls);
+
+    // 並行（WP1 §1.4 / WP3 §3）：多輪 web 研究 ∥ 官網 detailed 爬蟲（產品）∥ 社群 fetch（youtube/threads）。
+    // 各自有界、個別失敗容忍（partial 可接受）。無 url → 跳過官網 crawl（siteRaw=undefined）。
     const sitePromise: Promise<RawCrawl | undefined> = url
       ? crawler.crawl({ url, mode: "detailed", screenshots: false })
       : Promise.resolve(undefined);
-    const [webRes, siteRes] = await Promise.allSettled([
-      deepResearcher.research({ companyName, domain: dom, startUrl: url }),
-      sitePromise,
-    ]);
-    const bundle =
-      webRes.status === "fulfilled" ? webRes.value : { groundedFindings: [], sourceTexts: [], citationUrls: [] };
+    const socialPromise: Promise<SourceText[]> =
+      deps.socialFetchers && deps.socialFetchers.length > 0
+        ? runSocialFetch(
+            deps.socialFetchers,
+            { companyName, domain: dom, handles: socialHandles },
+            { budgetMs: socialFetchBudgetMs(), log: (m) => console.log(m) },
+          )
+        : Promise.resolve([]);
+    const roundsPromise = runDeepRounds(
+      deepResearcher,
+      { companyName, domain: dom, startUrl: url, includeSocial: true },
+      {
+        rounds: deepResearchRounds(),
+        buildFollowUps: (b) => buildFollowUpQueries(companyName, b),
+        onRound: async (_round, srcs) => {
+          try {
+            await jobs.markProgress(orgId, jobId, srcs);
+          } catch {
+            /* 進度回寫失敗不致命 */
+          }
+        },
+      },
+    );
+
+    const [webRes, siteRes, socialRes] = await Promise.allSettled([roundsPromise, sitePromise, socialPromise]);
+    const bundle: DeepResearchBundle =
+      webRes.status === "fulfilled"
+        ? webRes.value.bundle
+        : { groundedFindings: [], sourceTexts: [], citationUrls: [] };
     const siteRaw = siteRes.status === "fulfilled" ? siteRes.value : undefined;
+    const socialTexts: SourceText[] = socialRes.status === "fulfilled" ? socialRes.value : [];
+    // 社群 SourceText 併入 bundle（自動繼承 [S#]→真實 URL provenance，WP1 §1.1）。
+    if (socialTexts.length > 0) bundle.sourceTexts.push(...socialTexts);
 
     // 官網產品（沿用既有 detailed 抽取，路徑不變）。
     let siteExtract: CrawlPayload | undefined;
@@ -434,6 +596,10 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     let resolvedMap = new Map<string, string>();
     if (deep) {
       resolvedMap = await resolveMerged(deep, bundle);
+      // 未歸類情報的來源 URL 也對回真實出處（供筆記區「[來源]」連結顯示真新聞/維基網域，非中介 redirect）。
+      for (const u of deep.uncategorized) {
+        if (u.sourceUrl) u.sourceUrl = resolvedMap.get(u.sourceUrl) ?? u.sourceUrl;
+      }
     }
 
     // 合併公司欄位：web 覆蓋官網（profile 以外部來源為準）；provenance 官網在前、web 在後 → 覆蓋欄 web 勝（真實外部來源）。
@@ -495,7 +661,48 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       fieldsFilled += departments.length;
     }
 
-    // job.sources＝真正「取材自」的網址：官網爬過的頁 + 深讀的真實來源 + 解析後的真實出處（不含中介 redirect 雜訊）。
+    // WP1 §1.2：社群帳號落庫（種子 + 官網 hrefs）→ companies.social_links（JSON）+ field_provenance（filledBy='crawler'）。
+    try {
+      // 優先序（discoverHandles＝先出現者勝、逐一過 classifySocialUrl 正規化）：既有 social_links/公司欄 →
+      // 官網爬到的（所有已爬頁面 hrefs）→ **擷取器補缺**（deep.socialLinks，已過 https＋四平台機械保險）。
+      // 即「官網爬到的優先、擷取器只補缺」（WP 缺口 1b）。
+      const finalHandles = discoverHandles(seedSocialUrls, siteRaw?.socialLinks, deep?.socialLinks);
+      const linksJson = socialLinksJson(finalHandles);
+      if (linksJson) {
+        await core.db.run("UPDATE companies SET social_links = ?, updated_at = ? WHERE org_id = ? AND id = ?", [
+          linksJson,
+          Date.now(),
+          orgId,
+          companyId,
+        ]);
+        await core.provenance.record(orgId, [
+          {
+            entityType: "company",
+            entityId: companyId,
+            fieldName: "social_links",
+            valueSnapshot: linksJson,
+            filledBy: "crawler",
+            sourceType: "company_website",
+            sourceUrl: siteRaw?.finalUrl ?? url,
+            confidence: 0.6,
+            verified: 0,
+          },
+        ]);
+      }
+    } catch (e) {
+      console.error("[research:deep] social_links persist failed:", e);
+    }
+
+    // WP2 §2：單例 AI 筆記（narrative pinned + observations 每條附來源連結）。best-effort。
+    if (deep) {
+      try {
+        await writeSingletonNotes(orgId, companyId, { narrativeZh: deep.narrativeZh, uncategorized: deep.uncategorized });
+      } catch (e) {
+        console.error("[research:deep] singleton notes failed:", e);
+      }
+    }
+
+    // job.sources＝真正「取材自」的網址：官網爬過的頁 + 深讀的真實來源（含社群）+ 解析後的真實出處（不含中介 redirect 雜訊）。
     const sources = [
       ...new Set([
         ...(siteRaw?.sourcesVisited ?? []),
@@ -521,6 +728,9 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     deep.competitors.forEach((c) => add(c.sourceUrl));
     deep.news.forEach((n) => add(n.url));
     deep.funding.forEach((f) => add(f.sourceUrl));
+    // WP 缺口 2：只出現在 uncategorized 的來源 URL 也納入解析集合，否則其 grounding-redirect 不會被還原
+    // （observations 筆記的 [來源] 就會停留在 vertexaisearch redirect）。同一 30s 預算、best-effort。
+    deep.uncategorized.forEach((u) => add(u.sourceUrl));
 
     const known = new Map<string, string>();
     for (const st of bundle.sourceTexts) if (st.citationUrl) known.set(st.citationUrl, st.url);

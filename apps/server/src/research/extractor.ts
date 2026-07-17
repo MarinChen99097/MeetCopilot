@@ -21,6 +21,8 @@ import type {
   NewCompanyDepartment,
 } from "@meetcopilot/shared";
 import type { RawCrawl } from "./crawler.js";
+import { cleanStr, dedupUncat, NARRATIVE_UNCAT_SCHEMA, type UncategorizedIntel } from "./extract-shared.js";
+export type { UncategorizedIntel };
 
 /** 統一爬蟲信心（provenance.confidence）。爬蟲抽取值一律標此值，人細填/確認才升信任。 */
 const CRAWL_CONFIDENCE = 0.6;
@@ -38,7 +40,7 @@ const MAX_TECH = 12;
 const MAX_DEPARTMENTS = 10;
 
 export interface CrawlExtractor {
-  toCompany(raw: RawCrawl): Promise<CrawlPayload>;
+  toCompany(raw: RawCrawl): Promise<CompanyExtraction>;
   toContacts(raw: RawCrawl): Promise<Partial<Contact>[]>;
 }
 
@@ -100,6 +102,17 @@ interface ExtractedShape {
   contacts?: Partial<Contact>[];
   products?: ExtractedProduct[];
   news?: Partial<CompanyNews>[];
+  narrativeZh?: string;
+  uncategorized?: { text?: string; sourceIndex?: number }[];
+}
+
+/**
+ * toCompany 的回傳：CrawlPayload（落庫用）＋ WP2 筆記區資料（narrativeZh / uncategorized）。
+ * 加寬（非改 shared CrawlPayload）：落庫端仍當 CrawlPayload 用；orchestrator 另取 narrative/uncategorized 產單例筆記。
+ */
+export interface CompanyExtraction extends CrawlPayload {
+  narrativeZh?: string;
+  uncategorized?: UncategorizedIntel[];
 }
 
 const S = Type; // 別名
@@ -279,6 +292,8 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         required: ["title"],
       },
     },
+    // WP2 §2：narrativeZh + uncategorized（共用片段，見 extract-shared.NARRATIVE_UNCAT_SCHEMA）。
+    ...NARRATIVE_UNCAT_SCHEMA,
   },
 };
 
@@ -301,6 +316,8 @@ const SYSTEM = [
   "Also include, only when the text states them: HQ location, founded year, social links, key customers, and named people (as `contacts[]`).",
   "TECH & DEPARTMENTS (only when the text states them): `company.techStack[]` = technologies/vendors/products the company itself uses or is built on ({category, vendor, product, detectedFrom = where on the page you saw it}); `company.departments[]` = the company's internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns in their original form (e.g. AWS, React, Kubernetes, SAP). Cap: at most 12 techStack items and at most 10 departments.",
   "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the page's own source language (e.g. Traditional Chinese if the page is Chinese; do NOT translate the primary fields; quote the company's own wording). IN ADDITION, for each `*Zh` field — company.descriptionZh, products[].oneLinerZh, products[].descriptionZh, contacts[].titleZh, contacts[].backgroundSummaryZh, news[].titleZh, news[].summaryZh — emit a concise Traditional-Chinese (zh-TW) gloss of that item's corresponding primary field, each at most 2 sentences. If the source is already zh-TW you may condense it. Field NAMES stay as in the schema (English keys).",
+  "narrativeZh: write a Traditional-Chinese (zh-TW), plain-language narrative of 8-20 sentences synthesizing the company's type, business model, current situation, and (if visible) social presence. Keep proper nouns original; a readable briefing, NOT a bullet list.",
+  "uncategorized: EVERY important fact in the text that does NOT fit the structured fields above (company/contacts/products/news) MUST be captured here as {text, sourceIndex} — DO NOT discard it (e.g. partnerships, awards, certifications context, notable customers, events). At most 25 items; each `text` one concise sentence. sourceIndex may be 0 (single-site source).",
   "Leave a field empty ONLY when the text does not state it. Do NOT fabricate identifiers, prices, numbers, or specs you cannot see in the text. Keep each text value concise and never repeat text. Return ONLY valid JSON matching the schema.",
 ].join(" ");
 
@@ -476,7 +493,7 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
   }
 
   return {
-    async toCompany(raw: RawCrawl): Promise<CrawlPayload> {
+    async toCompany(raw: RawCrawl): Promise<CompanyExtraction> {
       const ex = await extract(raw);
       const sourceUrl = cleanUrl(raw.finalUrl ?? raw.url) ?? (raw.finalUrl ?? raw.url);
       // techStack/departments 由模型掛在 company 下但屬子表 → 先拆出，勿讓其污染 company 欄位與 provenance。
@@ -488,6 +505,9 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
       company.logoUrl = cleanUrl(company.logoUrl) ?? company.logoUrl;
       // websiteUrl 缺就補上起始站，讓 upsert 有可寫的 domain 依據。
       if (!company.websiteUrl) company.websiteUrl = sourceUrl;
+      // WP2：未歸類情報——standard 只有單一來源（本站），每條 sourceUrl＝站上 finalUrl（共用 dedupUncat）。
+      const uncategorized = dedupUncat(ex.uncategorized, () => sourceUrl);
+      const narrativeZh = cleanStr(ex.narrativeZh);
       return {
         company,
         contacts: ex.contacts ?? [],
@@ -496,6 +516,8 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
         techStack: toTechStack(rawTech),
         departments: toDepartments(rawDepts),
         provenance: companyProvenance(company, sourceUrl),
+        narrativeZh,
+        uncategorized: uncategorized.length > 0 ? uncategorized : undefined,
       };
     },
 

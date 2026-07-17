@@ -63,6 +63,11 @@ export interface CrawlJobStore {
   markRunning(orgId: string, id: string): Promise<void>;
   markDone(orgId: string, id: string, result: { fieldsFilled: number; sources: string[] }): Promise<void>;
   markFailed(orgId: string, id: string, error: string): Promise<void>;
+  /**
+   * 進度回寫（多輪研究 WP3 §3「每輪結束更新 crawl_jobs 進度」）：就地更新 sources_json（累積來源），
+   * 讓 admin job 監控（輪詢 crawl_jobs）看得到階段推進。status 維持 'running'；markDone 收尾時覆寫最終值。
+   */
+  markProgress(orgId: string, id: string, sources: string[]): Promise<void>;
 }
 
 export function createCrawlJobStore(db: DbPort): CrawlJobStore {
@@ -115,6 +120,14 @@ export function createCrawlJobStore(db: DbPort): CrawlJobStore {
         orgId,
         id,
       ]);
+    },
+
+    async markProgress(orgId, id, sources) {
+      // 只在仍 running 時回寫（避免與已收尾的 markDone/markFailed 競爭覆寫終態）。
+      await db.run(
+        "UPDATE crawl_jobs SET sources_json = ? WHERE org_id = ? AND id = ? AND status = 'running'",
+        [JSON.stringify(sources), orgId, id],
+      );
     },
   };
 }

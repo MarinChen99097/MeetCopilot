@@ -295,12 +295,26 @@ export interface DealRepository {
   addContact(orgId: string, dealId: string, input: NewDealContact): Promise<DealContact>;
 }
 
+/** notes 單例 upsert 輸入（RESEARCH_UPGRADE_CONTRACT §2）。noteType 為 raw string（容納 011/013 放寬後的類別）。 */
+export interface SingletonNoteInput {
+  entityType: NoteEntityType;
+  entityId: string;
+  noteType: string;
+  body: string;
+  pinned?: boolean;
+}
+
 /** notes 存取（多型 entityType+entityId）。 */
 export interface NoteRepository {
   list(orgId: string, entityType: NoteEntityType, entityId: string): Promise<Note[]>;
   create(orgId: string, input: NewNote): Promise<Note>;
   update(orgId: string, id: string, patch: Partial<Note>): Promise<Note>;
   delete(orgId: string, id: string): Promise<void>;
+  /**
+   * 單例 upsert（RESEARCH_UPGRADE_CONTRACT §2）：冪等鍵＝(org_id, entity_type, entity_id, note_type)——
+   * 已存在則更新 body/pinned/updated_at（**不重複建**），否則新建。研究引擎為每公司產「單一份」AI 敘事/未歸類筆記用。
+   */
+  upsertSingletonNote(orgId: string, input: SingletonNoteInput): Promise<Note>;
 }
 
 /** field_provenance 存取（信任層；listForEntity 每欄取未 superseded 最新一筆）。 */

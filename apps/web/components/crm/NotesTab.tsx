@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useTranslations } from "next-intl";
 import type { Note } from "@meetcopilot/shared";
 import { ApiError, createNote, deleteNote, listNotes, updateNote } from "@/lib/api";
 import { fmtRelative } from "@/lib/format";
@@ -8,8 +9,17 @@ import { useToast } from "@/components/ui/Toast";
 import { StateBoundary } from "@/components/ui/StateBoundary";
 import { Spinner } from "@/components/ui/Spinner";
 
-/** 筆記 tab：可新增/釘選/刪除的筆記流（entityType='company'）。 */
+/**
+ * AI 敘事筆記的 note_type（RESEARCH_UPGRADE_CONTRACT §2）。server 落庫 'narrative'，
+ * shared 的 `NoteType` union 已含 'narrative'/'observations'，故直接以型別比對辨識。
+ */
+function isNarrative(n: Note): boolean {
+  return n.noteType === "narrative";
+}
+
+/** 筆記 tab：可新增/釘選/刪除的筆記流（entityType='company'）；AI 敘事筆記置頂。 */
 export function NotesTab({ companyId }: { companyId: string }) {
+  const t = useTranslations("notesTab");
   const toast = useToast();
   const [items, setItems] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,7 +110,11 @@ export function NotesTab({ companyId }: { companyId: string }) {
       >
         <ul className="mc-notelist">
           {items.map((n) => (
-            <li key={n.id} className={`mc-noteitem ${n.pinned ? "is-pinned" : ""}`}>
+            <li
+              key={n.id}
+              className={`mc-noteitem ${n.pinned ? "is-pinned" : ""} ${isNarrative(n) ? "is-narrative" : ""}`}
+            >
+              {isNarrative(n) ? <span className="mc-noteitem__tag">{t("aiNarrative")}</span> : null}
               <div className="mc-noteitem__body">{n.body}</div>
               <div className="mc-noteitem__foot">
                 <span className="mc-noteitem__time">{fmtRelative(n.createdAt)}</span>
@@ -121,6 +135,10 @@ export function NotesTab({ companyId }: { companyId: string }) {
 
 function sortNotes(rows: Note[]): Note[] {
   return [...rows].sort((a, b) => {
+    // AI 敘事（pinned narrative）恆置頂；其後照既有「釘選優先→新到舊」排。observations 走一般清單。
+    const na = isNarrative(a) ? 1 : 0;
+    const nb = isNarrative(b) ? 1 : 0;
+    if (na !== nb) return nb - na;
     const pa = a.pinned ? 1 : 0;
     const pb = b.pinned ? 1 : 0;
     if (pa !== pb) return pb - pa;

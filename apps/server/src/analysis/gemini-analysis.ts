@@ -134,6 +134,9 @@ export class RollingWindowAnalysisEngine implements AnalysisEngine {
           system:
             "你是 B2B 銷售會議的即時分析引擎。依最近逐字稿，抽出對報告者有用的商機訊號。" +
             "kind 只能是列舉值之一；confidence 是你對該訊號的信心（0~1）；label 用該訊號的簡短中文描述。" +
+            "另偵測兩類輔助訊號供會中即時補充資訊（RESEARCH_UPGRADE_CONTRACT §4.2）：" +
+            "person_mention（提到具體人名/在場人物，label 放該人名或稱謂）、" +
+            "topic_shift（討論話題明顯轉換，label 放新話題的簡短描述）。" +
             "沒有明確訊號就回空陣列，不要硬湊。",
           prompt: `最近逐字稿（時間先後）：\n${transcript}\n請輸出符合 schema 的 JSON。`,
           schema: SIGNALS_SCHEMA,

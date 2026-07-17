@@ -18,6 +18,7 @@ import { createCrawlProvider, type CrawlProvider } from "./crawler.js";
 import { createCrawlExtractor, type CrawlExtractor } from "./extractor.js";
 import { createGroundingProvider, type GroundingProvider } from "./grounding.js";
 import { createCrawlJobStore } from "./jobs.js";
+import { createSocialFetchers } from "./social/index.js";
 import {
   createResearchOrchestrator,
   createMeetingResearchQuota,
@@ -66,7 +67,10 @@ export function createResearchRouter(
       gemini,
       extractModel: config.gemini.extractModel,
       textModel: config.gemini.textModel,
+      embedModel: config.gemini.embedModel, // WP4.1 indexer
       grounding, // deep（全網研究）的 grounding 扇出
+      // WP1 社群來源層：youtube（Data API v3）＋ threads（無登入 Playwright，走 crawler.fetchRaw）。
+      socialFetchers: createSocialFetchers({ youtubeApiKey: config.youtubeApiKey ?? "", crawler }),
     });
   const quota = deps.quota ?? createMeetingResearchQuota(config.researchAutoLimitPerMeeting);
 
@@ -140,6 +144,28 @@ export function createResearchRouter(
       .catch((e) => console.error("[research] runJob crashed:", e));
 
     res.status(202).json({ jobId: created.jobId });
+  });
+
+  // POST /api/research/companies/:id/reindex — 建/更新一家公司的嵌入索引（WP4.1）。
+  // 授權同 enrich：Bearer + org 隔離。非成員（跨 org 憑證）→ 該公司在其 org 下不存在 → 403（L7 攻擊者憑證驗被拒）。
+  router.post("/companies/:id/reindex", async (req: Request, res: Response) => {
+    const orgId = req.auth!.orgId;
+    const companyId = req.params.id ?? "";
+    const company = await core.companies.findById(orgId, companyId);
+    if (!company) {
+      res.status(403).json({ error: "forbidden: not a member of this company's organization" });
+      return;
+    }
+    if (!gemini.isConfigured()) {
+      res.status(502).json({ error: "index unavailable: GEMINI_API_KEY not configured" });
+      return;
+    }
+    try {
+      const result = await orchestrator.reindex(orgId, companyId, req.auth!.userId);
+      res.json({ ok: true, chunks: result.chunks });
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : "reindex failed" });
+    }
   });
 
   // GET /api/research/jobs?targetId=...  (放在 /:id 之前避免被吃掉)
