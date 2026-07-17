@@ -10,9 +10,9 @@
 - Cloud Run：`meetcopilot-server`（min=0/max=1/cpu=2/mem=4Gi/gen2/CloudSQL/WS 3600/session-affinity）、`meetcopilot-web`（min=0/max=2/cpu=1/mem=1Gi）
 - 影像：`asia-east1-docker.pkg.dev/ezpagesite/meetcopilot/{server,web}`
 
-**目前版本（2026-07-08）**：server `meetcopilot-server-00009-qcb`、web `meetcopilot-web-00007-vs6`。
+**目前版本（2026-07-17）**：server `meetcopilot-server-00011-m62`、web `meetcopilot-web-00008-sx9`（commits `29ba343`＋`166ef20`＋`9416775`：研究升級＋UI 換皮側欄＋cockpit/I2；migration 013/014 已於 boot 自動套、/api/ready 200；server 已加 `--no-cpu-throttling`＝CPU always-allocated，下方註記已執行）。
 
-> ⚠️ **長研究 job 需 CPU always-allocated（RESEARCH_UPGRADE_CONTRACT WP3，2026-07-13 註記）**：研究引擎現走「深與廣（30–60 分鐘級）」——`RESEARCH_JOB_TIMEOUT_MS` 預設 60 分、`CRAWL_HARD_CAP_MS` 30 分、多輪 grounding ≤20 分、社群 fetch ≤10 分。Cloud Run 預設**只在處理請求時分配 CPU**（enrich 走背景 fire-and-forget，HTTP 回應在 202 後結束）→ 回應一結束背景 job 就會被凍結/停擺。部署此版時**必須**對 `meetcopilot-server` 加 `--no-cpu-throttling`（CPU always allocated），否則長 job 永遠跑不完（卡在「研究中」）。本輪不改部署，實際部署時再處理。
+> ⚠️ **長研究 job 需 CPU always-allocated（RESEARCH_UPGRADE_CONTRACT WP3，2026-07-13 註記；2026-07-17 部署時已套用）**：研究引擎現走「深與廣（30–60 分鐘級）」——`RESEARCH_JOB_TIMEOUT_MS` 預設 60 分、`CRAWL_HARD_CAP_MS` 30 分、多輪 grounding ≤20 分、社群 fetch ≤10 分。Cloud Run 預設**只在處理請求時分配 CPU**（enrich 走背景 fire-and-forget，HTTP 回應在 202 後結束）→ 回應一結束背景 job 就會被凍結/停擺。部署此版時**必須**對 `meetcopilot-server` 加 `--no-cpu-throttling`（CPU always allocated），否則長 job 永遠跑不完（卡在「研究中」）。本輪不改部署，實際部署時再處理。
 > 範例：`gcloud run services update meetcopilot-server --region=asia-east1 --project=ezpagesite --no-cpu-throttling`（注意：CPU always-allocated 會提高閒置成本，需搭配 min-instances/max-instances 評估）。
 
 ---
