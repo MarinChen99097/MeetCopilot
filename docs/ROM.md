@@ -36,7 +36,20 @@
 
 <!-- ROM_BELOW -->
 
-### 2026-07-13 13:09 | Connact AI 本地 E2E 實測結果採信＋兩項品質缺口修復決策
+### 2026-07-17 | 對比徹查結果採信＋修法拍板（button color:inherit＋color-scheme:dark）
+- **誰決定**: Fable（依 4 鏡頭對抗式徹查 workflow 證據；40 agents，raw 18→dedup 11→confirmed 6／killed 5）
+- **決策**:
+  1. **採信單一根因**：全域 `button{font-family:inherit}` 缺 `color:inherit`＋全站無 `color-scheme:dark` → 五種卡片型 `<button>` 標題（companycard/contactrow/productrow/personacard/deckcard）吃 UA ButtonText≈黑，於 --mc-card 對比 1.21:1（4 名反駁者獨立重算一致）。「未驗證」badge 經重算 ~5:1＝刻意弱化非缺陷（killed）；admin 為淺色主題無此缺陷（其 button 同缺 color:inherit 記潛在債不修）。
+  2. **修法＝治本三件**：(a) `button{color:inherit}`（一條治六處，含唯讀 studio-present.css 的 deckcard 靠繼承修、不動該檔）；(b) `:root{color-scheme:dark}`（UA 表單控件/下拉/捲軸原生深色，杜絕同族；.mc-google__btn 的 light 保留）；(c) CRM 新增公司三個裸 input 補 .mc-input＋id/name。誤傷掃描 0（淺底按鈕全都明設 color）。
+  3. **殘項記債**：ContactsTab 兩個裸 input（吃 color-scheme:dark 後反而變佳，留待日後統一）；admin button color:inherit；token-math 鏡頭 agent 陣亡（StructuredOutput cap），其範圍由另兩鏡頭覆蓋（muted/badge 全對 ≥5:1 實算過）——不重跑。
+- **考慮過的替代**: 逐 class 補 color（否——治標，漏網率高）；只加 color-scheme:dark 不加 color:inherit（否——button 的 UA color 是元素級宣告，dark 下 ButtonText 變白仍屬 UA 控制，雙保險才穩）。
+- **影響**: apps/web globals.css/CompanyListView；驗證中；本地過目後照硬規則 10 問 commit＋部署。
+- **誰決定**: 使用者（部署後看線上 CRM 對方產品深檔截圖）
+- **決策**:
+  1. **深色模式對比問題徹查**：產品列標題在深底上近黑字（對比過低）；要求「徹查所有的前端是否有類似的問題」——不只修這一處，全前端（web＋admin）掃同類對比缺陷。Fable 初步嫌疑＝`<button>` 型列（mc-productrow/mc-contactrow 等）未宣告 color，吃瀏覽器 UA 近黑預設（body 的 color 不會繼承進 button），待 workflow 查證。
+  2. **工作型態入憲**：使用 Fable 時，Fable 一律是計畫者（planner/決策/審查）；Coder 或其他執行工作一律派較低效能 agent（Opus 等）。寫進 CLAUDE.md（參考 ezpage 的 CLAUDE.md 與 skills 的寫法）。MAINTENANCE 規定改硬規則需使用者同意——本次即使用者直接下令，授權成立。
+- **考慮過的替代**: 無（使用者直接指示）。
+- **影響**: 對比修復批（apps/web globals.css＋可能 admin CSS）；CLAUDE.md 硬規則 1 強化；記憶 dispatch-fable-decides-opus-investigates 同步。修完照慣例本地過目後才 commit/部署。
 - **誰決定**: Fable（依 E2E 測試 agent 回報；使用者指示本地測試新爬蟲）
 - **決策**:
   1. **E2E 結果採信＝功能端到端可用**：deep 研究 Connact AI（台灣康耐德，引擎正確辨識非同名以色列新創）98 秒 done、50 欄落庫、narrative＋observations 兩單例筆記正確、embeddings 11 列自動建、provenance 指真實第三方（cake.me/findit.org.tw）、無 YOUTUBE_API_KEY 時 YouTube 優雅 skip 且 job 不失敗。

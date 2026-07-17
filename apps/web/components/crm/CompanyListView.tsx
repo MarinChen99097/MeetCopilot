@@ -222,15 +222,37 @@ function NewCompanyForm({
       <div className="mc-newco__row">
         <label className="mc-field mc-field--grow">
           <span>公司名稱 *</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="例：Acme Inc." />
+          <input
+            id="newco-name"
+            name="newco-name"
+            className="mc-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            placeholder="例：Acme Inc."
+          />
         </label>
         <label className="mc-field">
           <span>網域</span>
-          <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="acme.com" />
+          <input
+            id="newco-domain"
+            name="newco-domain"
+            className="mc-input"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            placeholder="acme.com"
+          />
         </label>
         <label className="mc-field">
           <span>官網 URL</span>
-          <input value={websiteUrl} onChange={(e) => setWebsiteUrl(e.target.value)} placeholder="https://acme.com" />
+          <input
+            id="newco-website"
+            name="newco-website"
+            className="mc-input"
+            value={websiteUrl}
+            onChange={(e) => setWebsiteUrl(e.target.value)}
+            placeholder="https://acme.com"
+          />
         </label>
       </div>
       <div className="mc-newco__actions">

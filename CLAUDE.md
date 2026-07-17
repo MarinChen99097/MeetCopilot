@@ -43,7 +43,11 @@
 
 ## 硬規則（不讀其他檔也必須遵守）
 
-1. **指揮官不下場**：讀 3+ 檔／掃目錄／跑驗證 → 派 subagent，主對話只收結論＋`檔案:行號`。**模型分工（使用者 2026-07-07 拍板）：Fable＝主決策者（指揮官）；搜尋/調查/研究/驗證/審查等 agent 一律 `model:"opus"`**。例外：本檔與 `docs/` 制度檔（含 WORKLOG/DECISIONS）是寫給指揮官讀的，親自讀不違反——本條管程式碼、資料與探索性搜尋。
+1. **Fable＝計畫者，執行一律派工**（使用者 2026-07-07 拍板、07-13 重申、**07-17 入憲**；寫法參考 ezpage CLAUDE.md 模型使用規範）：
+   - Fable **只做**謀劃與規劃：拆解任務、設計方案、凍結契約、審查 agent 回報與截圖、裁決取捨、與使用者對話。
+   - **寫 code、改程式檔、掃目錄、讀 3+ 程式檔、跑指令/測試/驗證、實機走查、部署等執行類任務，一律派較低效能 agent（Coder＝Opus 等）執行**，不要用 Fable 直接動手；搜尋/調查/研究/驗證/審查 agent 一律 `model:"opus"`。
+   - 亦即：Fable 當上層計畫者，Opus（或其他執行型 agent）當下層執行者；規劃完成→用 Agent/Workflow 派工，主對話只收結論＋`檔案:行號`。
+   - 例外（指揮官可親自做）：讀本檔與 `docs/` 制度檔（含 WORKLOG/DECISIONS/ROM）、用 Write/Edit 追加制度紀錄（WORKLOG/ROM/CHANGE_TRACKER/LESSONS）、審圖/審回報、以及使用者核准後照 SOP 的機械性 git/gcloud 收尾指令。
 2. **隨做隨存**：每完成一項立刻用 Write/Edit 存檔再做下一項；跨 session 狀態寫 `docs/WORKLOG.md`。（commit 時機受硬規則 10 約束）
 3. **寫檔用 Write/Edit**，不用 shell 寫檔（PowerShell 5.1 預設 UTF-16 會亂碼）。
 4. **改既有檔前確認 `git status` 乾淨**（v2 已 git init，是主要備份）；階段性成果隨手 commit 即可回滾，不需 `.bak`。追加型日誌（WORKLOG/LESSONS）更不需處理。

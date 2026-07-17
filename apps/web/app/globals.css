@@ -2,6 +2,9 @@
    Real per-surface design lands later (from the user's Claude Design work); this is only the frame. */
 
 :root {
+  /* 深色配色基準：讓 UA 表單控件（input/select/textarea/捲軸/下拉）原生深色化，
+     並使 system color ButtonText 解析為亮色——卡片型 <button> 才不會吃到 UA 的深色字貼在深底上。 */
+  color-scheme: dark;
   /* surfaces */
   --mc-bg: #0a0f1a;
   --mc-panel: #0d1524;            /* 側欄/rail */
@@ -75,6 +78,7 @@ a:hover {
 
 button {
   font-family: inherit;
+  color: inherit;
 }
 
 img {

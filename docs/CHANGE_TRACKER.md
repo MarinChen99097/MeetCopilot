@@ -34,6 +34,20 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-17 23:40 | 深色對比徹查定案三修：button color:inherit＋:root color-scheme:dark＋新增公司表單裸 input 補 mc-input/id/name
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/app/globals.css`, `apps/web/components/crm/CompanyListView.tsx`
+- **改了什麼**:
+  - **button 規則補 color:inherit（globals.css:76）**: Before `button { font-family: inherit; }` → After `button { font-family: inherit; color: inherit; }`。根因：卡片型 `<button>`（.mc-companycard/.mc-contactrow/.mc-productrow/.mc-personacard/.mc-deckcard）自身與子元素皆無 color 宣告 → 吃 UA system color ButtonText≈#000，在深底 --mc-card #121a2c 上對比僅 1.21:1。加 `color: inherit` 使其承 body 的 `color: var(--mc-text)` #e8edf8 亮字。
+  - **:root 加 color-scheme: dark（globals.css:4 附近，token 區塊開頭＋2 行註解）**: 讓 UA 表單控件（input/select/textarea/捲軸/下拉）原生深色、並使 system color ButtonText 解析為亮色（與 color:inherit 雙保險）。**保留** `.mc-google__btn { … color-scheme: light }`（globals.css:380，Google iframe 需要，未動）。
+  - **NewCompanyForm 三個裸 input 補 mc-input/id/name（CompanyListView.tsx:225/229/233 附近）**: 公司名稱/網域/官網 URL 三個原無 className 的 `<input>` 各補 `className="mc-input"`＋`id`/`name`（`newco-name`/`newco-domain`/`newco-website`，照 AuthForm 慣例）。原本吃 UA 淺底、且無 id/name 觸發瀏覽器表單告警。
+- **為什麼**: 深色對比徹查定案（對抗式驗證 6 confirmed 全同根因）——`button` 缺 `color: inherit` ＋全站無 `color-scheme: dark`，致五種卡片型按鈕標題吃 UA ButtonText 近黑貼在深底卡片上（1.21:1）。
+- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（TSC_EXIT=0）。
+  - **誤傷掃描（含唯讀 studio-present.css）**: 掃「淺/accent 底 `<button>` 且自身＋子元素皆無 color」→ **0 誤傷**。所有淺/accent 不透明底 button 皆已明設 color：`.mc-btn--primary`(#fff on --mc-accent)、`.mc-btn--danger-solid`(#2a0a0a)、`.mc-langswitch button.is-on`(#fff)、`.mc-prov__confirm`(var(--mc-ok))；其餘缺 color 的 button（.mc-companycard/.mc-contactrow/.mc-productrow/.mc-personacard/.mc-deckcard/.mc-hud__jump/.mc-iconbtn/.mc-thumb/.mc-imgjob__close 等）背景皆為 --mc-card/透明深底 → 承亮字正是本修目的。無任何深底 button 之祖先設深色字（設深色 color 者皆為 badge/CTA 葉節點、不含 button）→ 級聯安全。
+  - **color-scheme:dark 副作用（裸 input/select/textarea）**: 全 apps/web 掃出裸控件——`ContactsTab.tsx:198/202`（fullName/title 兩個裸 `<input>`，本次 out-of-scope 未動）、`CopilotView.tsx:313`（裸 checkbox）。三者在 UA 深色化後皆為深底亮字＝更佳非更差、**無反例**（原本反是淺底白框貼深頁）。ContactsTab 兩裸 input 為既存技術債（不在允許改檔清單，僅回報不修）。
+- **紅線**: 未動 studio-present.css/present/hud/copilot/apps/server/apps/admin。admin 淺色主題其 `button` 規則同缺 `color: inherit`（潛在債）——依任務只回報不修。未 commit（硬規則 10）。
+
 ### 2026-07-13 15:10 | cockpit 收尾三修：嵌入式 HUD 單欄直向流＋會議標題 input id/name＋雙 h1 降級
 - **工作區**: apps/web
 - **類型**: fix
