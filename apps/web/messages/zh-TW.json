@@ -3,7 +3,39 @@
   "home": {
     "title": "MeetCopilot",
     "subtitle": "CRM 核心 × DynamicSlide × 會中副駕 × 模擬訓練",
-    "surfaces": "介面"
+    "surfaces": "介面",
+    "metaTitle": "工作台 · MeetCopilot",
+    "greeting": "歡迎回來，{name}",
+    "greetingAnon": "歡迎回來",
+    "lead": "以 CRM 情報為核心：會前研究客戶、會中即時副駕、上場前語音對練。",
+    "phasePreTitle": "會前準備",
+    "phasePreDesc": "研究客戶、備好簡報",
+    "phaseLiveTitle": "會中進行",
+    "phaseLiveDesc": "三個視圖，各就各位",
+    "phaseDrillTitle": "模擬對練",
+    "phaseDrillDesc": "上場前先打一場",
+    "liveNote": "開會時只分享「簡報舞台」分頁；帳號 B 開會中副駕（擷取＋建議）；HUD 可另放第二裝置。",
+    "crmDesc": "公司與人物情報庫＋研究引擎",
+    "studioDesc": "生成、編輯與匯出簡報",
+    "presentDesc": "乾淨播放視圖——分享這個分頁",
+    "copilotDesc": "擷取會議音訊＋即時建議，同一視窗",
+    "hudDesc": "第二裝置鏡像（選配）",
+    "trainDesc": "AI 扮演客戶，語音實戰演練"
+  },
+  "nav": {
+    "workspace": "工作台",
+    "pre": "會前準備",
+    "live": "會中進行",
+    "practice": "對練",
+    "admin": "管理",
+    "home": "首頁",
+    "logout": "登出",
+    "collapse": "收合選單",
+    "expand": "展開選單",
+    "menu": "開啟選單",
+    "closeMenu": "關閉選單",
+    "newTab": "於新分頁開啟",
+    "language": "語言"
   },
   "crm": {
     "title": "CRM 管理",
@@ -30,12 +62,25 @@
     "connRetry": "重新連線"
   },
   "copilot": {
-    "title": "會中副駕擷取端",
-    "desc": "開始聆聽並擷取會議分頁音訊、送出即時分析。"
+    "title": "會中副駕",
+    "desc": "開始聆聽並擷取會議分頁音訊、送出即時分析。",
+    "cockpitKicker": "會中 · 現場",
+    "cockpitLead": "一邊擷取會議聲音，一邊看即時建議與補充資料——同一個視窗。",
+    "captureLabel": "擷取控制",
+    "hudLabel": "即時建議"
   },
   "hud": {
     "title": "HUD",
     "desc": "即時建議、研究卡與逐字稿；接受/略過與深查。"
+  },
+  "enrichPanel": {
+    "deepEntryLabel": "深度研究（全網＋社群）",
+    "deepEntryDesc": "全網新聞／維基／公開檔＋官網＋社群帳號，逐欄標示外部來源。",
+    "timeHint": "可能需要 30–60 分鐘，可離開頁面稍後回來看結果。",
+    "start": "開始深度研究"
+  },
+  "notesTab": {
+    "aiNarrative": "AI 敘事"
   },
   "train": {
     "title": "模擬訓練",

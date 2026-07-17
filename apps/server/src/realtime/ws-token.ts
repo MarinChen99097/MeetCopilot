@@ -4,9 +4,9 @@
  * Bearer app-JWT can never be replayed as a wsToken (and vice-versa) — verify rejects a wrong `typ`.
  *
  * The token binds the connecting identity (userId/orgId) and the meeting, plus the meeting's presenter id.
- * Presenter authority (I2) is decided at the WS layer by `userId === presenterUserId` (+ role='present'),
- * NOT by anything the client sends — so an attacker holding a non-presenter token cannot page_commit or
- * approve suggestions even if they pass `role=present`.
+ * Presenter authority (I2) is decided at the WS layer by `userId === presenterUserId` alone (a pure identity
+ * check — `role` is a self-chosen push-target, not a security boundary), NOT by anything the client sends — so
+ * an attacker holding a non-presenter token cannot page_commit or approve suggestions under any role.
  */
 import jwt from "jsonwebtoken";
 

@@ -5,10 +5,12 @@
  * Auth & trust boundary (I2):
  *  - The wsToken is verified server-side (signature/exp/typ + meetingId match). Identity (userId/orgId) and the
  *    meeting's presenter id come ONLY from the verified token — never from a client message payload.
- *  - `suggestion_action` and `page_commit` are presenter-only: enforced by `meta.isPresenter`
- *    (= userId === presenter_user_id) AND role === 'present'. A valid-but-non-presenter token, or a normal app
- *    JWT replayed as a wsToken, or any forged token, is rejected — an attacker cannot commit pages or approve
- *    slides. Both a handshake gate and a per-message gate are applied (defense in depth).
+ *  - `suggestion_action` and `page_commit` are presenter-only: enforced by `meta.isPresenter`, a PURE identity
+ *    check (= userId === presenter_user_id). `role` is a self-chosen push-target query param, NOT a security
+ *    boundary, so it is not part of the gate — the cockpit presenter approves from the `hud` connection. A
+ *    valid-but-non-presenter token, or a normal app JWT replayed as a wsToken, or any forged token, is rejected
+ *    — an attacker cannot commit pages or approve slides. The per-message gate here plus patch-service's
+ *    presenterAuth re-check apply defense in depth.
  *
  * I3: audio frames are only meaningful from 'capture'; all HUD-bound content is routed by the hub to 'hud' only.
  */
@@ -92,8 +94,13 @@ export function attachRealtimeWs(server: Server, hub: RealtimeHub, jwtSecret: st
       orgId: claims.orgId,
       meetingId,
       role,
-      // Presenter authority requires BOTH the identity match AND a present-role connection (I2, defense in depth).
-      isPresenter: claims.userId === claims.presenterUserId && role === "present",
+      // Presenter authority is a PURE identity check: the wsToken (minted by the presenter at meeting creation,
+      // carrying presenterUserId) proves who you are. `role` is only a self-chosen push-target query param — any
+      // token holder can already claim role='present', so it is not a security boundary; gating on it merely
+      // rejected the legitimate cockpit flow where the presenter approves from the `hud` connection (the I2
+      // role-slice). Identity is still doubly enforced (token possession + userId===presenterUserId; the
+      // patch-service presenterAuth check re-verifies before any deck mutation).
+      isPresenter: claims.userId === claims.presenterUserId,
     };
 
     // Account-suspension gate (ADMIN_CONTRACT §2): a suspended org/user is denied at the WS upgrade too, the

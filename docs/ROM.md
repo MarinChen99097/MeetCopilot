@@ -36,6 +36,144 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-13 13:09 | Connact AI 本地 E2E 實測結果採信＋兩項品質缺口修復決策
+- **誰決定**: Fable（依 E2E 測試 agent 回報；使用者指示本地測試新爬蟲）
+- **決策**:
+  1. **E2E 結果採信＝功能端到端可用**：deep 研究 Connact AI（台灣康耐德，引擎正確辨識非同名以色列新創）98 秒 done、50 欄落庫、narrative＋observations 兩單例筆記正確、embeddings 11 列自動建、provenance 指真實第三方（cake.me/findit.org.tw）、無 YOUTUBE_API_KEY 時 YouTube 優雅 skip 且 job 不失敗。
+  2. **修缺口 1——社群帳號發現太窄（social_links 落空）**：(a) `collectSocialHrefs` 從只掃首頁擴為掃**所有已爬頁面**；(b) deep 擷取 schema 加選填 `socialLinks`（prompt 明令僅官方帳號、不確定不填）由 grounding 來源回填；合併規則＝官網爬到的優先、擷取器補缺，一律過 `classifySocialUrl` 正規化（機械保險：只收 https＋四平台網域）。
+  3. **修缺口 2——uncategorized 來源轉址未還原**：`resolveMerged` 解析集合漏了只出現在 uncategorized 的 sourceUrl → 納入（同 30s 預算 best-effort，解析不到保留原 URL）。
+  4. 驗證方式＝修復 agent 對 Connact AI **重跑 deep** 實測（social_links 落庫內容＋observations 來源還原），非只靠單元測試。
+  5. 順帶採納測試 agent 環境建議記 backlog：dev server stdout 導固定檔供稽核。
+- **脈絡與理由**: 使用者要先本地測試再談 commit/部署；實測即暴露「發現機制窄」與「還原集合漏項」兩個真實品質缺口——正是 2026-07-09 立案「爬蟲效果不佳」要解的那類問題，當下修。
+- **考慮過的替代**: social 發現改用無頭瀏覽器等 JS 渲染後再掃（否——已爬頁面掃描＋擷取器回填已覆蓋主要情境，成本低得多）；只修轉址不動 social（否——social_links 是本輪交付物，落空不可接受）。
+- **影響**: crawler.ts、deep-extractor.ts、orchestrator.ts、social/discover.ts＋測試；修完 Connact AI 重跑驗證。
+
+### 2026-07-13 14:05 | 使用者指示：擷取端與 HUD 合為同一視窗（一邊聽一邊看建議）
+- **誰決定**: 使用者（看新首頁後指出：「這兩個功能應該要在同一個視窗才對，這才符合一邊聽一邊看建議的用法」）
+- **決策**: 會中副駕的主要用法＝**擷取＋建議同一視窗**——/copilot 要同畫面顯示 HUD 的建議/研究卡流與批准互動，不是兩個分開入口各開各的。
+- **與既有決策的關係**: 決策 14「HUD＝第二裝置」**不作廢、降為選配**——/hud 獨立頁保留（第二裝置鏡像）。帳號 B 的瀏覽器依會議模型永不被分享，HUD 嵌進擷取視窗**不違反 I3**。I2 批准 gate 不變（server 端驗證，見下則）。
+- **考慮過的替代**: 無（使用者直接指示）。
+- **影響**: /copilot 改組合視圖＋首頁/側欄文案；PRODUCT_SPEC 會中視圖敘述日後蒸餾。
+
+### 2026-07-13 14:25 | 合併方案 A 拍板＋isPresenter role 裂縫修正（I2 面）
+- **誰決定**: Fable（依 Opus 偵察證據）
+- **決策**:
+  1. **方案 A：同分頁雙 WS 組合視圖**——/copilot 改「會中副駕」cockpit：左窄欄擷取控制（原 CopilotInner）＋右建議流（原 HudInner），同讀 `mc_meeting_creds` 天然同會議，開 capture＋hud 兩條連線（hub 無同 user/role 連線上限，偵察證實）；單一 ToastProvider、單一 `<main>`；窄螢幕直向堆疊。/hud 獨立頁不動。
+  2. **修 I2 既有裂縫**：偵察發現 `ws-server.ts:96` `isPresenter = userId===presenterUserId && role==="present"`，但 suggestion/info_card 只推給 hud role → **現行獨立 /hud 送批准會被 `forbidden_not_presenter` 拒**（CI 沒抓到＝authz 測試直打 patch.act 未經 ws-server；protocol.ts 與 API_CONTRACT §6 兩處註解自相矛盾）。**修正＝isPresenter 改純身分判定 `userId===presenterUserId`、去掉 role 條件**。安全論證：wsToken 由 presenter 建會議時鑄造、含 presenterUserId，役割(role)是連線時自選的 query param——任何持 token 者本就可自稱 present role，role 條件不構成安全邊界，只擋掉正當用法。修正後 I2 仍由「token 持有＋userId 比對」雙重把關（patch-service presenterAuth double-check 不動）。
+  3. **驗證要求（硬規則 7）**：新增經 ws-server 的 authz 測試——presenter token＋hud role 批准=過；**非 presenter userId token（跨使用者/跨 org）任何 role=拒**；既有 server 測試全綠才收。
+  4. **文案**：copilot.title zh「會中副駕擷取端」→「會中副駕」（en「Meeting Copilot」）；HUD 卡改「第二裝置鏡像（選配）」定位；首頁 liveNote 同步。API_CONTRACT §6 矛盾註解隨實作更正。
+  5. **避讓**：TranscriptStream/globals 既有區塊/protocol.ts 只引用不修改（爬蟲 session W agent 領地）；globals 新樣式一律 `mc-cockpit*` 新 class 追加檔尾。
+- **考慮過的替代**: 方案 B（合併視窗唯讀、批准留第二裝置）——否決：違背使用者「一邊聽一邊看**建議**」的單裝置核心訴求，且 role 裂縫放著不修等於 /hud 批准壞著；approval 改走 present role——否決：present 是被分享的乾淨舞台（I3），收不到也不該收建議流。
+- **影響**: apps/web copilot/hud 元件重組＋messages＋HomeDashboard；apps/server ws-server.ts＋authz 測試（該檔不在爬蟲 session 檔案集，無衝突）；docs/API_CONTRACT.md §6。
+
+### 2026-07-13 12:32 | /simplify 四鏡頭裁決：9 項套用、2 項跳過、1 項 backlog
+- **誰決定**: Fable（依 reuse/simplification/efficiency/altitude 四路 opus 審查裁決）
+- **決策**:
+  1. **套用（行為不變清理，單一 apply agent）**：(a) 會中熱路徑 `collectWhitelist` 每分析窗 4 次序列 DB 讀→per-session 快取（順帶消除與 contactRoster 的重複讀）；(b) `resolveTrust` 逐 hit 序列查→Promise.all（≤3）；(c) 兩擷取器複製貼上的 `UncategorizedIntel` 型別＋去重迴圈＋narrativeZh 正規化三寫法＋WP2 schema/prompt 片段→抽共用模組；(d) `writeSingletonNotes` 冗餘 re-filter 移除；(e) deep-rounds 死參數 `includeSocial:false` 移除；(f) realtime/orchestrator magic `.slice(-6)`→復用具名常數；(g) **`social/http.ts` 逐字複製的 `pinnedAgent`→export `import/extract.ts` 原函式複用**（DNS-rebinding 防線單一來源，保留各自 timeout 值不變行為）；(h) 社群網域清單兩份→crawler 改用 `classifySocialUrl` 判別；(i) indexer contacts N+1（冷路徑）——僅在 list 已含所需欄位時順手改，否則保留並註記。
+  2. **跳過**：YouTube `q()` 手刻編碼改 `URLSearchParams`（空白 `+` vs `%20` 非 byte-identical，對外部 API 引入等價性問題、收益極小）；`provenanceTypeFor` 死 `?? null` 分支（TS 嚴格模式產物，文件已註）。
+  3. **backlog（不在本輪動）**：embedding entity_type 詞彙單一真相來源（indexer 字面值／retrieval kindOf／PROVENANCE_BASE_TYPE 三處分居兩模組）——altitude 鏡頭正確指出 code-review 修法位置偏低，但重寫剛驗過的 trust 面高風險，列 backlog 待下輪；同籃：entity 消失的孤兒 embeddings GC。
+  4. altitude 鏡頭復查三個 code-review 修法：indexer 清殘留與 deep-rounds 預算閘「高度正確」，resolveTrust 僅位置問題（歸入 backlog 項）。
+- **脈絡與理由**: 使用者指示補跑 /code-review＋/simplify（上輪制度）；四鏡頭無行為性 bug（與 /code-review 分工正確），全部為維護性/效能清理。
+- **考慮過的替代**: 本輪就做 entity_type 單一真相來源（否——behavior-invariant 但動剛驗過的 trust 判定面，回歸成本＞收益，與上輪 ws.ts bandaid 同理列 backlog）。
+- **影響**: research/**、realtime/**、import/extract.ts（加 export）；apply 後回歸 typecheck＋server 100 基線＋crm 49 基線。
+
+### 2026-07-13 12:15 | /code-review 結果裁決：1 confirmed 全修＋2 個門檻下真 bug 升級修＋2 接受
+- **誰決定**: Fable（依五鏡頭 workflow 審查＋逐 finding 對抗評分結果裁決；使用者指示補跑 /code-review＋/simplify）
+- **決策**:
+  1. **修（confirmed 82/80，bugs 與 consistency 兩鏡頭同時抓到）**：`realtime/retrieval.ts` 的 `resolveTrust` 用 embedding 的 entity_type（`company_card`/`contact_card`/`company_product_card`）查 `field_provenance`，但 provenance 存的是基底型別（`company`/`contact`）——exact match 永遠 0 列 → **trust='verified' 分支是死碼**，人工驗證過的資料在會中卡片上永遠顯示 crawler。修法＝embedding entity_type→provenance 基底型別對映（實際對映值以 repos-prospect 的 provenance 寫入為準）＋補「人工驗證欄位→卡片 verified」測試。
+  2. **升級修（74/72 分，門檻下但兩鏡頭獨立抓到、驗證者確認為真）**：`research/indexer.ts` 重建索引只 upsert 新 chunk、不清高 index 舊 chunk——內容縮短跨 1000 字邊界後**過時情報殘留索引並可能在會中出卡**。深研究重跑是常態，資料陳舊直接傷「深與廣」價值 → 升級修：每 entity upsert 後刪 `chunk_index >= 新數量` 殘留列＋測試。
+  3. **升級修（60 分，語意錯誤）**：`research/deep-rounds.ts` 的 `DEEP_RESEARCH_BUDGET_MS` 實為每輪軟 deadline、非註解宣稱的整場預算（多輪可放大數倍，僅靠 job timeout 兜底）→ runDeepRounds 維護整場 deadline（逾期不開新輪）＋更正 docstring。
+  4. **接受不修**：Threads fetch 未接 AbortSignal（35 分）——fetchRaw 有 45s 硬上限＋保證 kill teardown，最壞超支 ~15s，修的侵入性大於收益。其餘 filtered 為同 finding 重複計分。
+- **脈絡與理由**: 上輪教訓再次應驗——fresh-context 驗證 10/10 過後，code-review 仍抓到 confirmed 死碼 bug（驗收測「詞彙對上、檢索命中」，沒測「verified 徽章真的亮」）。門檻 80 是報告信心過濾器、非修復門檻——74/72 陳舊索引是真 bug 且傷核心價值，指揮官有權升級。
+- **考慮過的替代**: 只修 ≥80（否——見上）；deep-rounds 只改註解不改行為（否——「整場預算」是操作者合理心智模型，行為該向文件靠）。
+- **影響**: retrieval.ts、indexer.ts、deep-rounds.ts＋測試；修完復審→/simplify→最終回歸。
+
+### 2026-07-13 13:10 | UI 換皮驗收：審圖通過＋5 項收尾範圍擴充＋本地環境事實
+- **誰決定**: Fable（依對抗式驗證 workflow＋實機走查證據裁決）
+- **決策**:
+  1. **對抗式驗證結果採納**：4 鏡頭 raw 6 findings→反駁層過濾→confirmed 3 全修（rail 記憶閃跳改 useState lazy init、手機抽屜補 visibility 退出 Tab 序、resize 往返殘留補 matchMedia、順帶 .mc-shell 納 reduced-motion 護欄）；killed 3 不修（SlideEditor 粉漸層＝範圍外殘留記 backlog、圓角膠囊化經 CSS 夾制規則證明零視覺差、語言切換掉 query 因全站無 query-backed 路由不成立）。
+  2. **Fable 親自審 10 張實機截圖：設計方向通過**（三階段 rail／mono kicker／LIVE 萊姆／側欄分組一致成形），核准 5 項收尾**範圍擴充**（超出原契約 7 檔白名單）：(a) AuthForm 輸入框套 .mc-input＋id/name/autocomplete（P0 第一印象）；(b) **登入成功落點 /crm→/**（新儀表板＝登入後首站）；(c) EN copilot.title 縮短救側欄截斷；(d) /train 補 main landmark；(e) .mc-empty__icon 升級 56px 圓形底座（全站空狀態受益）。
+  3. **本地環境事實與處置**：:8787 被無關 bun app「fakechat」佔用、MeetCopilot API dev 慣例=PORT=8788 覆寫（.env 寫 8787 但被佔）；:3000 web dev 是 07-09 殘留殭屍（Jest worker 崩潰全站 500），分類器擋 kill（另一工作線可能依賴）→**另起 :3001 實例**（NEXT_PUBLIC_API_BASE=http://localhost:8788 對齊，消 CSP↔bundle 不一致）＋API 起 :8788。兩顆 next dev 共用 .next 有髒 chunk 風險，正解＝別並行同目錄兩顆 dev（:3000 殭屍待使用者裁決清理）。
+  4. 截圖 agent 為讓 chrome-devtools MCP 可跑，建立可還原 junction `%LOCALAPPDATA%\Google\Chrome\Application`→Playwright Chromium（本機無 Chrome stable）；Fable 裁決保留供後續走查，已向使用者揭露，移除指令記在 junction 說明。
+- **考慮過的替代**: 空狀態 icon 換整套插圖系統（否——CSS 底座即可救存在感，插圖列 UIUX brief 後續）；登入落點維持 /crm（否——儀表板就是為登入後首站設計的）。
+- **影響**: apps/web AuthForm/en.json/train/globals.css；SlideEditor 粉漸層殘留＋空狀態插圖記 backlog；與爬蟲升級 session 以檔案集互斥並行（對方 W agent 動 EnrichPanel/NotesTab/HUD，messages 兩檔雙方皆只 Edit 追加）。
+
+### 2026-07-13 11:52 | 對抗驗證 10/10 過＋整合修正輪範圍＋文件蒸餾
+- **誰決定**: Fable（依驗證 agent 與 W 回報裁決）
+- **決策**:
+  1. **驗證結論採信**：fresh-context 對抗驗證 10/10 ✓（親跑 typecheck＋server 95/95＋crm 49/49；embeddings 詞彙 R/M 逐字對上；reindex/白名單授權攻擊測過；**live 冒煙真跑**——真 Gemini 爬 ghost.org 125s job done、兩單例筆記＋7 列 embeddings 全對）。
+  2. **整合修正輪 4 項**（派單一 agent 收尾）：(a) shared `NoteType` 聯集補 `narrative`/`observations`＋移除 W 的字串 cast；(b) standard 擷取路徑 MAX_TOKENS 韌性——失敗重試一次、輸入內容減半，仍敗才 markFailed（deep 路徑本有容忍，standard 無→大站整 job 失敗，驗證 minor finding）；(c) `MAX_CRAWL_DEPTH` env 化（契約「皆可 env 覆寫」）；(d) deep-research.ts 過時註解修正。
+  3. **接受不修的 nit**：`CRAWL_HARD_CAP_MS` 實為 clamp 常數、30 分鐘上限由 `CRAWL_DEADLINE_DETAILED_MS` 承載——.env.example 已誠實標註，重構命名收益低於風險。
+  4. **追認 W 兩個規格判斷**：EnrichPanel 保留可選官網 URL 欄位（深度研究的起點種子，非模式選項，不違反「單一入口」）；移除二次確認 dance（面板已明示 30–60 分鐘）。
+  5. **文件蒸餾**：00-DECISIONS 補「2026-07-13 補充拍板（決策 21–24）」節；API_FINDINGS 補 §G 社群平台節（指向 SOCIAL_CRAWL_FINDINGS.md）——依 MAINTENANCE：research/* 自由更新；00-DECISIONS 循 15–20 補充拍板節慣例純追加使用者已拍板事項。
+- **考慮過的替代**: standard 路徑只加 try/catch 不重試（否——擷取是 standard 唯一產物，吞錯等於白爬，減半重試才有意義）；NoteType 改由 W cast 長期繞過（否——型別債，2 行可清）。
+- **影響**: 整合修正 agent 交辦；00-DECISIONS、API_FINDINGS、（本則）ROM；修正完成後彙整 commit 提案給使用者。
+
+### 2026-07-13 11:36 | R 路 6 gap 裁決批＋W 與驗證平行派工
+- **誰決定**: Fable（依 R agent 回報裁決）
+- **決策**:
+  1. **reindex 路徑接受 `/api/research/companies/:id/reindex`**（契約字面是 `/api/companies/:id/reindex`，但 router 掛載檔不在 R 所有權、且 enrich 等研究端點本就在 research router）——W 與文件一律以實作路徑為準，不再要求動 index.ts。
+  2. **social_links 落庫走 core.db＋provenance.record（orchestrator 內）追認**：避免動凍結接縫 ports.ts 的 CompanyRepository，沿 jobs.ts 的 sanctioned DbPort 慣例，零接縫變更。
+  3. **ports.ts `NoteRepository.upsertSingletonNote` 純新增追認**（向後相容；noteType 用 raw string 避免動 shared NoteType 聯集）。
+  4. **研究 tunable 維持「模組內讀 process.env」既有慣例**，僅 `YOUTUBE_API_KEY`（秘密）進 config.ts——契約「env 全由 R 改 config.ts」指所有權而非集中化，不另要求重構。
+  5. **pg 方言 migration 013/014 本機無 Postgres 未驗**——接受，列入**部署 checklist**：上 Cloud SQL 前先冒煙（DEPLOY 流程時處理）。
+  6. **Threads best-effort（撞 consent/login 牆即 skip＋log）確認**＝契約原意。
+  7. **派工**：W（前端）即刻派出——換皮 session 正佔用 apps/web（layout/page/globals/AppShell/messages/home），W 檔案集與其互斥（EnrichPanel/NotesTab/HUD transcript/InfoCardStream），messages 兩檔**只准 Edit 追加、動手前重讀、嚴禁 Write 整檔**；同時平行派 fresh-context 對抗驗證（server 側 R+M 成果，不等 W）。
+- **脈絡與理由**: R 完成全部驗收（typecheck 全綠、crm 49/49、server 95/95）；6 個 gap 全為「契約字面 vs repo 現實」的合理偏離，無一違反產品決策；兩 session 共用工作樹是現實約束，以檔案集互斥＋Edit 紀律管控。
+- **考慮過的替代**: 堅持契約字面 reindex 路徑（否——要越權動 index.ts，收益只有路徑美觀）；等換皮 session 結束再派 W（否——W 檔案集可做到互斥，等待只是空耗）。
+- **影響**: W 交辦 prompt、驗證交辦 prompt；DEPLOY 階段 checklist＋pg 冒煙；契約 v1.0 字面不改（偏離以本則為準）。
+
+### 2026-07-13 11:13 | M 路 gap 裁決批（新訊號持久化／youtubeApiKey 選填／prompt 邊界追認／詞彙對齊）
+- **誰決定**: Fable（依 M agent 回報的 4 個 gap 裁決；補充指令已 SendMessage 給仍在跑的 R agent）
+- **決策**:
+  1. **新訊號要持久化**（採 M 建議 A）：`meeting_signals` 的 CHECK 只列 9 類，`person_mention`/`topic_shift` 落庫會靜默失敗 → 由 R 加 **migration 014**（雙套）放寬 CHECK 至 11 類＋落庫/讀回測試。否決 B（僅會中即時、不持久化）——會後回顧需要完整訊號帳。
+  2. **`config.ts` `youtubeApiKey` 改選填**：R 原加必填導致 4 個不在任何人所有權內的測試 fixture typecheck 掛掉；缺 key＝優雅 skip 本來就是契約行為，選填是正確形狀（也免動 4 個測試檔）。
+  3. **追認 M 動 `analysis/gemini-analysis.ts` SYSTEM prompt**：該檔在 M 所有權清單外，但契約 §4.2 明定「分析 prompt 同步更新」為 M 職責、不改則新訊號功能死；只動一處 prompt 字串，越界可接受，後續該檔歸 realtime 維護面。
+  4. **embeddings entity_type 詞彙以 M 為準**：契約凍結了 chunk 來源但漏凍字面值 → 指令 R 寫 indexer 時對照 `realtime/retrieval.ts` 的 collectWhitelist/kindOf 詞彙（唯讀對照、不得改 M 檔），對不齊回報不得各寫各的。
+- **脈絡與理由**: M 路完成（server 79/79、CRM 46/46、6 新測試），守「回報 gap 不自創」規矩沒有變通，4 個 gap 全數上呈——契約漏洞（CHECK 清單、entity_type 字面值）由指揮官補裁，避免 R/M 各自假設漂移（L5 教訓的正確運作範例）。
+- **考慮過的替代**: 見各項否決註記；另考慮過整合階段才修 youtubeApiKey fixture（否——改選填一行解決，不用碰 4 個測試檔）。
+- **影響**: R 任務追加三項（migration 014、config 選填、詞彙對齊）；契約 v1.0 不改版（裁決以 ROM 為準，整合驗證時一併檢查）。
+
+### 2026-07-13 10:48 | 爬蟲專輪路線拍板：Meta 走 grounding-only＋深研究 30–60 分鐘級＋Fable 設計契約
+- **誰決定**: 使用者（兩項 AskUserQuestion 拍板）＋Fable（執行層設計批）
+- **決策**:
+  1. **使用者拍板 A——Meta（FB/IG）取得路線＝只用 Gemini grounding**：靠 Google 索引（2025-07-10 起索引 FB/IG 公開專業帳號）間接取得，零新增成本與帳號；**不接 Apify** 第三方（日後深度不夠可再升級）；自建 Playwright 爬 FB/IG 亦否決（反爬最兇＋零 stealth 起步）。Threads＝自建無登入 Playwright 爬公開頁；YouTube＝官方 Data API v3（**前置：使用者需開一把免費 YOUTUBE_API_KEY**）＋Gemini 原生 YT URL 理解。一律不做登入態爬取（ToS/封號）。
+  2. **使用者拍板 B——單公司深研究天花板＝30–60 分鐘級**：多輪迭代研究（grounding 追問 2–3 輪）＋官網深爬頁數大幅放寬＋四平台社群，全部 env 可調；token 成本靠 admin 用量儀表板追蹤。否決「數小時級研究到乾」與「維持 10 分鐘級」。
+  3. **Fable 設計批（契約凍結於 `docs/RESEARCH_UPGRADE_CONTRACT.md` v1.0，要點）**：
+     - 社群來源＝YouTube/Threads 做 `SocialFetcher` 產統一 `SourceText` 注入 DeepResearchBundle（[S#] provenance 自動繼承）；FB/IG 做成 deep 研究的社群 grounding 查詢模板集（不做 fetcher）；帳號發現＝官網爬取抽 social 連結＋grounding 查官方帳號，落 `companies.social_links`（migration 013 雙套）。
+     - 筆記區＝沿用多型 `notes` 表，兩個**單例** AI 筆記 per company：`narrative`（zh-TW 平鋪直敘公司型態與狀況、pinned）＋`observations`（未歸類情報 bullet list、每條帶來源 URL），以 (org,company,note_type) 冪等 upsert；extractor schema 加 `narrativeZh`＋`uncategorized[{text,sourceIndex}]`，prompt 明令不准丟情報。
+     - 深廣預算重設（env 預設）：CRAWL_HARD_CAP_MS 300s→1800s、MAX_CRAWL_PAGES 28→150、MAX_CRAWL_DEPTH 2→3、DEEP_RESEARCH_BUDGET_MS 150s→1200s、RESEARCH_JOB_TIMEOUT_MS 600s→3600s、新 DEEP_RESEARCH_ROUNDS=3（無新事實提早停）＋SOCIAL_FETCH_BUDGET_MS=600s。UI 拿掉快速/標準選項、deep 成唯一研究入口（standard 保留給 URL 匯入內部用）。Cloud Run 長 job 需 CPU always-allocated——寫入 DEPLOY.md 註記，部署時處理。
+     - 會中消費＝補嵌入管線（research job 收尾建索引 `buildCompanyIndex`＋手動 `POST /companies/:id/reindex`）；檢索白名單擴 notes/products/news；signals 加 `person_mention`/`topic_shift`；說話者 wire enum 不變、加選填 `speakerLabel`（LLM 帶 CRM contacts 名單推斷多人）；CRM 補充卡沿用既有 InfoCard 形狀。
+     - 派工＝3 路平行（R：research 引擎／M：realtime 會中／W：web 前端），檔案所有權互斥防衝突，config.ts 只歸 R、protocol 只歸 M；完成後另派 fresh-context 對抗驗證（含攻擊者憑證測 /reindex）。
+- **脈絡與理由**: 4 路偵察證實——嵌入管線生產未實作（索引空→會中 CRM 卡端到端不出）、schema 外情報被靜默丟棄、deep bundle 有天然社群插入點、FB/IG 自爬不可行。使用者選最低成本 Meta 路線與中檔深度預算。
+- **考慮過的替代**: Apify（否決——使用者選 grounding-only）；notes 另開新表（否決——多型 notes 表＋NotesTab 已上線，加 note_type 即可）；每條未歸類情報一筆 note（否決——表膨脹，改單例 bullet list）；把嵌入建索引放 M（否決——落庫收尾在 R 的 orchestrator，避免跨 agent 同檔）。
+- **影響**: 新契約檔 RESEARCH_UPGRADE_CONTRACT.md；apps/server research/realtime、migration 013、apps/web；API_FINDINGS 待補社群節指標（收尾做）；00-DECISIONS 待實作驗證後蒸餾補列。
+
+### 2026-07-13 11:20 | 首頁重設計＋全站換皮設計契約（側欄 Shell、參考 ezpage）
+- **誰決定**: 使用者（三項指示）＋Fable（設計拍板）
+- **決策**:
+  1. **使用者指示**：(a) 首頁醜、重設計——左側改可收折（漢堡）導覽欄、右側大區域顯示內容；(b) 整體 UI 用 frontend-design skill 重設計；(c) 先本地看過才部署；(d) 重申工作型態＝Fable 指揮官、Opus 執行（實作也派 Opus，Fable 只做決策）；(e) 參考 `Desktop/ezpagesite` 的前端設計。
+  2. **Fable 設計拍板**（完整契約見 session scratchpad `design-contract.md`，要點）：
+     - **深色「會議控制室」語言**：保留品牌紫 `#8b5cf6` 為主色（品牌連續性＋studio/present 共用 token 風險最低）；**廢除紫→粉漸層**（AI 感最重的元素），`--mc-accent-2` 從粉 `#ec4899` 改靛藍 `#6d7cff`；引入極少量萊姆 `--mc-hi #d8f651` 當「live 訊號色」簽名點綴（live kicker 圓點/首頁 rail 脈衝/live 狀態）。
+     - **ezpage 移植手法**：token 分層（panel/card/elev/field＋r-sm/md/lg 圓角刻度）、主按鈕 hover 上浮＋色影、輸入框聚焦光環、側欄選中態＝低透明紫底＋內光、mono kicker（Geist Mono via next/font）。
+     - **Shell**：AppShell 從 TopBar 改 248px 側欄（rail 64px 可收折、localStorage 持久、<880px off-canvas＋scrim）；導覽按會議生命週期分組（工作台／會前準備／會中進行／對練／管理），**present/copilot/hud 一律另開分頁**（無 chrome 獨立介面）；補語言切換器＋修硬編碼「登出」。
+     - **首頁**：改為 AppShell 內儀表板；簽名元素＝三階段流程 rail（PRE→LIVE→DRILL，萊姆光點巡航，reduced-motion 護欄），6 個 surface 卡就位各階段；會中組帶雙帳號提示文案。**首頁因此納入 AuthGuard＝未登入導 /login**——邀請制 SaaS 正確行為，且消掉舊首頁公開曝露 present/copilot/hud 連結的 I3 縱深風險（UIUX_DESIGN_BRIEF §三本有此要求）。
+     - **收斂債一併清**：死 token `--mc-surface-2` 補定義、圓角 5 種值收斂 3 檔、重複 keyframes 去重、硬編碼輸入底色 token 化、首頁 metaTitle＋icon.svg favicon。
+- **考慮過的替代**: (a) 換成 ezpage 的淺色白底藍——否決：present/HUD/studio 深色且共用 token，淺色化波及簡報視覺、風險大；(b) 主色跟著 ezpage 換電光藍——否決：紫是既有品牌識別，deck 主題沿用中；(c) 首頁維持裸頁不進 AuthGuard——否決：brief 目標 IA 就是登入後儀表板，裸頁還曝露 I3 面。
+- **影響**: apps/web（globals.css/AppShell/首頁/messages/layout 字體/icon.svg）；I3 三頁不動；studio-present.css 不動（token 耦合面由實作 agent 回報）。實作/驗證/截圖全派 Opus；本地過目後才 commit＋部署（硬規則 10）。
+
+### 2026-07-13 10:33 | 爬蟲擴社群媒體＋CRM 筆記區＋深廣優先＋會中 CRM 補充資訊（使用者四項指示）
+- **誰決定**: 使用者
+- **決策**:
+  1. **研究爬蟲要能爬社群媒體**——FB、IG、Threads、YouTube（現況大多只爬官網）。
+  2. **CRM 加「筆記區」**：結構化欄位歸類不進去的情報，不可丟棄——讓 AI 用平鋪直敘的文字描述該公司的型態與狀況。
+  3. **爬蟲定位＝深與廣**：時間不是問題；明確**不需要**「快速爬蟲」這個概念（現行 CRAWL_HARD_CAP_MS 5 分鐘硬上限、RESEARCH_JOB_TIMEOUT_MS 600s 與此方向衝突，執行層需重新設計時間預算）。
+  4. **會中補充資訊要 based on CRM**：依與客戶交談的內容（注意**雙方可能各不只一位**）顯示補充或額外資訊。
+  5. **重申工作型態**（2026-07-07 拍板之重申）：Fable＝指揮官，指揮 Opus 等效能較低的 agent 做事；指揮官不下場讀程式碼。
+- **脈絡與理由**: 2026-07-09 已立案「爬蟲效果不如預期」（當時拍板＝先記錄、等 admin job 監控有數據再專輪處理）；本次使用者直接給出專輪方向——來源面擴到社群媒體、產出面補「裝不下的情報」的敘事筆記區、時間預算放開換取深廣、會中消費端要真正把 CRM 用起來。
+- **考慮過的替代**: 無（使用者直接指示；執行層方案待 4 路 Opus 調查回報後另記）。
+- **影響**: 待調查後定案——預期涉及 apps/server 研究引擎（orchestrator／crawler／deep-researcher／extractor 與時間上限 env）、CRM schema（筆記區）、會中訊號分析與 HUD 消費端；社群平台 API 事實照規矩先查證不猜（API_FINDINGS 需補社群節）。00-DECISIONS 待設計定案後再蒸餾補列。
+
 ### 2026-07-09 14:10 | 驗收收尾：兩個 P2 邊角取捨接受＋WORKLOG 歸檔
 - **誰決定**: Fable（對抗式驗收 12/12 CONFIRMED-OK 後的殘項裁決）
 - **決策**: (1) **接受** WS 停權閘 fail-closed 取捨——DB 短暫錯誤會 close 4003 斷正常連線，屬 per-connection、重連即恢復，安全性優先；(2) **接受** ASR 記帳冪等 key 邊角——session 完全 dispose 後同 meetingId 復用時 seq 歸零撞舊 key＝**少計不重計**（對使用者有利方向），日後要精確可在 key 加 runtime epoch；(3) WORKLOG 依 MAINTENANCE 三節歸檔（150→56 行，8 節移 `docs/archive/WORKLOG-2026-07-06_08.md`，byte-exact 驗證）。

@@ -3,7 +3,39 @@
   "home": {
     "title": "MeetCopilot",
     "subtitle": "CRM core × DynamicSlide × in-meeting copilot × simulation training",
-    "surfaces": "Surfaces"
+    "surfaces": "Surfaces",
+    "metaTitle": "Workspace · MeetCopilot",
+    "greeting": "Welcome back, {name}",
+    "greetingAnon": "Welcome back",
+    "lead": "Built around CRM intelligence: research prospects before the meeting, get live copilot support during it, and rehearse by voice before you walk in.",
+    "phasePreTitle": "Before the meeting",
+    "phasePreDesc": "Research the prospect, prep the deck",
+    "phaseLiveTitle": "In the meeting",
+    "phaseLiveDesc": "Three views, each in place",
+    "phaseDrillTitle": "Simulation drill",
+    "phaseDrillDesc": "Run a rep before you go live",
+    "liveNote": "During the meeting, share only the \"Slide Stage\" tab; run Meeting Copilot (capture + suggestions) on account B; the HUD can go on a second device.",
+    "crmDesc": "Company & people intelligence with a research engine",
+    "studioDesc": "Generate, edit, and export decks",
+    "presentDesc": "Clean playback view — share this tab",
+    "copilotDesc": "Capture audio + live suggestions, one window",
+    "hudDesc": "Second-device mirror (optional)",
+    "trainDesc": "AI plays the client for live voice practice"
+  },
+  "nav": {
+    "workspace": "Workspace",
+    "pre": "Pre-meeting",
+    "live": "In meeting",
+    "practice": "Practice",
+    "admin": "Admin",
+    "home": "Home",
+    "logout": "Log out",
+    "collapse": "Collapse menu",
+    "expand": "Expand menu",
+    "menu": "Open menu",
+    "closeMenu": "Close menu",
+    "newTab": "Opens in a new tab",
+    "language": "Language"
   },
   "crm": {
     "title": "CRM",
@@ -30,12 +62,25 @@
     "connRetry": "Reconnect"
   },
   "copilot": {
-    "title": "In-Meeting Copilot Capture",
-    "desc": "Start listening, capture the meeting tab audio, and stream it for live analysis."
+    "title": "Meeting Copilot",
+    "desc": "Start listening, capture the meeting tab audio, and stream it for live analysis.",
+    "cockpitKicker": "LIVE COCKPIT",
+    "cockpitLead": "Capture the meeting audio and read live suggestions — in one window.",
+    "captureLabel": "Capture",
+    "hudLabel": "Live suggestions"
   },
   "hud": {
     "title": "HUD",
     "desc": "Live suggestions, research cards, and transcript; accept/skip and deep research."
+  },
+  "enrichPanel": {
+    "deepEntryLabel": "Deep research (full web + social)",
+    "deepEntryDesc": "Full-web news / wiki / public records + the official site + social accounts, with per-field source attribution.",
+    "timeHint": "May take 30–60 minutes. You can leave the page and come back for the results later.",
+    "start": "Start deep research"
+  },
+  "notesTab": {
+    "aiNarrative": "AI narrative"
   },
   "train": {
     "title": "Simulation Training",

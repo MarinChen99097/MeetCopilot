@@ -34,6 +34,175 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-13 15:10 | cockpit 收尾三修：嵌入式 HUD 單欄直向流＋會議標題 input id/name＋雙 h1 降級
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/app/globals.css`, `apps/web/components/copilot/CopilotView.tsx`
+- **改了什麼**:
+  - **嵌入式 HUD 改單欄直向流（globals.css，僅 mc-cockpit 區塊 :1338）**: `.mc-cockpit__hud > .mc-hud` 由 `{max-width:none;margin:0;padding:0}` 補 `display:flex; flex-direction:column; align-items:stretch`。根因：全域 `@media (min-width:860px){.mc-hud{display:grid;grid-template-columns:1fr 1fr;align-items:start}}`（特異度 (0,1,0)）滲進嵌入式 HUD → 佔位／連線中單子節點被擠右欄左半、連線後巢狀雙欄空狀態右下留洞。此 selector 特異度 (0,2,0) > 媒體查詢，同時覆蓋 `.mc-hud` 與 `.mc-hud--connecting` 兩態的 grid；`align-items:stretch` 抵銷媒體查詢的 `align-items:start`（否則卡片縮成內容寬、左靠）；`flex-direction:column`＋`gap:14px` 承自 base `.mc-hud`(:1051)。卡序維持 DOM 順序（佇列→逐字稿→情報卡→深查）。**僅動 mc-cockpit 區塊，standalone `.mc-hud` 的 >=860px 雙欄 grid 零影響（selector 皆掛 `.mc-cockpit__hud` 下）**。
+  - **cockpit 會議標題 input 補 id/name（CopilotView.tsx SetupPanel）**: 標題 `<input>` 加 `id="meeting-title" name="meeting-title"`（照 AuthForm 慣例，消瀏覽器「form field 應有 id/name」告警）。
+  - **雙 h1 修正（CopilotView.tsx）**: cockpit 頁 h1＝CockpitView 頁首「會中副駕」；CopilotInner 主渲染「會中副駕 · 擷取端」與 SetupPanel「開始一場會議 session」原皆 `<h1>`→ **僅 embedded 時降 `<h2>`**（`const Heading = embedded ? "h2" : "h1"`，class `mc-cap__h1` 不變＝樣式不動；React 動態 tag 同檔既有 `const Root=rootTag` 手法）。SetupPanel 加選填 `embedded` prop，呼叫點傳 `<SetupPanel … embedded={embedded} />`。**standalone（`CopilotView` 無參包裝，embedded=false）仍 h1，零回歸**。HudInner 嵌入路徑無 h1（唯一 h1 `mc-hud__connect-title` 只在 `!embedded` 的 ConnectPanel），佇列卡已 h2 → 不動；HudView.tsx 未觸。
+- **為什麼**: 指揮官看圖驗收 cockpit 三收尾——媒體查詢雙欄 grid 滲進嵌入式 HUD（對抗式驗證確認 :1338 未 reset display）、會議標題 input 缺 id/name、cockpit 頁雙 h1（初始 setup 相為 CockpitView h1＋SetupPanel h1）。
+- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（EXIT=0）。git 現況：working tree **非乾淨**（HEAD 尚無 cockpit；含前序未 commit 的整組 cockpit 工作＋server/packages 變更），故 `git diff HEAD` 含大量非本次改動；本次改動由 Edit 精確字串替換保證僅：globals.css mc-cockpit 區塊 1 條規則＋5 行註解、CopilotView.tsx 上述 h1／embedded／input 三點。/hud standalone 行為零改（CSS scope 於 `.mc-cockpit__hud`、h1 降級 gate 於 embedded、HudView.tsx 未動）。未 commit（硬規則 10）。
+
+### 2026-07-13 13:25 | 研究品質兩缺口：社群帳號發現擴多頁＋擷取器補缺｜uncategorized 來源轉址還原
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/research/crawler.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/social-discovery.test.ts`(新), `apps/server/src/research/deep-notes.test.ts`
+- **改了什麼**:
+  - **缺口1(a) 多頁社群 hrefs（crawler.ts）**: 抽純函式 `filterSocialHrefs(hrefs)`（export，http/https＋`classifySocialUrl` 命中四平台、去#hash、去重）；`collectSocialHrefs` 改用之。`fetchMany` 結果型別加 `social:string[]`，每頁（不論 `collect`，末層頁也掃）呼叫 `collectSocialHrefs(wp)`；BFS 迴圈把 `r.social` 併入 `socialSet`（跨頁 Set 去重）。Before：只掃首頁 `<a href>` → 首頁 icon JS 渲染/非錨點就漏。After：掃**所有已爬頁面**的錨點。
+  - **缺口1(b/c) 擷取器補缺（deep-extractor.ts）**: `ExtractedDeep`＋`DeepExtraction` 加 `socialLinks`；RESPONSE_SCHEMA 加 `socialLinks`(object youtube/facebook/instagram/threads 各選填 STRING)；SYSTEM 加一句「僅**官方**帳號、須從來源確認、不確定就省略、勿臆造」。新 `toDeepSocialLinks(v)` 機械保險：**只接受 https＋`classifySocialUrl` 命中四平台**，其餘（http/非四平台/非法 URL）丟棄、跨 key 去重。import `./social/discover.classifySocialUrl`。
+  - **缺口1(b) 合併優先序（orchestrator.ts）**: `discoverHandles(seedSocialUrls, siteRaw?.socialLinks, deep?.socialLinks)`——擷取器排最後（先出現者勝＝**官網爬到的贏、擷取器只補缺**）；落庫/provenance 路徑不變。
+  - **缺口2 uncategorized 轉址（orchestrator.ts resolveMerged）**: `used` 解析集合加 `deep.uncategorized.forEach((u)=>add(u.sourceUrl))`。Before：只涵蓋 companyProvenance/people/competitors/news/funding → 只出現在 uncategorized 的 redirect 從未被解析。After：同一 30s 預算、best-effort（解不到留原 URL）納入解析。
+  - **deep-notes.test.ts**: 既有 `DeepExtraction` 假物件補 `socialLinks: []`（新增必填欄）。
+- **為什麼**: Connact AI 本地 E2E 實測發現 (1) companies.social_links 落空（首頁 icon 未掃到）、(2) observations 部分 [來源] 停在 vertexaisearch grounding redirect（resolveMerged 漏 uncategorized）。
+- **驗證**: 全 workspace `npm run typecheck` 綠（shared/crm/admin/server/web）；server 測試 111/111（含新檔 5 測：多頁 hrefs 合併去重／擷取器 socialLinks 機械保險／官網 vs 擷取器合併優先序（爬取贏、補缺）／uncategorized redirect 進解析集合 mock resolver）；crm 49/49。實測重跑 Connact AI deep（job 019f59ec…done, fields=32）：**observations 7 條來源、0 條 redirect**（前三＝cake.me×2／tcloud.gov.tw），全 54 筆 provenance＋3 筆 notes 皆 0 redirect（缺口2 ✓）；**social_links 仍空**——經查為可接受結果：9 個已爬 connact.ai 頁（含 aboutus/各 solution/request）渲染 DOM 無任何四平台錨點、server HTML 亦無社群 URL，且 grounding narrative 明言「Connact AI 並未將 Facebook 或 Instagram…作為活躍管道」→ 擷取器無官方社群 URL 可填、依「不確定不填」正確留空。未 commit（硬規則 10）。
+
+### 2026-07-13 13:05 | 會中副駕 cockpit（交付二）：/copilot 擷取端＋HUD 合為同一視窗＋文案
+- **工作區**: apps/web
+- **類型**: feat
+- **檔案**: `apps/web/components/copilot/CockpitView.tsx`(新), `apps/web/components/copilot/CopilotView.tsx`, `apps/web/components/hud/HudView.tsx`, `apps/web/app/[locale]/copilot/page.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **改了什麼**（依 ROM 2026-07-13 14:25 方案 A）:
+  - **CopilotView.tsx 抽可嵌版**: `CopilotInner` 改 `export` 並加選填 props `{embedded?, creds?, onCreds?, rootTag?}`（預設 `{}` → 無參呼叫等同舊行為）。`const Root = rootTag`（"main"|"section"）取代所有 `<main className="mc-cap">`／SetupPanel 的 `<main className="mc-cap mc-cap--setup">`（React 動態 tag，class 不變）。creds：embedded 時鏡射 `credsProp`（parent 控制，effect deps `[embedded, credsProp]`；SetupPanel 建會後 parent 回寫使 credsProp 變→本 side 由 setup 翻 idle）；standalone 時仍 `readMeetingCreds()`（effect 一次，deps 恆定＝等同舊 `[]`）。新 `adoptCreds`（setCreds＋phase idle＋`onCreds?.()`）取代 SetupPanel inline onReady——standalone 無 onCreds＝行為不變。`CopilotView`(standalone 包裝)保留 `<ToastProvider><CopilotInner/></ToastProvider>`。
+  - **HudView.tsx 抽可嵌版**: `HudInner` 改 `export`＋同款 props（無 onCreds；HUD 不建會）。`Root` 同上覆蓋所有 `<main className="mc-hud …">`。embedded 且無 creds → 顯示輕量「尚未開始 session」placeholder（復用既有 `mc-hud__connstate` 樣式），**不**出 ConnectPanel 貼連結面板（cockpit 由擷取端建會）。fail banner 與 ConnectingState 的「重新貼連結」按鈕在 embedded 隱藏（`embedded?null:…`／`showRelink={!embedded}`；ConnectingState 加選填 `showRelink=true`）——避免 cockpit 清 creds 死路。**standalone HudView（`<HudInner/>` 無參）行為完全不變**：Root="main"、creds 讀 storage、ConnectPanel/relink 全在。
+  - **CockpitView.tsx（新）**: 單一 `<ToastProvider>`＋單一 `<main className="mc-cockpit">`；grid 兩欄——左 `mc-cockpit__cap`（340px 擷取控制＝`<CopilotInner embedded rootTag="section">`）＋右 `mc-cockpit__hud`（建議流主戲＝`<HudInner embedded rootTag="section">`）。creds 由 cockpit 持有：mount 時 `useEffect`→`readMeetingCreds()`（**非** lazy init，避 SSR/hydration mismatch），SetupPanel 建會經 `onCreds` 回寫——HudInner 立即拿 creds 連線、免重整。兩側各開一條 WS（capture＋hud）到同會議（hub 無 user/role 上限；HUD 內容只推 hud role，故雙連線）。
+  - **copilot/page.tsx**: render 由 `CopilotView`→`CockpitView`；檔頭註解更新為 cockpit 融合敘述、保留「零 AppShell chrome（I3）」精神（grep 確認全頁/元件無 AppShell import，僅註解提及）。
+  - **globals.css（檔尾追加）**: 新增 `.mc-cockpit`／`__bar`／`__title`／`__lead`／`__grid`（`340px minmax(0,1fr)`）／`__cap`／`__hud`（panel/elev 底＋border＋r-lg）／`__collabel`（mono kicker）＋ `.mc-cockpit__cap>.mc-cap`／`.mc-cockpit__hud>.mc-hud` 覆蓋（max-width:none/margin:0/padding:0 使嵌入面填滿欄）＋ `.mc-cockpit__hud>.mc-hud--connecting{min-height:0}`（消 60vh）＋ `<1100px` 單欄堆疊（控制在上）。**全部新 `mc-cockpit*` class、僅追加檔尾、零改既有 mc-cap/mc-hud/mc-topbar 區塊**；無新動效。
+  - **文案（messages 只 Edit 對應 key）**: `copilot.title` zh「會中副駕擷取端」→「會中副駕」／en「Copilot Capture」→「Meeting Copilot」；`home.copilotDesc`／`home.hudDesc`（第二裝置鏡像（選配）／Second-device mirror (optional)）／`home.liveNote` 三語同步；新增 `copilot.{cockpitKicker,cockpitLead,captureLabel,hudLabel}` 兩語齊備。HomeDashboard/AppShell 未改（自動吃 `home.*Desc`／`copilot.title`）。
+- **為什麼**: 使用者拍板擷取端與 HUD 應同視窗（一邊聽一邊看建議）；/hud 獨立頁降為選配第二裝置鏡像（不動）。I3 未削弱（帳號 B 分頁永不被分享、cockpit 零播放元素）；I2 由交付一 server 端身分驗證把關。
+- **驗證**: 全 workspace `npm run typecheck` 綠（shared/crm/admin/server/web，EXIT=0）；zh/en key parity 184/184、無單邊 key、4 新 cockpit key 兩語俱在。grep：copilot/page.tsx 無 AppShell import；/hud 仍 render 標準 `HudView`；globals.css 我方 diff 全 `mc-cockpit`（14 行）、未刪任何既有 mc-cap/mc-hud/mc-topbar 規則（列出的刪除均係平行換皮工作線 topbar 移除/圓角 token 化，非本次）。未跑瀏覽器實測（本輪 typecheck＋靜態核對）。未 commit（硬規則 10）。
+
+### 2026-07-13 12:55 | 會中副駕 cockpit（交付一）：I2 isPresenter role 裂縫修正＋ws-server 層 authz 測試
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/realtime/ws-server.ts`, `apps/server/src/realtime/ws-token.ts`, `apps/server/src/realtime/patch-service.ts`, `apps/server/src/realtime/ws-presenter-authz.test.ts`(新), `docs/API_CONTRACT.md`
+- **改了什麼**:
+  - **I2 role 裂縫修正（ws-server.ts:96）**: `meta.isPresenter` 由 **`claims.userId === claims.presenterUserId && role === "present"`** 改為**純身分** `claims.userId === claims.presenterUserId`。根因：suggestion_action/info_card 等 HUD 內容只推給 `hud` role，而批准（suggestion_action/page_commit）走 `isPresenter` 閘——原閘要求 `role==="present"`，故現行獨立 /hud（及新 cockpit 的 hud 連線）送批准會被 `forbidden_not_presenter` 拒。安全論證：wsToken 由 presenter 建會議時鑄造、內含 presenterUserId，role 是連線時自選的 query param（任何持 token 者本就可自稱 present），role 不構成安全邊界、只擋掉正當用法。isPresenter 的**使用點清單**：ws-server.ts:96(定義)、:168(page_commit 閘)、:187(suggestion_action 閘)、:197(deep_research 閘 `role!=="hud" && !isPresenter`)、types.ts:22(ConnMeta 型別)、測試 hub-endmeeting-authz.test.ts:72／ws-async-gate.test.ts:66(直接設 true，不受定義變更影響)。**patch-service.ts 的 `if(!presenterAuth) return` double-check 邏輯不動**（縱深防禦保留），僅同步其 docstring(:7) 與 ws-server 頂部/ws-token 頂部三處描述舊公式的註解。
+  - **ws-server 層 authz 測試（新檔，+6）**: `ws-presenter-authz.test.ts` 用真 `attachRealtimeWs`＋fake hub（記錄 patch.act/broadcastState/setDeckCommitted 是否被呼叫）＋always-active fake core（隔離出「presenter 身分閘」為唯一變數），經真 ws client 送訊觀察：(a) presenter token＋role=hud/present → suggestion_action 通過（patch.act 被呼叫、無 forbidden）；(b) presenter token＋role=hud → page_commit 通過（broadcastState/setDeckCommitted 被呼叫）；(c) 非 presenter userId token（同會議）→ suggestion_action 在 hud/present/capture **每個 role 皆** forbidden_not_presenter、patch.act 未呼叫；(d) 非 presenter → page_commit（role=present，舊逃生門）被拒；(e) 跨 org 非 presenter token＋role=present 被拒；(f) 跨 meeting token → handshake close 4001 unauthorized、訊息閘不可達。**補回 CI 盲點**：既有 realtime-authz.test.ts 只測 patch.act(presenterAuth=false)，未經 ws-server 算 isPresenter，故 role 裂縫過關。
+  - **API_CONTRACT §6 授權敘述更正**: 「只接受 presenter 的連線」→「依 wsToken 身分（userId===presenterUserId）純身分判定、與 role 無關；cockpit 由 presenter 從 hud 連線批准；非 presenter 任何 role 一律拒 forbidden_not_presenter」，與 §6 送訊表 `suggestion_action // hud` 一致。**未動 packages/shared/src/protocol.ts**（另一工作線編輯中；其註解矛盾僅回報）。
+- **為什麼**: 使用者拍板擷取端與 HUD 合為同一視窗（cockpit）；偵察發現 role 裂縫會讓 cockpit/獨立 /hud 的批准被誤拒——本次正是把 I2 修對（批准仍 100% server 端身分驗證，且非 presenter 攻擊者一律被拒）。
+- **驗證**: apps/server `npx vitest run` 全綠 **106/106**（基線 100＋6 新）；ws-presenter-authz.test.ts 單跑 6/6。I1/I3 未觸及。未 commit（硬規則 10）。
+
+### 2026-07-13 18:40 | /simplify 行為不變清理 8 項（會中熱路徑白名單快取＋擷取器共用模組＋SSRF/社群單一來源）
+- **工作區**: apps/server
+- **類型**: refactor（純清理，零行為改動；四路清理審查已裁決，只套用清單、不找 bug）
+- **檔案**: 新增 `apps/server/src/research/extract-shared.ts`；改 `apps/server/src/realtime/retrieval.ts`, `apps/server/src/realtime/orchestrator.ts`, `apps/server/src/research/extractor.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/deep-rounds.ts`, `apps/server/src/import/extract.ts`, `apps/server/src/research/social/http.ts`, `apps/server/src/research/crawler.ts`
+- **改了什麼**（項次對齊審查裁決，行為逐一等價）:
+  - **#1 會中熱路徑白名單快取**: `retrieval.ts collectWhitelist` 原每個分析窗對 contacts/notes/products/news 各 1 次 org-scoped 讀。改：`collectWhitelist` 匯出＋加選填 `contactIds`（提供則沿用不重讀 contacts）；`RetrievalOptions` 加 `entityIds?`（提供則 retrieveInfoCards 略過 collectWhitelist）。orchestrator 新增 per-session `contactsCache`（ContactSummary[]）＋`whitelist`（string[]）兩 Map，`contactsFor()` 單讀 contacts 供 roster 與白名單**共用一份**（消 orchestrator 對 `contacts.list` 的重複讀），`whitelistFor()` 快取整場靜態白名單；`disposeSession` 一併清兩 Map。未提供 entityIds 的獨立/單測路徑仍走內部 collectWhitelist（行為不變）。
+  - **#2 resolveTrust 平行化**: retrieveInfoCards 先序列做 score 過門檻＋seen 去重取存活者（seen 依 hits 序就地變異，跨窗語意不變），再 `Promise.all` 平行查 trust（上限 TOP_K=3），依存活序建卡——卡片順序/內容/trust 與序列版逐一致。
+  - **#3 擷取器共用模組**（`extract-shared.ts`）: 抽 `UncategorizedIntel` 介面、`cleanStr`、`dedupUncat(items, resolveUrl)`（cleanStr→去空→去重→cap MAX_UNCATEGORIZED=25）、`NARRATIVE_UNCAT_SCHEMA`（narrativeZh/uncategorized responseSchema 片段，兩擷取器逐字相同→spread 進兩邊）。extractor/deep-extractor/research-orchestrator 三處 narrativeZh 正規化（inline ternary／local cleanStr／`?.trim()`）統一為 `cleanStr`。**SYSTEM prompt 兩句 narrativeZh/uncategorized 刻意不合併**：站點抽取 vs 全網合成措辭各自貼切（欄位集不同、deep 帶 [S#] 標註）→ 各檔逐字保留（審查允許保留差異）。
+  - **#4 移除冗餘 re-filter**: research/orchestrator `writeSingletonNotes` 的 `(data.uncategorized ?? []).filter(...).slice(0,25)`→`data.uncategorized ?? []`（上游 dedupUncat 已 trim/去重/cap）。
+  - **#5 移除死參數**: deep-rounds.ts follow-up round 的 `includeSocial:false`（queriesForRound 在 includeBaseQueries=false 時不讀 includeSocial，deep-research.ts:168-171）→ 移除。
+  - **#6 magic number 具名化**: realtime/orchestrator inferSpeaker 的 `.slice(-6)`→新具名常數 `SPEAKER_CONTEXT_MAX=6`（與 RETRIEVAL_CONTEXT_MAX 語意不同故另立，值不變）。
+  - **#7 pinnedAgent 單一來源**: import/extract.ts `pinnedAgent` 加 `export`＋`timeoutMs` 參數（呼叫端傳自己的 FETCH_TIMEOUT_MS）；social/http.ts 刪本地逐字複製，改匯入複用並**保留自己的 12s**（行為不變）；http.ts 移除已不用的 `Agent` import。
+  - **#8 社群網域單一來源**: crawler.ts `SOCIAL_HOST_RE` 刪除，`collectSocialHrefs` 改用 `social/discover.classifySocialUrl(href) !== undefined`（保留原 http/https 協定守衛；discover 只 import ./types，無循環依賴）。兩 regex 語意等價（唯一極端差異＝ www.youtu.be 子網域，現實不存在）。
+  - **#9（選做）indexer contacts N+1**: **skipped**。`contacts.list` 回 `ContactSummary`（id/fullName/title/seniority/decisionPower/verifiedStatus/photoUrl），**不含** collectSources 需要的 titleZh/department/bio/backgroundSummary/backgroundSummaryZh → 必須 findById 取全欄，保留原樣。
+- **為什麼**: /simplify 四路清理審查裁決後套用（reuse/去重/熱路徑效率/altitude），行為完全不變（對外 API、落庫內容、卡片輸出、prompt 語意皆不動）。**嚴禁碰 apps/web**（平行換皮 session）——本批一字未動 apps/web。
+- **驗證**: 全 workspace typecheck 綠（shared/crm/admin/server/web）；server 100/100、crm 49/49（與套用前基線同數字，斷言未放寬）。未 commit（硬規則 10）。工作樹另含多個平行/前輪未 commit 變更（apps/web 換皮、config/budget 等），非本批產出。
+
+### 2026-07-13 18:10 | 爬蟲專輪 code-review 3 修：trust 死碼（card→base 對映）＋索引殘留 chunk 清理＋多輪整場預算閘門
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/realtime/retrieval.ts`, `apps/server/src/research/indexer.ts`, `apps/server/src/research/deep-rounds.ts`, `apps/server/src/realtime/mid-meeting-crm.test.ts`, `apps/server/src/research/indexer.test.ts`, `apps/server/src/research/deep-rounds.test.ts`
+- **改了什麼**:
+  - **Finding 1（trust 死碼）**: `resolveTrust` 原直接以 embedding 命中列的 entity_type（`company_card`／`contact_card`／`company_product_card`／`company_news`／`note`，由 indexer collectSources 寫入）呼叫 `provenance.listForEntity`。但 field_provenance 記的是**基底型別**（repos-prospect.ts crawl/human：`company`(:287)／`contact`(:437)；company_products.update()：`company_product`(:505)）——查證後確認 **news 子表與 note 從不寫 provenance**（children 走 upsertChild 零 provenance、無 news/note update 路徑）。故 card 別名做 exact-match 永遠 0 列 → `verified` 分支不可達、人工驗證資料在會中卡永遠顯示 crawler。**修**＝新增顯式對映表 `PROVENANCE_BASE_TYPE`（company_card→company、contact_card→contact、company_product_card→company_product、company_news→null、note→null）＋ `provenanceTypeFor()`（未列型別沿用原值直查以維持舊行為）；resolveTrust 先對映再查，null（news/note 無 provenance）直接 crawler、不查。頂部與函式 docstring 同步更正。
+  - **Finding 2（陳舊索引殘留）**: `buildCompanyIndex` 對每 entity 只 upsert chunk 0..N-1；內容縮短跨 1000 字邊界後高 index 舊 chunk 殘留、仍可被會中檢索命中出過時卡。**修**＝每個 (entity_type, entity_id) 內層 upsert 迴圈後，`core.db.run("DELETE FROM embeddings WHERE org_id=? AND entity_type=? AND entity_id=? AND chunk_index >= ?", [...,pieces.length])`（org 隔離；未殘留時 no-op；沿用 indexer 既有 raw core.db 存取，未改 packages/crm、無需 dist 重建）。**已知限制**：entity 整個消失（如筆記被刪）的孤兒 embeddings 不在 collectSources 來源內，且 embeddings 表無 company_id 欄可定位同公司同型別列 → 無法在此安全清除（docstring 標注，需另建 GC/schema）。
+  - **Finding 3（預算語意）**: `DEEP_RESEARCH_BUDGET_MS` 經 createDeepResearcher.research 每次呼叫各自 `deadlineAt=now+budget`，而 runDeepRounds 每輪呼叫一次 → 實為**每輪**軟 deadline，docstring 卻稱整場，多輪把 grounding 時間乘上輪數。**修**＝DeepRoundsOptions 加選填 `budgetMs?`（預設 `deepBudgetMs()`）；runDeepRounds 開場記 `overallDeadline=now+budget`，迴圈內 `if (r>1 && Date.now()>=overallDeadline) break`（round 1 一律跑、逾期不開新輪；已在跑的輪不強殺，job timeout 兜底）；模組與 options docstring 更正為整場語意。orchestrator 呼叫端未傳 budgetMs → 走預設，行為對齊。
+  - **測試（+3）**: mid-meeting-crm.test.ts 加「company_card（indexer 實際型別）命中 → 依基底 company provenance 判信任：human→verified／無→crawler」；indexer.test.ts 加「長內容 2+ chunk → 改短重建 → 該 entity 只剩 chunk_index=0、殘留已刪」；deep-rounds.test.ts 加「budgetMs:0 整場預算到期 → 只跑 round 1、不開第 2 輪」。
+- **為什麼**: /code-review 對「爬蟲專輪」未 commit 變更抓到的 3 個確認問題。只碰三實作檔＋其測試；wire/API 形狀不變；I1/I2/I3 未觸及（trust 標記只影響 HUD 卡片誠實度，不碰 deck/approval/播放視圖）。
+- **驗證**: 全 workspace typecheck 綠（crm/shared/admin/server/web）；server 100/100（基線 97＋3 新）、crm 49/49（不變）。未 commit（硬規則 10）。
+
+### 2026-07-13 17:15 | UI 改版實機走查 5 個收尾缺陷（表單深色皮＋登入落點＋側欄 label＋train landmark＋空狀態 icon）
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/components/auth/AuthForm.tsx`, `apps/web/components/auth/GoogleSignInButton.tsx`, `apps/web/messages/en.json`, `apps/web/app/[locale]/train/page.tsx`, `apps/web/app/globals.css`, `apps/web/components/ui/EmptyState.tsx`
+- **改了什麼**:
+  - **#1 登入/註冊輸入框未套深色皮（P0）**: AuthForm 四個 `<input>`（顯示名稱/組織名稱/Email/密碼）都放在 `.mc-field` label 內但**未掛 `.mc-input`**，且 CSS 無 `.mc-field input` 規則 → 落回瀏覽器原生白底 input 貼在深色卡上。修＝每個 input 補 `className="mc-input"`（套 `--mc-field` 深底＋border＋focus 光環）＋補 `id`／`name`（DevTools 對缺 id/name 出 issue）：displayName/orgName/email/password。autocomplete 原本已正確（name／organization／email／new-password｜current-password），保留不動。GoogleSignInButton 等其他區塊未碰。
+  - **#2 登入成功落點改首頁儀表板**: `redirectTarget()` 預設 `/crm` → **`/`**（AuthForm.tsx:16），docstring「route to /crm」同步改「route to the home dashboard (/)」。此函式驅動 email/password 的**註冊＋登入**兩路（onSubmit→router.replace）。原 gap：Google 登入導向在 GoogleSignInButton.tsx（`router.replace("/crm")`），該檔原不在可動清單→**指揮官裁決核准擴充範圍**，已改 `router.replace("/")`（GoogleSignInButton.tsx:75，該檔無 next/redirect prop 機制，依裁決直接落 `/`；docstring「setToken → /crm」同步改「setToken → home dashboard "/"」）。**auth 路徑最終落點**：(a) 註冊（email/password）＝AuthForm onSubmit→redirectTarget(next)→無 next 時 **`/`**（有 invite next 則導回 invite 頁）；(b) 登入（email/password）＝同 onSubmit→**`/`**；(c) Google 登入＝**`/`**（不吃 next——invite 頁的 Google 登入會落首頁而非回 invite，為本裁決已知取捨）；(d) invite 接受＝InviteAcceptView onAccept→`router.replace("/crm")`（**未動**，依指示保留）。
+  - **#3 EN 側欄 label 截斷**: `copilot.title` en「In-Meeting Copilot Capture」（26 字元）在 248px 側欄被 ellipsis（AppShell NAV_GROUPS 用 `copilot.title` 當 labelKey）→ 縮為「**Copilot Capture**」（15 字元，/copilot 頁內標題語意仍成立）。其餘 surface title 英文核對：CRM(3)／DynamicSlide Studio(19)／Slide Stage(11)／HUD(3)／Simulation Training(19)／org.nav.team「Team settings」(13) 皆 ≤20，**不動**。zh 不動（zh copilot.title＝會中副駕擷取端，保留）。
+  - **#4 /train 缺 main landmark**: train 三個 phase 視圖（PersonaPicker／TrainCall／ScoreReport）根元素都是 `<section>`，AppShell 內容區為 `.mc-shell__body` div（非 main）→ /train 無 main landmark。修＝在 `train/page.tsx` 用 `<main className="mc-trainmain">` 包住 `<TrainWorkbench/>`（擇「page 包 main」路徑，不動 phase 機邏輯）。`.mc-shell__body` 非 flex（max-width＋padding＋margin auto），多一層 block main 不改版面；phase section 各自維持既有樣式。
+  - **#5 空狀態 icon 存在感近零**: `EmptyState` 預設 icon＝字元「◦」＋ `.mc-empty__icon{font-size:34px;opacity:.5}`＝深底上一顆半透明小空心圓，像壞圖。修兩處：(a) globals.css `.mc-empty__icon` 升級為 **56px 圓形底座**（flex 置中／margin:0 auto／border-radius:50%／`--mc-accent-soft` 底／`--mc-accent-line` 邊／色 #c4b5fd／font-size:24px，**拿掉 opacity:.5**）；(b) EmptyState.tsx 預設 icon 由「◦」改為清楚的 **inline SVG**（22px inbox/tray 輪廓、stroke currentColor）。三個消費端（CompanyListView／StateBoundary／PersonaPicker）皆用預設 icon → 全站空狀態同步受益；caller 若自帶 icon（emoji/自訂）也照樣進 56px 圓座。
+- **為什麼**: UI 換皮實機走查揪出的 5 個收尾缺陷（指揮官核准的契約範圍擴充）。**present/hud/copilot 一字未改（I3）；apps/server、packages/** 平行工作線未碰。**
+- **驗證**: `apps/web` `npx tsc --noEmit` 綠（TSC_EXIT=0，含 GoogleSignInButton 擴充改動後重跑仍綠）。en/zh key parity＝180/180、無單邊 key（node 遞迴比對 OK）；copilot.title en=Copilot Capture／zh=會中副駕擷取端。未 commit（硬規則 10）。未跑瀏覽器實測（本輪 typecheck＋靜態核對）。
+
+### 2026-07-13 16:50 | 整合收尾：shared NoteType 聯集補值＋standard MAX_TOKENS 韌性＋MAX_CRAWL_DEPTH env 化＋過時註解
+- **工作區**: packages/shared｜apps/web｜apps/server
+- **類型**: fix
+- **檔案**: `packages/shared/src/crm-types.ts`, `packages/shared/dist/*`（重建）, `apps/web/components/crm/NotesTab.tsx`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/crawler.ts`, `apps/server/src/research/deep-research.ts`, `apps/server/src/research/standard-retry.test.ts`（新增）, `.env.example`
+- **改了什麼**:
+  - **shared NoteType 聯集補值（#1）**: `NoteType` 加 `'narrative'`、`'observations'`（原 general|call|email|research），註解標明二者＝研究引擎產出的單例 AI 筆記、非 API 可建；重建 shared dist。shared 無 `NOTE_TYPES` 常數故無需同步（server crm-routes/notes.ts 的 `NOTE_TYPES` 是 API POST 白名單，narrative/observations 非使用者可建，**刻意不加**以保 wire 契約）。`NotesTab.tsx` 的 `isNarrative` 移除 `(n.noteType as string)` cast，改正常 `n.noteType === "narrative"` 型別比對，刪掉多餘 `NARRATIVE_NOTE_TYPE` 常數。
+  - **standard 路徑 MAX_TOKENS 韌性（#2）**: `runStandard` company 分支的 `jobExtractor.toCompany(raw)` 原無容錯——大站（MAX_CRAWL_PAGES 已放寬到 150）輸出被 MAX_TOKENS 截斷會 throw → 整個 enrich job failed。修法（對齊 deep 路徑 runDeep 的 try/catch）：擷取失敗 → 以新 `halveCrawlPages(raw)`（保前半、至少 1 頁）**減半頁面重試一次**；仍失敗才上拋可行動錯誤（訊息含「內容過大」＋原因），由 runJob catch → markFailed。附測試 `standard-retry.test.ts`：第一次 throw、第二次成功→job done 且頁數 [8,4]；兩次 throw→job failed 帶「內容過大」訊息、只重試一次。
+  - **MAX_CRAWL_DEPTH env 化（#3）**: crawler.ts 原固定 `const MAX_CRAWL_DEPTH = 3` → 改 `MAX_CRAWL_DEPTH_DEFAULT=3`＋`_CEIL=6`＋新 `maxCrawlDepth()`（clampEnvMs 讀 env `MAX_CRAWL_DEPTH`，clamp [1,6]），BFS 迴圈於呼叫時讀一次 `maxDepth`；`.env.example` 對應列由「固定常數」改為實 env 說明。
+  - **過時註解（#4）**: deep-research.ts:12 「預設 150s」→ 改正為「預設 1_200_000ms＝20 分，clamp 30s–1800s」（對齊實際 DEFAULT_BUDGET_MS）。
+- **為什麼**: 三實作 agent＋對抗驗證留下的 4 個小項（shared 聯集缺值致前端需 cast／standard 無截斷容錯／深度寫死／註解過時）。範圍受限：只碰指名檔＋其測試＋.env.example＋shared dist，未動 apps/web 換皮中檔案。wire 契約不變（NoteType 純新增聯集值、不動 API 形狀）。
+- **驗證**: 全 workspace typecheck 綠（shared/crm/admin/server/web）；server 97/97（+2 新測試）、crm 49/49（不變）。未 commit（硬規則 10）。
+
+### 2026-07-13 16:30 | 爬蟲專輪前端三塊（WP3 UI／WP2 筆記／WP4.3 HUD）：EnrichPanel 單一深度入口＋NotesTab AI 敘事置頂＋逐字稿 speakerLabel
+- **工作區**: apps/web
+- **類型**: feat
+- **檔案**: `apps/web/components/crm/EnrichPanel.tsx`, `apps/web/components/crm/NotesTab.tsx`, `apps/web/components/hud/TranscriptStream.tsx`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **改了什麼**（依 RESEARCH_UPGRADE_CONTRACT §2/§3/§4.3）:
+  - **EnrichPanel（§3 UI）**: 移除 `MODES`（quick/detailed/deep 三選 radiogroup）＋二次確認 dance（`deepConfirm`/`effectiveDeep`/`chooseMode`/`primaryLabel`）。改為單一深度入口——常數 `DEEP_MODE:CrawlMode='deep'`，`enrich()` 一律送 `mode:'deep'`（payload 形狀不變、不自創欄位）；新增時間提示 `timeHint`（可能 30–60 分鐘、可離開頁面稍後回來）。官網 URL 保留為可選研究起點。**路徑分離證據**：本面板走 `enrich()`（EnrichPanel.tsx:100）→ `/api/research/enrich`；DeckWizard「從網址匯入」走 `extractUrl`/`extractPdf`（DeckWizard.tsx:134,147）→ 另一端點，互不影響。
+  - **NotesTab（§2）**: 新增 `isNarrative(n)`（以字串比對 `note_type==='narrative'`，繞過 shared NoteType 未含 narrative 的 no-overlap 型別錯）；`sortNotes` 讓 AI 敘事恆置頂（narrative→pinned→新到舊），observations 走一般清單；narrative 卡加輕量 `AI 敘事` 標籤（`mc-noteitem__tag`）＋ `is-narrative` class。
+  - **TranscriptStream（§4.3）**: 逐字稿說話者顯示改為 `seg.speakerLabel?.trim() ? speakerLabel : SPEAKER_LABEL[seg.speaker]`——有選填標籤（如「客戶-王經理」）優先、空/缺席退回既有 presenter/client，**缺席不壞版面**。className 仍鍵於 `seg.speaker`（樣式穩定）。
+  - **InfoCardStream**: 讀碼確認既有渲染已涵蓋 CRM 卡（5 kinds／verified·crawler·live trust／sourceUrl／confidence）→ **無需改動**。
+  - **i18n**: 新增 `enrichPanel.{deepEntryLabel,deepEntryDesc,timeHint,start}`＋`notesTab.aiNarrative`，zh-TW／en 兩份都補（Edit 追加，未 Write 覆寫）。
+- **為什麼**: server 側 R（深廣多輪＋社群＋筆記落庫＋索引）與 M（會中檢索卡＋speakerLabel）已完成，前端跟上：研究入口簡化為單一深度模式、AI 敘事筆記置頂、HUD 顯示多人說話者標籤。
+- **驗證**: web workspace `tsc --noEmit` 綠（EXIT=0，無 external 錯誤）。**gap**：shared `NoteType`（packages/shared/src/crm-types.ts:91）＝general|call|email|research，未含 R 已落庫的 'narrative'/'observations'；因禁改 packages，前端以字串比對辨識 narrative，回報待 R/M 補 union。未 commit（硬規則 10）。
+
+- **工作區**: apps/server｜packages/crm
+- **類型**: feat
+- **檔案**: 新增 `apps/server/src/research/social/{types,http,youtube,threads,discover,index}.ts`、`apps/server/src/research/deep-rounds.ts`、`apps/server/src/research/indexer.ts`、`packages/crm/migrations/013_social_notes.sql`＋`migrations-pg/013_social_notes.sql`、`packages/crm/migrations/014_signal_kinds.sql`＋`migrations-pg/014_signal_kinds.sql`、測試 `apps/server/src/research/{deep-rounds,indexer,deep-notes,social,reindex-authz,signal-kinds}.test.ts`＋`packages/crm/src/notes-singleton.test.ts`；改 `apps/server/src/config.ts`、`apps/server/src/research/{crawler,deep-research,deep-extractor,extractor,orchestrator,jobs,routes}.ts`、`packages/crm/src/{ports,repos-pipeline}.ts`、`.env.example`、`docs/DEPLOY.md`
+- **改了什麼**:
+  - **WP3 深廣預算**（契約 §3）：`CRAWL_HARD_CAP_MS` 300s→**1800s**、`CRAWL_DEADLINE_DETAILED` 預設＝硬上限、`MAX_CRAWL_PAGES` 28→**150**（clamp 上界 300）、`MAX_CRAWL_DEPTH` 2→**3**（crawler.ts）；`DEEP_RESEARCH_BUDGET_MS` 150s→**1200s**（clamp 上界 1800s）＋新 `deepResearchRounds()`（DEEP_RESEARCH_ROUNDS 預設 3，clamp 1–5）（deep-research.ts）；`RESEARCH_JOB_TIMEOUT_MS` 600s→**3600s**（orchestrator.ts）；`SOCIAL_FETCH_BUDGET_MS`（預設 600s）（social/index.ts）。
+  - **WP3 多輪研究**（deep-rounds.ts）：`runDeepRounds`（round1＝基礎角度＋社群模板；round2/3＝缺口分析 follow-up；**一輪 0 新來源即提早停**）＋`buildFollowUpQueries`（heuristic，依角度 citation 數）；`jobs.markProgress`（每輪回寫 sources_json 供 admin 監控）。
+  - **WP1 社群來源層**（social/**）：`SocialFetcher` 介面（凍結，§1.4）；YouTube＝官方 Data API v3（缺 YOUTUBE_API_KEY→整平台優雅 skip＋一次 warning，非 job 失敗）；Threads＝無登入 Playwright（crawler 新增 `fetchRaw` 取 outerHTML 解析 `<script>` JSON）；FB/IG＝Gemini grounding（deep-research 新增 `buildSocialQueries` ≥6 條雙語＋official accounts）；社群 SourceText 併入 `bundle.sourceTexts` 繼承 [S#] provenance。官網 `<a href>` 抽社群連結（crawler `RawCrawl.socialLinks`）→ `companies.social_links`（migration 013 TEXT JSON）＋ field_provenance filledBy='crawler'（orchestrator 走 core.db + core.provenance.record）。外呼走既有 SSRF path（social/http.ts 重用匯出的 `resolveAndValidate`＋本地 pinned agent）。
+  - **WP2 筆記區**（契約 §2）：extractor＋deep-extractor responseSchema/SYSTEM 新增 `narrativeZh`＋`uncategorized[{text,sourceIndex}]`（≤25，明令歸類不進既有欄位者一律進 uncategorized）；`NoteRepository.upsertSingletonNote`（冪等鍵 (org,entity_type,entity_id,note_type)，ports.ts+repos-pipeline.ts）；orchestrator 產兩單例（narrative pinned＋observations 每條附 `[來源](url)`）；migration 013 放寬 notes.note_type CHECK 加 'narrative'/'observations'。
+  - **WP4.1 索引管線**（indexer.ts）：`buildCompanyIndex` 切塊（≤1000 字）company_card/contact_card/company_product_card/company_news/note（entity_id＝來源 row id，對齊 realtime/retrieval.ts collectWhitelist/kindOf），embeddings 冪等 upsert（content_hash 未變連 embed 都省）；runJob 成功收尾呼叫；`POST /api/research/companies/:id/reindex`（org 隔離：非成員→findById null→**403**）。
+  - **指揮官追加三項**：migration 014 放寬 meeting_signals.type CHECK 加 person_mention/topic_shift（sqlite 重建表、pg DROP/ADD CONSTRAINT）；config.youtubeApiKey 改**選填**（4 個既有 AppConfig 測試字面量不用動即過）；indexer entity_type 詞彙對齊 M 的 retrieval.ts（已核對）。
+- **為什麼**: 使用者拍板爬蟲要深與廣（30–60 分鐘級）、擴社群來源、未歸類情報進筆記區、CRM 索引管線補上（生產原本索引空→會中檢索回 []）。依 `docs/RESEARCH_UPGRADE_CONTRACT.md` §0–§5 實作。
+- **驗證**: 全 workspace typecheck 綠；crm 49/49（+3）、server 95/95（+16 新測試涵蓋筆記單例冪等/indexer 冪等/多輪提早停/uncategorized 落 observations 帶來源/YouTube 缺 key skip/reindex 跨 org 403/migration 014 兩新訊號落庫）。未 commit（硬規則 10）。pg 方言 migration 013/014 未本機驗證（此環境無 pg，同既有 migrations-pg 慣例）。
+
+### 2026-07-13 15:40 | 側欄 Shell 對抗式驗證 3+1 小缺陷修復（rail 閃跳／抽屜 a11y／縮放殘留／reduced-motion 護欄）
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/components/AppShell.tsx`, `apps/web/app/globals.css`
+- **改了什麼**:
+  - **#1 rail 閃跳（AppShell.tsx）**: `useState(false)`＋mount 後補水 useEffect（讀 `localStorage["mc.sidebar.rail"]`）→ 改為 `useState<boolean>(() => …)` **lazy initializer** 同步讀取（`typeof window==="undefined"→false`＋try/catch→false）。刪掉原補水 useEffect。首屏不再由展開閃成收合。檔內留註解說明前提：Shell 永遠在 client-only AuthGuard 之後掛載（AuthGuard checking 階段只 render spinner，SSR 不出側欄），故無 hydration mismatch；若未來 AuthGuard 改 SSR-capable 須把讀取搬回 effect。
+  - **#3 縮放往返抽屜殘留（AppShell.tsx）**: 新增 useEffect——`window.matchMedia("(min-width: 881px)")` 的 `change` 事件 `e.matches` 時 `setMobileOpen(false)`，`addEventListener`/`removeEventListener` 成對清理。斷點 881 對齊 CSS off-canvas 的 `max-width:880px`。
+  - **#2 手機抽屜關閉仍可 Tab 進入（globals.css `@media (max-width:880px)`）**: `.mc-sidebar` 補 `visibility:hidden` 並把 visibility 掛進 transition（`transition: transform 0.2s ease, visibility 0s linear 0.2s;`，delay 對齊既有 transform 0.2s）；`.mc-shell.is-mobile-open .mc-sidebar` 補 `visibility:visible; transition: transform 0.2s ease, visibility 0s;`。關閉時滑出動畫跑完（0.2s）後才 hidden→退出 tab 序；開啟時 visibility 立即可見。只在此 media query 內，桌機不受影響、滑入/滑出動畫保留。
+  - **#4 reduced-motion 護欄補洞（globals.css 檔尾護欄區塊）**: 本批既有 `@media (prefers-reduced-motion: reduce)` 護欄補 `.mc-shell { transition: none; }`（收折不播動畫）＋`.mc-sidebar { transition: none; }`（消去 #2 引入的 visibility 0.2s 延遲；transition:none 時 visibility 立即切換，行為正確）。
+- **為什麼**: 側欄 Shell 批次經對抗式驗證後 confirmed 的 3 個小缺陷（1 warning：rail 閃跳；1 a11y info：抽屜關閉仍可 Tab；1 info：縮放往返殘留開啟）＋1 個 reduced-motion 護欄補洞。只動 AppShell.tsx 與 globals.css 兩檔；未碰 present/hud/copilot、未碰 apps/server（I1/I2/I3 未觸及）。
+- **驗證**: web workspace `npx tsc --noEmit` 綠（EXIT=0）。grep 佐證：AppShell.tsx 無「mount 後讀 localStorage 設 rail」的補水 useEffect 殘留；matchMedia listener 有 removeEventListener cleanup。globals.css：mobile 區塊 visibility 兩態齊、reduced-motion 護欄含 `.mc-shell`。未跑瀏覽器實測（本輪僅 typecheck＋靜態核對）。未 commit（硬規則 10）。
+
+### 2026-07-13 11:10 | 會中 CRM 消費端（WP4-M）：檢索白名單擴大＋CRM 補充卡去重／信任＋兩類新訊號＋多人 speakerLabel
+- **工作區**: packages/shared, apps/server
+- **類型**: feat
+- **檔案**: `packages/shared/src/signals.ts`, `packages/shared/src/protocol.ts`, `apps/server/src/realtime/retrieval.ts`, `apps/server/src/realtime/orchestrator.ts`, `apps/server/src/realtime/hub.ts`, `apps/server/src/analysis/gemini-analysis.ts`, `apps/server/src/realtime/mid-meeting-crm.test.ts`(新)
+- **改了什麼**（依 RESEARCH_UPGRADE_CONTRACT §4.2/§5）:
+  - **signals.ts**: SIGNAL_KINDS 加 `person_mention`／`topic_shift`（檢索觸發類，SIGNALS_SCHEMA enum 與 sanitize 皆由 `[...SIGNAL_KINDS]`／`.includes` 自動涵蓋）。
+  - **protocol.ts**: TranscriptSegment 加**選填** `speakerLabel?: string`（wire `speaker` 枚舉不變＝向後相容）。
+  - **retrieval.ts**: 白名單由 {company, contacts, deal} 擴為 **＋notes＋company_products＋company_news**（新 `collectWhitelist`，全走 org-scoped repo；EmbeddingRepository 再強制 org_id）。query＝signal label＋近期逐字稿（`buildQuery`，contextText 上限 600 字）。新增 similarity 門檻 `SIMILARITY_MIN=0.5`、同場同 entity 去重（`opts.seen` 集合，`entityType:entityId`）、trust 由 `resolveTrust`（provenance human/verified→`verified` 否則 `crawler`，沿用 shared `isTrusted`）。`retrieveInfoCards` 加第 4 參 `opts:{contextText?,seen?}`；kindOf 收斂為 substring 判別（product/deal→battlecard、contact→contact、news/note/company→company）。
+  - **orchestrator.ts**: 每場 `cardedEntities`(seen 集合)＋`contactRoster`(名冊快取) Map；onSignals 傳 `{contextText(近6句), seen}` 給檢索。`inferSpeaker` 回傳 `SpeakerInference{speaker, speakerLabel?}`（原回 TranscriptSpeaker）——prompt 帶入該場公司 CRM contacts 名冊（唯讀 org-scoped `contacts.list`，姓名/職稱），能對上用「客戶-姓名/職稱」、對不上用「客戶-A/B」、unknown 或空 label 則省略；SPEAKER_SCHEMA 加選填 speakerLabel、maxOutputTokens 64→96。disposeSession 一併清兩個新 Map。AUTO_RESEARCH_KINDS 不變（person_mention／topic_shift **不觸發**自動研究）。
+  - **hub.ts**: onAsrFinal 解構 `{speaker, speakerLabel}` 並寫入 TranscriptSegment（undefined 時序列化自動省略＝舊 client 不壞）。
+  - **gemini-analysis.ts**（邊界說明見 gap 回報）: 僅在 analysis SYSTEM prompt 加兩句，指示偵測 person_mention／topic_shift。
+- **為什麼**: 使用者拍板「會中依交談內容顯示 based on CRM 的補充資訊、雙方可能各不只一位」。偵察證實檢索入口白名單過窄、說話者只壓 presenter/client、訊號無人名/話題類。**I2/I3 未觸及**：新卡只走既有 hub `onInfoCard`→hud 推送，不碰 deck/approval/播放視圖。
+- **驗證**: shared/crm 重建；server 我方 6 檔 typecheck 0 錯（workspace 僅剩 4 個 `youtubeApiKey` 錯＝R 的 config.ts 平行改動未補 AppConfig 測試 fixture，非本批）；server 79/79（＋6 新）、CRM 46/46 全綠；web typecheck 0 錯。未 commit（硬規則 10）。
+
+### 2026-07-13 14:30 | 全站換皮＋可收折側欄 Shell＋首頁儀表板（凍結設計契約 v1）
+- **工作區**: apps/web
+- **類型**: feat（＋globals.css refactor 清掃）
+- **檔案**: `apps/web/app/globals.css`, `apps/web/components/AppShell.tsx`, `apps/web/app/[locale]/page.tsx`, `apps/web/components/home/HomeDashboard.tsx`(新), `apps/web/app/[locale]/layout.tsx`, `apps/web/app/icon.svg`(新), `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **改了什麼**:
+  - **globals.css token 重整（契約 §1）**: `:root` 全量換新——新增 `--mc-panel/--mc-elev/--mc-field/--mc-surface-2/--mc-border-strong/--mc-text-2/--mc-accent-soft/--mc-accent-line/--mc-hi/--mc-r-sm/md/lg/--mc-font-display/--mc-font-mono/--mc-shadow-1/2/accent`；既有 token 名全保留（值可改）。`--mc-accent-2` 由粉 `#ec4899`→靛 `#6d7cff`；`--mc-accent-contrast` `#0b0616`→`#ffffff`（grep 證實 0 消費端）；`--mc-radius` 由 `10px`→`var(--mc-r-md)` 別名。
+  - **元件手感清掃（契約 §2）**: 主按鈕廢漸層（`.mc-btn--primary` 改實色 `var(--mc-accent)`＋hover `#9d74f8`＋translateY(-1px)＋`--mc-shadow-accent`，active/disabled 不上浮；`.mc-btn` transition 補 transform/box-shadow）；`.mc-input` 底改 `var(--mc-field)`＋focus 3px 光環；新增 `.mc-kicker`/`.mc-kicker--live` mono primitive；companycard/personacard hover 補 `--mc-shadow-1`。全檔清掃：粉 `rgba(236,72,153,X)`→`rgba(109,124,255,X)`（5 處，頭像/漸層）；`#0e1728`＋`rgba(14,23,40,.5/.6)` 底→`var(--mc-field)`（9 處）；border-radius 原始 px 全收斂為 `--mc-r-sm/md/lg`（≤9→sm、10–14→md、15–20→lg；999px/50% 不動，~35 處）；刪未用 `.mc-nav`（`.mc-placeholder`/`.mc-tag` 保留——仍被 dead `components/Placeholder.tsx` 引用，不在可動檔案清單）。檔尾補 reduced-motion 護欄。
+  - **AppShell → 可收折側欄（契約 §3）**: TopBar 全刪，改 `mc-shell` grid（248px↔64px rail）＋sticky `mc-sidebar`（head logo/wordmark/收折鈕＋5 導覽群組＋foot org/user/langswitch/logout）。收折持久化 `localStorage["mc.sidebar.rail"]`（mount 後 hydrate 避免 mismatch）；active 用 `usePathname()`（首頁精確、其餘 startsWith、external 不標）；present/copilot/hud `target=_blank rel=noopener`＋「↗」；owner/admin 才見團隊設定（沿用 `useMe`）；語言切換 `router.replace(pathname,{locale})`；登出改 i18n `nav.logout`（修硬編碼「登出」）。RWD <880px off-canvas 抽屜＋scrim＋Esc/點項關閉＋mobilebar。inline SVG `Icon` 元件（export 供 HomeDashboard 共用，零新依賴）。
+  - **首頁儀表板（契約 §4）**: `page.tsx` server 改 `generateMetadata`（`home.metaTitle`）＋`<AppShell><HomeDashboard/></AppShell>`（納入 AuthGuard＝未登入導 /login，契約 §5）。新 `HomeDashboard`（client，useMe＋useTranslations）＝hero（live kicker＋問候＋lead）＋三欄 `mc-flow`（PRE/LIVE/DRILL）流程 rail＋唯一動效脈衝點＋6 張 `mc-surfacecard`（present/copilot/hud 外開）。
+  - **layout.tsx**: 只加 `next/font/google` Geist＋Geist_Mono variable class 到 `<body>`＋預設 metadata；I3 註解保留、無 chrome。新增 `app/icon.svg`（紫圓角方＋白 M）。
+  - **i18n（契約 §6）**: 新 `nav` namespace（workspace/pre/live/practice/admin/home/logout/collapse/expand/menu/closeMenu/newTab/language）＋`home` 增補（metaTitle/greeting/greetingAnon/lead/phase*×6/liveNote/*Desc×6）；role 標籤沿用既有 `org.roles.*`（未重造 nav.role*）。zh-TW/en key 集合一致（node 驗 PARITY OK）。
+- **為什麼**: 使用者嫌舊 TopBar 首頁醜、要左側可收折導覽＋右內容區、全站深色「會議控制室」換皮（凍結契約 v1，Fable 拍板）。I1/I2/I3 未觸及——present/hud/copilot 一字未改、不 import 新 chrome；首頁不再公開曝露會中連結（順修 I3 縱深）。
+- **驗證**: web workspace `tsc --noEmit` 綠（exit 0）。grep 證據：globals.css `#ec4899`/`rgba(236,72,153`=0；全 repo tsx+css `mc-topbar`=0；present/hud/copilot 目錄無 AppShell import；`--mc-surface-2` 已定義；globals.css border-radius 原始值只剩 token/999px/50%。studio-present.css（未改）消費的 12 個 token 全保留。**server workspace typecheck 紅＝平行 in-flight 工作**（config.ts 新增必填 `youtubeApiKey` 但 4 個 server 測試 fixture 未同步；該 4 檔非本次改動、本次只動 apps/web），與本 UI 批次無關。未跑瀏覽器實測（本輪僅 typecheck＋grep 靜態驗；使用者將派 fresh-context read-back）。未 commit（硬規則 10）。
+
 ### 2026-07-09 16:55 | 安全修正：補完 admin A1 洞——register 拒收 allowlist 保留 email
 - **工作區**: apps/server
 - **類型**: fix

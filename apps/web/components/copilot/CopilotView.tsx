@@ -20,7 +20,8 @@ interface SessionState {
   connectedRoles: string[];
 }
 
-/** /copilot — listener/capture surface (account B). No app chrome (I3-adjacent: this tab is never shared). */
+/** /copilot standalone wrapper — kept for backward compat / anyone importing CopilotView; the /copilot page now
+ *  renders the cockpit. No app chrome (I3-adjacent: this tab is never shared). */
 export function CopilotView() {
   return (
     <ToastProvider>
@@ -29,12 +30,32 @@ export function CopilotView() {
   );
 }
 
-function CopilotInner() {
+/**
+ * Capture surface. Standalone renders its own `<main className="mc-cap">` and self-reads creds from storage.
+ * When embedded in the cockpit (CockpitView), the parent owns creds: it passes them via `creds` and is notified
+ * via `onCreds` — so the sibling HUD connects to the same session the moment SetupPanel creates it (no page
+ * reload) — and `rootTag` becomes `section` (the cockpit owns the single `<main>`).
+ */
+export function CopilotInner({
+  embedded = false,
+  creds: credsProp,
+  onCreds,
+  rootTag = "main",
+}: {
+  embedded?: boolean;
+  creds?: MeetingCreds | null;
+  onCreds?: (c: MeetingCreds) => void;
+  rootTag?: "main" | "section";
+} = {}) {
   const toast = useToast();
+  const Root = rootTag;
+  // Embedded in the cockpit the page h1 is CockpitView's「會中副駕」— demote this capture heading to h2 so the
+  // cockpit page has exactly one h1. Standalone (/copilot wrapper) keeps its own h1.
+  const Heading = embedded ? "h2" : "h1";
 
-  const [creds, setCreds] = useState<MeetingCreds | null>(null);
+  const [creds, setCreds] = useState<MeetingCreds | null>(embedded ? credsProp ?? null : null);
   const [resolved, setResolved] = useState(false);
-  const [phase, setPhase] = useState<Phase>("setup");
+  const [phase, setPhase] = useState<Phase>(embedded && credsProp ? "idle" : "setup");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [displaySurface, setDisplaySurface] = useState<string | null>(null);
 
@@ -45,15 +66,34 @@ function CopilotInner() {
   const consentRef = useRef(false);
   const sendAudioRef = useRef<(f: ArrayBuffer) => void>(() => {});
 
-  // Resolve creds on mount (URL handoff → sessionStorage). Present ⇒ ready to listen; absent ⇒ setup.
+  // Adopt a session's creds and (in cockpit) bubble them to the parent so the sibling HUD connects too.
+  const adoptCreds = useCallback(
+    (c: MeetingCreds) => {
+      setCreds(c);
+      setPhase("idle");
+      onCreds?.(c);
+    },
+    [onCreds],
+  );
+
+  // Resolve creds on mount. Standalone: URL handoff → sessionStorage. Embedded: mirror the parent-controlled prop
+  // (re-runs when the cockpit sets creds after SetupPanel, flipping this side out of "setup").
   useEffect(() => {
+    if (embedded) {
+      if (credsProp) {
+        setCreds(credsProp);
+        setPhase((p) => (p === "setup" ? "idle" : p));
+      }
+      setResolved(true);
+      return;
+    }
     const c = readMeetingCreds();
     if (c) {
       setCreds(c);
       setPhase("idle");
     }
     setResolved(true);
-  }, []);
+  }, [embedded, credsProp]);
 
   const onMessage = useCallback((msg: ServerMessage) => {
     if (msg.type === "session_state") {
@@ -129,17 +169,17 @@ function CopilotInner() {
   const getLevel = useCallback(() => controllerRef.current?.getLevel() ?? 0, []);
 
   // ── render ──────────────────────────────────────────────────────
-  if (!resolved) return <main className="mc-cap" aria-busy="true" />;
+  if (!resolved) return <Root className="mc-cap" aria-busy="true" />;
   if (phase === "setup" && !creds) {
-    return <SetupPanel onReady={(c) => { setCreds(c); setPhase("idle"); }} />;
+    return <SetupPanel rootTag={rootTag} embedded={embedded} onReady={adoptCreds} />;
   }
 
   const analyzing = phase === "listening" && consentGranted && realtime.status === "open";
 
   return (
-    <main className="mc-cap">
+    <Root className="mc-cap">
       <header className="mc-cap__head">
-        <h1 className="mc-cap__h1">會中副駕 · 擷取端</h1>
+        <Heading className="mc-cap__h1">會中副駕 · 擷取端</Heading>
         <p className="mc-cap__lead">擷取這個 Meet 分頁的聲音（所有人混音）用於即時副駕。此瀏覽器分頁永不被分享。</p>
         <p className="mc-cap__platform" role="note">
           限桌面版 Chrome / Edge。帳號 B 的 Meet 分頁與本分頁需在同一瀏覽器 profile。
@@ -200,7 +240,7 @@ function CopilotInner() {
           </button>
         </section>
       )}
-    </main>
+    </Root>
   );
 }
 
@@ -338,7 +378,10 @@ function StatusBar({
 }
 
 /** No creds ⇒ this account (B) creates the live session (POST /api/meetings → wsToken). Requires login. */
-function SetupPanel({ onReady }: { onReady: (c: MeetingCreds) => void }) {
+function SetupPanel({ onReady, rootTag = "main", embedded = false }: { onReady: (c: MeetingCreds) => void; rootTag?: "main" | "section"; embedded?: boolean }) {
+  const Root = rootTag;
+  // Same one-h1 rule as CopilotInner: embedded under the cockpit's h1, this setup heading is an h2.
+  const Heading = embedded ? "h2" : "h1";
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [needLogin, setNeedLogin] = useState(false);
@@ -365,15 +408,15 @@ function SetupPanel({ onReady }: { onReady: (c: MeetingCreds) => void }) {
   }
 
   return (
-    <main className="mc-cap mc-cap--setup">
+    <Root className="mc-cap mc-cap--setup">
       <header className="mc-cap__head">
-        <h1 className="mc-cap__h1">開始一場會議 session</h1>
+        <Heading className="mc-cap__h1">開始一場會議 session</Heading>
         <p className="mc-cap__lead">此端負責擷取會議分頁音訊。先建立 session 取得連線憑證，再開始聆聽。</p>
       </header>
       <form className="mc-cap__setupform" onSubmit={submit}>
         <label className="mc-field">
           <span>會議標題</span>
-          <input className="mc-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：Acme 產品簡報" />
+          <input id="meeting-title" name="meeting-title" className="mc-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：Acme 產品簡報" />
         </label>
         {needLogin ? (
           <p className="mc-cap__errmsg">
@@ -385,6 +428,6 @@ function SetupPanel({ onReady }: { onReady: (c: MeetingCreds) => void }) {
           {busy ? <Spinner size={14} /> : "建立 session"}
         </button>
       </form>
-    </main>
+    </Root>
   );
 }

@@ -4,7 +4,7 @@
  *
  * Invariants enforced here (server-authoritative; the client is only a secondary guard):
  *  - I2 (presenter approval): `act` refuses unless `presenterAuth` is true. That flag is computed at the WS
- *    layer as (userId === presenter_user_id AND role === 'present'); it is NEVER read from client payload.
+ *    layer as a pure identity check (userId === presenter_user_id); it is NEVER read from client payload.
  *  - I1 (append-only, never touch shown slides): only ACCEPT/EDIT reach the deck, always as an APPEND to the
  *    tail. patchMinIndex(APPEND, deckLength) === deckLength, which is always > committedIndex → the guard is
  *    structurally satisfied, and we assert it anyway before writing.

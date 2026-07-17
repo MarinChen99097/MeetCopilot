@@ -30,9 +30,25 @@ export function HudView() {
   );
 }
 
-function HudInner() {
+/**
+ * Presenter HUD / suggestion stream. Standalone (/hud second device) renders its own `<main className="mc-hud">`
+ * and self-reads creds from storage — behavior UNCHANGED. When embedded in the cockpit (CockpitView) the parent
+ * owns creds (passed via `creds`, so a session created on the capture side connects with no reload), `rootTag`
+ * is `section` (the cockpit owns the single `<main>`), and the paste/relink affordances (second-device only) are
+ * suppressed.
+ */
+export function HudInner({
+  embedded = false,
+  creds: credsProp,
+  rootTag = "main",
+}: {
+  embedded?: boolean;
+  creds?: MeetingCreds | null;
+  rootTag?: "main" | "section";
+} = {}) {
   const toast = useToast();
-  const [creds, setCreds] = useState<MeetingCreds | null>(null);
+  const Root = rootTag;
+  const [creds, setCreds] = useState<MeetingCreds | null>(embedded ? credsProp ?? null : null);
   const [resolved, setResolved] = useState(false);
 
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
@@ -47,9 +63,15 @@ function HudInner() {
   const [everConnected, setEverConnected] = useState(false);
 
   useEffect(() => {
+    if (embedded) {
+      // Cockpit-controlled: mirror the parent's creds (re-runs when the capture side creates the session).
+      setCreds(credsProp ?? null);
+      setResolved(true);
+      return;
+    }
     setCreds(readMeetingCreds());
     setResolved(true);
-  }, []);
+  }, [embedded, credsProp]);
 
   const onMessage = useCallback(
     (msg: ServerMessage) => {
@@ -134,27 +156,42 @@ function HudInner() {
     [realtime],
   );
 
-  if (!resolved) return <main className="mc-hud" aria-busy="true" />;
-  if (!creds) return <ConnectPanel onConnected={setCreds} />;
+  if (!resolved) return <Root className="mc-hud" aria-busy="true" />;
+  if (!creds) {
+    // Embedded (cockpit): no paste panel — the capture side owns session creation. Show a gentle placeholder.
+    if (embedded) {
+      return (
+        <Root className="mc-hud mc-hud--connecting">
+          <div className="mc-hud__connstate" role="status">
+            <span className="mc-hud__connspinner" aria-hidden="true" />
+            <p className="mc-hud__connstate-title">尚未開始 session</p>
+            <p className="mc-hud__connstate-desc">在左側建立會議 session 後，建議流會自動連上。</p>
+          </div>
+        </Root>
+      );
+    }
+    return <ConnectPanel onConnected={setCreds} />;
+  }
 
   // Before the FIRST successful connect, never show the live stream panels (they read as "已在聆聽").
   // Show an honest connection status instead: connecting / reconnecting / failed(+重試/重新貼連結).
   if (!everConnected) {
     return (
-      <main className="mc-hud mc-hud--connecting">
+      <Root className="mc-hud mc-hud--connecting">
         <ConnectingState
           status={realtime.status}
           reason={realtime.failureReason}
           onRetry={realtime.retry}
           onRelink={relink}
+          showRelink={!embedded}
         />
-      </main>
+      </Root>
     );
   }
 
   // Connected at least once: show streams, plus a banner whenever the link is not currently open.
   return (
-    <main className="mc-hud">
+    <Root className="mc-hud">
       {realtime.status !== "open" ? (
         realtime.status === "failed" ? (
           <div className="mc-hud__banner mc-hud__banner--fail" role="alert">
@@ -163,9 +200,11 @@ function HudInner() {
               <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={realtime.retry}>
                 重試
               </button>
-              <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={relink}>
-                重新貼連結
-              </button>
+              {embedded ? null : (
+                <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={relink}>
+                  重新貼連結
+                </button>
+              )}
             </span>
           </div>
         ) : (
@@ -179,7 +218,7 @@ function HudInner() {
       <TranscriptStream segments={segments} signals={signals} />
       <InfoCardStream cards={cards} />
       <DeepResearchBox remainingQuota={quota} lines={researchLines} onSubmit={onDeepResearch} />
-    </main>
+    </Root>
   );
 }
 
@@ -189,11 +228,13 @@ function ConnectingState({
   reason,
   onRetry,
   onRelink,
+  showRelink = true,
 }: {
   status: WsStatus;
   reason: string | null;
   onRetry: () => void;
   onRelink: () => void;
+  showRelink?: boolean;
 }) {
   const failed = status === "failed";
   return (
@@ -208,9 +249,11 @@ function ConnectingState({
           <button type="button" className="mc-btn mc-btn--primary" onClick={onRetry}>
             重試連線
           </button>
-          <button type="button" className="mc-btn mc-btn--ghost" onClick={onRelink}>
-            重新貼連結
-          </button>
+          {showRelink ? (
+            <button type="button" className="mc-btn mc-btn--ghost" onClick={onRelink}>
+              重新貼連結
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

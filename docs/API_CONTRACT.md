@@ -93,7 +93,7 @@
 ## 6. WS 協定（`/ws?token=<wsToken>&meetingId=&role=`；role＝`capture`｜`hud`｜`present`）
 
 **傳輸**：音訊用 **binary frame**——**raw 16-bit little-endian PCM、16kHz、mono、無標頭**（直接丟 ArrayBuffer，~100–250ms/frame）；時間戳由 server 以到達時間標記（每場會議單一 capture 連線，勿多路混傳）。其餘 JSON text frame。`ping` 的回應＝`session_state`（協定無 pong）。`research_status.status`＝`'queued'|'running'|'done'|'failed'`（同 §3）。
-**授權**：`suggestion_action`、`page_commit` 只接受 presenter 的連線（server 驗 wsToken 身分；攻擊者憑證必須被拒）。
+**授權**：`suggestion_action`、`page_commit` 為 presenter 專屬——依 **wsToken 身分**授權（`userId === presenterUserId`，**純身分判定**），**與連線 role 無關**（role 僅係 server→client 的推播目標，非安全邊界；任何持 token 者本就可自稱任一 role）。會中副駕 cockpit 由 presenter 從 `hud` 連線批准（故 §6 送訊表標 `suggestion_action // hud`）。任何非 presenter 身分的憑證（含跨使用者／跨 org），無論用哪個 role，一律被拒（`forbidden_not_presenter`）；handshake 另擋 token/meeting 不符（`unauthorized`，close 4001）。patch-service 於寫 deck 前再驗一次 presenterAuth（縱深防禦）。
 
 ### Client → Server（JSON）
 ```ts
