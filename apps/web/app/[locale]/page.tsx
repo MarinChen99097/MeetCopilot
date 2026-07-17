@@ -1,25 +1,26 @@
+import type { Metadata } from "next";
 import { getTranslations, setRequestLocale } from "next-intl/server";
-import { Link } from "@/i18n/navigation";
+import { AppShell } from "@/components/AppShell";
+import { HomeDashboard } from "@/components/home/HomeDashboard";
 
-const SURFACES = ["crm", "studio", "present", "copilot", "hud", "train"] as const;
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string }>;
+}): Promise<Metadata> {
+  const { locale } = await params;
+  const t = await getTranslations({ locale, namespace: "home" });
+  return { title: t("metaTitle") };
+}
 
 export default async function HomePage({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
   setRequestLocale(locale);
-  const t = await getTranslations("home");
-  const tSurface = await getTranslations();
 
+  // Home is now an authed dashboard inside AppShell (→ AuthGuard). Logged-out visitors are sent to /login.
   return (
-    <main className="mc-placeholder">
-      <h1>{t("title")}</h1>
-      <p>{t("subtitle")}</p>
-      <nav className="mc-nav" aria-label={t("surfaces")}>
-        {SURFACES.map((s) => (
-          <Link key={s} href={`/${s}`}>
-            {tSurface(`${s}.title`)}
-          </Link>
-        ))}
-      </nav>
-    </main>
+    <AppShell>
+      <HomeDashboard />
+    </AppShell>
   );
 }

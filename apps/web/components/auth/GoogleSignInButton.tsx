@@ -8,8 +8,8 @@ import { Spinner } from "@/components/ui/Spinner";
 /**
  * GoogleSignInButton — renders the official Google Identity Services (GIS) button and, on credential,
  * exchanges the Google ID token for a MeetCopilot JWT (apiGoogleLogin) exactly like the password login
- * does (setToken → /crm). Uses NEXT_PUBLIC_GOOGLE_CLIENT_ID (build-time). When that env is unset the
- * component renders nothing, so local dev falls back to the email/password form.
+ * does (setToken → home dashboard "/"). Uses NEXT_PUBLIC_GOOGLE_CLIENT_ID (build-time). When that env
+ * is unset the component renders nothing, so local dev falls back to the email/password form.
  *
  * The verified Google email is the shared key with EZpage — same account across both apps.
  */
@@ -70,7 +70,9 @@ export function GoogleSignInButton({ onError }: { onError?: (message: string) =>
       try {
         const res = await apiGoogleLogin(credential);
         setToken(res.token);
-        router.replace("/crm");
+        // Land on the home dashboard, matching AuthForm's default. This component has no
+        // next/redirect prop, so there is no invite `next` to honour here (coordinator ruling).
+        router.replace("/");
       } catch (err) {
         setBusy(false);
         onError?.(err instanceof ApiError ? err.message : "Google 登入失敗，請稍後再試");

@@ -13,7 +13,7 @@ import { GoogleSignInButton, GOOGLE_CLIENT_ID } from "./GoogleSignInButton";
  * a query string (e.g. an invite `?token=…`) is split out so next-intl keeps it while adding the locale.
  */
 function redirectTarget(next: string | undefined): string | { pathname: string; query: Record<string, string> } {
-  if (!next || !next.startsWith("/") || next.startsWith("//")) return "/crm";
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return "/";
   const q = next.indexOf("?");
   if (q === -1) return next;
   return { pathname: next.slice(0, q), query: Object.fromEntries(new URLSearchParams(next.slice(q + 1))) };
@@ -23,7 +23,7 @@ function redirectTarget(next: string | undefined): string | { pathname: string; 
  * AuthForm — login/register (API_CONTRACT §1). Two paths:
  *  - Google Sign-In (primary when NEXT_PUBLIC_GOOGLE_CLIENT_ID is set) — same Google identity as EZpage.
  *  - Email/password (always present; primary when Google is not configured, e.g. local dev).
- * Both store the returned JWT (setToken) then route to /crm. `mode` toggles the register-only fields.
+ * Both store the returned JWT (setToken) then route to the home dashboard (/). `mode` toggles the register-only fields.
  */
 export function AuthForm({ mode, next }: { mode: "login" | "register"; next?: string }) {
   const router = useRouter();
@@ -116,22 +116,50 @@ export function AuthForm({ mode, next }: { mode: "login" | "register"; next?: st
             {isRegister ? (
               <label className="mc-field">
                 <span>顯示名稱</span>
-                <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required autoComplete="name" />
+                <input
+                  id="displayName"
+                  name="displayName"
+                  className="mc-input"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  required
+                  autoComplete="name"
+                />
               </label>
             ) : null}
             {isRegister ? (
               <label className="mc-field">
                 <span>組織名稱</span>
-                <input value={orgName} onChange={(e) => setOrgName(e.target.value)} required autoComplete="organization" />
+                <input
+                  id="orgName"
+                  name="orgName"
+                  className="mc-input"
+                  value={orgName}
+                  onChange={(e) => setOrgName(e.target.value)}
+                  required
+                  autoComplete="organization"
+                />
               </label>
             ) : null}
             <label className="mc-field">
               <span>Email</span>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
+              <input
+                id="email"
+                name="email"
+                className="mc-input"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+              />
             </label>
             <label className="mc-field">
               <span>密碼</span>
               <input
+                id="password"
+                name="password"
+                className="mc-input"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

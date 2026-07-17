@@ -8,7 +8,11 @@ export default async function TrainPage({ params }: { params: Promise<{ locale: 
   setRequestLocale(locale);
   return (
     <AppShell>
-      <TrainWorkbench />
+      {/* Wrap the phase machine in a <main> landmark — its phase views (PersonaPicker /
+          TrainCall / ScoreReport) each render a <section>, so /train otherwise had no <main>. */}
+      <main className="mc-trainmain">
+        <TrainWorkbench />
+      </main>
     </AppShell>
   );
 }

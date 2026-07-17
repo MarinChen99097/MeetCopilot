@@ -1,9 +1,20 @@
 import type { ReactNode } from "react";
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
 import { hasLocale, NextIntlClientProvider } from "next-intl";
 import { getMessages, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
 import "../globals.css";
+
+// next/font (Next-bundled, no new dependency): display + mono variable fonts.
+// CJK falls back naturally to --mc-font. Variables consumed by :root --mc-font-display/mono.
+const fontDisplay = Geist({ subsets: ["latin"], variable: "--font-display", display: "swap" });
+const fontMono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap" });
+
+export const metadata: Metadata = {
+  title: "MeetCopilot",
+};
 
 interface LocaleLayoutProps {
   children: ReactNode;
@@ -29,7 +40,7 @@ export default async function LocaleLayout({ children, params }: LocaleLayoutPro
 
   return (
     <html lang={locale}>
-      <body>
+      <body className={`${fontDisplay.variable} ${fontMono.variable}`}>
         <NextIntlClientProvider messages={messages}>{children}</NextIntlClientProvider>
       </body>
     </html>
