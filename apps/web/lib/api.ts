@@ -250,6 +250,12 @@ export interface ResearchJob {
   error?: string;
   startedAt?: number;
   finishedAt?: number;
+  /**
+   * Job 建立時間（escape-hatch 逃生口的時間錨；contract §5/§6）。wire 形狀依後端而異：
+   * SQLite/現行 rowToJob 回 epoch ms（number）；Postgres/ISO 化後端可能回 ISO 字串或
+   * 「YYYY-MM-DD HH:MM:SS」——故型別放寬為 number | string，解析交給 EnrichPanel 的 toEpochMs。
+   */
+  createdAt?: number | string;
 }
 
 export interface GroundResult {

@@ -351,6 +351,8 @@ img {
 .mc-job--running { border-color: rgba(56, 189, 248, 0.4); }
 .mc-job--done { border-color: rgba(52, 211, 153, 0.4); }
 .mc-job--failed { border-color: rgba(248, 113, 113, 0.4); }
+/* 逃生口：已中斷（伺服器重啟/逾時）— warn 邊框壓過進行中的 running/queued 藍。 */
+.mc-job.is-stale { border-color: rgba(251, 191, 36, 0.45); }
 .mc-job__head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .mc-job__title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
 .mc-job__hint, .mc-job__stat, .mc-job__err { margin: 8px 0 0; font-size: 13px; color: var(--mc-text-muted); }
@@ -731,7 +733,11 @@ img {
 .mc-persona__avatar img { width: 100%; height: 100%; object-fit: cover; }
 .mc-persona__id { display: flex; flex-direction: column; }
 .mc-persona__name { font-weight: 700; font-size: 16px; }
+/* 有中文名時，原拼音名以次行小字保留（fullNameZh 主、fullName 次）。 */
+.mc-persona__aka { font-size: 12px; color: var(--mc-text-muted); }
 .mc-persona__title { font-size: 13px; color: var(--mc-text-muted); }
+/* 主管背景簡介（來源語言）；繁中 gloss 走 mc-i18n-sum。 */
+.mc-persona__bg { margin: 14px 0 0; font-size: 13px; line-height: 1.6; color: var(--mc-text); }
 .mc-dp { margin-left: auto; text-align: right; }
 .mc-dp__label { font-size: 13px; font-weight: 700; }
 .mc-dp--accent .mc-dp__label { color: #c4b5fd; }
@@ -768,12 +774,23 @@ img {
 .mc-contactrow__avatar img { width: 100%; height: 100%; object-fit: cover; }
 .mc-contactrow__id { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .mc-contactrow__name { font-weight: 600; }
+/* 有中文名時，原拼音名以次行小字保留（fullNameZh 主、fullName 次）。 */
+.mc-contactrow__aka { font-size: 12px; color: var(--mc-text-muted); }
 .mc-contactrow__title { font-size: 12px; color: var(--mc-text-muted); }
 .mc-contactrow__badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .mc-productrow { flex-wrap: wrap; }
+/* 產品縮圖（mediaUrls[0]）：方形小圖，onError 隱藏（見 hideImageParent）。 */
+.mc-productrow__thumb { width: 38px; height: 38px; flex: none; border-radius: var(--mc-r-sm); overflow: hidden; background: var(--mc-field); border: 1px solid var(--mc-border); }
+.mc-productrow__thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mc-productrow__namegroup { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .mc-productrow__name { font-weight: 700; }
+/* 型號 / SKU：mono 小字，貼在品名旁。 */
+.mc-productrow__model { font-family: var(--mc-font-mono); font-size: 11px; color: var(--mc-text-muted); }
 .mc-productrow__meta { flex: 1; font-size: 12px; color: var(--mc-text-muted); min-width: 0; }
 .mc-productrow__badges { display: flex; gap: 6px; align-items: center; }
+/* 產品明細圖：object-fit contain 不裁切，onError 隱藏容器。 */
+.mc-product-detail__media { margin-bottom: 12px; text-align: center; }
+.mc-product-detail__media img { max-width: 100%; max-height: 220px; object-fit: contain; border-radius: var(--mc-r-sm); }
 .mc-productpeople { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .mc-productpeople li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .mc-productpeople__name { font-weight: 600; }

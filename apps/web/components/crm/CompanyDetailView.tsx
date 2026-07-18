@@ -121,7 +121,9 @@ function CompanyHead({ company, onEnriched }: { company: CompanyDetail; onEnrich
                 {company.domain}
               </a>
             ) : null}
-            {company.industry ? <span> · {company.industry}</span> : null}
+            {company.industryZh ?? company.industry ? (
+              <span> · {company.industryZh ?? company.industry}</span>
+            ) : null}
           </p>
           <div className="mc-companyhead__badges">
             <AccountStatusBadge status={company.accountStatus} />
@@ -153,12 +155,14 @@ function OverviewTab({ company, onChanged }: { company: CompanyDetail; onChanged
     onChanged,
   );
 
-  const field = (label: string, fieldName: keyof Company, value: string) => (
+  // rawValue（可選）＝細填時編輯的底稿：*Zh 欄以繁中 gloss 顯示（value），但編輯錨定來源主要欄
+  // （rawValue＝來源值），保住雙語不變量「繁中 gloss 不覆寫主要欄」。省略時回退為 value。
+  const field = (label: string, fieldName: keyof Company, value: string, rawValue?: string) => (
     <ProvenanceField
       label={label}
       fieldName={fieldName}
       value={value}
-      rawValue={value === "—" ? "" : value}
+      rawValue={rawValue ?? (value === "—" ? "" : value)}
       prov={prov.provMap[fieldName]}
       busyConfirm={prov.busyConfirm.has(fieldName)}
       busySave={prov.busySave.has(fieldName)}
@@ -178,9 +182,14 @@ function OverviewTab({ company, onChanged }: { company: CompanyDetail; onChanged
         </p>
       ) : null}
       <div className="mc-overview__fields">
-        {field("標語", "tagline", company.tagline ?? "—")}
-        {field("產業", "industry", company.industry ?? "—")}
-        {field("商業模式", "businessModel", company.businessModel ?? "—")}
+        {field("標語", "tagline", company.taglineZh ?? company.tagline ?? "—", company.tagline ?? "")}
+        {field("產業", "industry", company.industryZh ?? company.industry ?? "—", company.industry ?? "")}
+        {field(
+          "商業模式",
+          "businessModel",
+          company.businessModelZh ?? company.businessModel ?? "—",
+          company.businessModel ?? "",
+        )}
         {field("員工規模", "employeeRange", company.employeeRange ?? "—")}
         {field("成立年份", "foundedYear", company.foundedYear ? String(company.foundedYear) : "—")}
         {field("總部城市", "hqCity", company.hqCity ?? "—")}

@@ -77,7 +77,9 @@
     "deepEntryLabel": "深度研究（全網＋社群）",
     "deepEntryDesc": "全網新聞／維基／公開檔＋官網＋社群帳號，逐欄標示外部來源。",
     "timeHint": "可能需要 30–60 分鐘，可離開頁面稍後回來看結果。",
-    "start": "開始深度研究"
+    "start": "開始深度研究",
+    "staleBadge": "已中斷",
+    "staleBody": "研究已中斷（伺服器重啟或逾時），可重新發起。"
   },
   "notesTab": {
     "aiNarrative": "AI 敘事"

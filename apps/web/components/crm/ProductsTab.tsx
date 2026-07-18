@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type SyntheticEvent } from "react";
 import { useLocale } from "next-intl";
 import type { CompanyProduct, ProductPersonLink } from "@meetcopilot/shared";
 import { ApiError, getProduct, getProductPeople, listProducts, updateProduct } from "@/lib/api";
@@ -10,6 +10,12 @@ import { ConfidenceBadge } from "@/components/ui/ConfidenceBadge";
 import { VerifiedBadge } from "@/components/ui/StatusBadge";
 import { ProvenanceField } from "./ProvenanceField";
 import { useEntityProvenance } from "./useProvenance";
+
+/** 圖片載入失敗時隱藏其容器（縮圖/產品圖的 onError；防破圖佔位）。 */
+function hideImageParent(e: SyntheticEvent<HTMLImageElement>) {
+  const parent = e.currentTarget.parentElement;
+  if (parent) parent.style.display = "none";
+}
 
 /** 產品深檔 tab：對方產品清單 → 點開規格/定價/技術棧/功能/整合＋產品↔人。 */
 export function ProductsTab({ companyId }: { companyId: string }) {
@@ -56,6 +62,7 @@ export function ProductsTab({ companyId }: { companyId: string }) {
           {items.map((p) => {
             // zh-TW: prefer Chinese one-liner; keep original as hover title.
             const oneLine = isZh && p.oneLinerZh ? p.oneLinerZh : p.oneLiner;
+            const thumb = p.mediaUrls?.[0];
             return (
               <li key={p.id}>
                 <button
@@ -64,7 +71,15 @@ export function ProductsTab({ companyId }: { companyId: string }) {
                   onClick={() => setSelected(selected === p.id ? null : p.id)}
                   aria-expanded={selected === p.id}
                 >
-                  <span className="mc-productrow__name">{p.name}</span>
+                  {thumb ? (
+                    <span className="mc-productrow__thumb" aria-hidden="true">
+                      <img src={thumb} alt="" loading="lazy" onError={hideImageParent} />
+                    </span>
+                  ) : null}
+                  <span className="mc-productrow__namegroup">
+                    <span className="mc-productrow__name">{p.name}</span>
+                    {p.model ? <span className="mc-productrow__model">{p.model}</span> : null}
+                  </span>
                   <span
                     className="mc-productrow__meta"
                     title={isZh && p.oneLinerZh && p.oneLiner ? p.oneLiner : undefined}
@@ -146,8 +161,14 @@ function ProductProfile({ productId, onChanged }: { productId: string; onChanged
       <StateBoundary loading={loading} error={error} onRetry={load}>
         {product ? (
           <>
+            {product.mediaUrls?.[0] ? (
+              <div className="mc-product-detail__media">
+                <img src={product.mediaUrls[0]} alt="" loading="lazy" onError={hideImageParent} />
+              </div>
+            ) : null}
             <div className="mc-product-detail__fields">
               {field("類別", "category", product.category ?? "—")}
+              {field("型號", "model", product.model ?? "—")}
               {field("狀態", "status", product.status ?? "—")}
               {field("定價模式", "pricingModel", product.pricingModel ?? "—")}
               {field(

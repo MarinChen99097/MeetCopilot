@@ -9,7 +9,36 @@ import { JobProgressCard } from "@/components/ui/JobProgressCard";
 import { Spinner } from "@/components/ui/Spinner";
 
 const POLL_MS = 2500;
+/** 逃生口門檻（contract §6）：queued/running 超過 65 分鐘視為「已中斷」（伺服器重啟或逾時）。 */
+const STALE_MS = 65 * 60 * 1000;
 const storageKey = (t: CrawlTargetType, id: string) => `mc_enrich_${t}_${id}`;
+
+/**
+ * 解析 job 時間錨（createdAt/startedAt）→ epoch ms。wire 形狀依後端而異：
+ *  - number：現行 SQLite rowToJob 回 epoch ms，直接用。
+ *  - 純數字字串："1752…" → 當 epoch ms。
+ *  - ISO／SQLite「YYYY-MM-DD HH:MM:SS」：無 T 先換 T；無時區一律當 UTC（後端存 UTC）→ 補 Z。
+ * 解不出 → null。
+ */
+function toEpochMs(v: number | string | null | undefined): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const s = v.trim();
+  if (!s) return null;
+  if (/^\d+$/.test(s)) return Number(s);
+  const hasTz = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(s);
+  let iso = s.includes(" ") && !s.includes("T") ? s.replace(" ", "T") : s;
+  if (!hasTz && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso)) iso += "Z";
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/** 逃生口判定：job 仍 queued/running 且距時間錨（startedAt ?? createdAt）已超過 65 分鐘。 */
+function isJobStale(job: ResearchJob | null, now: number): boolean {
+  if (!job || (job.status !== "queued" && job.status !== "running")) return false;
+  const anchor = toEpochMs(job.startedAt) ?? toEpochMs(job.createdAt);
+  return anchor != null && now - anchor > STALE_MS;
+}
 
 /**
  * 研究單一入口（RESEARCH_UPGRADE_CONTRACT §3）：移除舊「快速掃描／官網深掃」選項，
@@ -41,6 +70,7 @@ export function EnrichPanel({
   const [url, setUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [job, setJob] = useState<ResearchJob | null>(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const timer = useRef<number | null>(null);
   const doneNotified = useRef(false);
 
@@ -91,6 +121,35 @@ export function EnrichPanel({
     return stopPolling;
   }, [poll, stopPolling, targetId, targetType]);
 
+  const active = job?.status === "queued" || job?.status === "running";
+  const stale = isJobStale(job, nowTs);
+
+  // 逃生口時鐘：僅在有進行中 job 且尚未 stale 時每 20s 前進 nowTs，讓 stale 即使輪詢中斷（伺服器不可達、
+  // tick 一直 throw）也能翻轉為「已中斷」。stale 後停時鐘（deps 含 stale，翻轉即 cleanup）。
+  useEffect(() => {
+    if (!active || stale) return;
+    const id = window.setInterval(() => setNowTs(Date.now()), 20000);
+    return () => window.clearInterval(id);
+  }, [active, stale]);
+
+  // stale → 停止輪詢（不再打伺服器）；localStorage 保留到使用者「關閉／重試」才清（可重整續判 stale）。
+  useEffect(() => {
+    if (stale) stopPolling();
+  }, [stale, stopPolling]);
+
+  // 關閉工作卡：停輪詢 + 清 job + 清 localStorage（contract §6：關閉時清 localStorage、解鎖研究按鈕）。
+  const dismissJob = useCallback(() => {
+    stopPolling();
+    setJob(null);
+    window.localStorage.removeItem(storageKey(targetType, targetId));
+  }, [stopPolling, targetId, targetType]);
+
+  // 重試：先清乾淨（含 localStorage）再開面板重新發起（contract §6）。
+  const retryJob = useCallback(() => {
+    dismissJob();
+    setOpen(true);
+  }, [dismissJob]);
+
   async function submit() {
     setSubmitting(true);
     doneNotified.current = false;
@@ -102,7 +161,11 @@ export function EnrichPanel({
         url: url.trim() ? url.trim() : undefined,
       });
       window.localStorage.setItem(storageKey(targetType, targetId), jobId);
-      setJob({ id: jobId, targetType, targetId, mode: DEEP_MODE, status: "queued" });
+      // createdAt 客端時戳：首個成功輪詢前的樂觀 job 沒有伺服器時間錨，若伺服器在接受 POST 後、第一個成功
+      // tick 前即不可達，isJobStale 的 anchor（startedAt ?? createdAt）會全 null → 逃生口永不翻轉，使用者卡
+      // 死在 spinner。補上 client createdAt，讓此情境仍能於 65 分鐘後翻成「已中斷」（contract §6）；一旦有成功
+      // 輪詢，setJob 會以伺服器 job（含伺服器 createdAt/startedAt）覆蓋此樂觀值。
+      setJob({ id: jobId, targetType, targetId, mode: DEEP_MODE, status: "queued", createdAt: new Date().toISOString() });
       setOpen(false);
       poll(jobId);
     } catch (err) {
@@ -112,7 +175,8 @@ export function EnrichPanel({
     }
   }
 
-  const busy = job?.status === "queued" || job?.status === "running";
+  // stale 時解鎖「研究此公司」按鈕（contract §6）：busy 只在真正進行中且未中斷時成立。
+  const busy = active && !stale;
   const targetNoun = targetType === "company" ? "公司" : "主管";
 
   return (
@@ -159,11 +223,11 @@ export function EnrichPanel({
       {job ? (
         <JobProgressCard
           job={job}
-          onRetry={() => setOpen(true)}
-          onDismiss={() => {
-            setJob(null);
-            window.localStorage.removeItem(storageKey(targetType, targetId));
-          }}
+          stale={stale}
+          staleTitle={t("staleBadge")}
+          staleBody={t("staleBody")}
+          onRetry={retryJob}
+          onDismiss={dismissJob}
         />
       ) : null}
     </div>

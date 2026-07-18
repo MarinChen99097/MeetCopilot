@@ -1,5 +1,6 @@
 "use client";
 
+import { useLocale } from "next-intl";
 import type { Contact, DecisionPower, FieldProvenance, Seniority } from "@meetcopilot/shared";
 import { ProvenanceField } from "./ProvenanceField";
 
@@ -43,7 +44,11 @@ export function PersonaCard({
   busyConfirm: Set<string>;
   busySave: Set<string>;
 }) {
+  const isZh = useLocale() === "zh-TW";
   const dp = contact.decisionPower ? DP_META[contact.decisionPower] : undefined;
+  // 顯示以中文名為主（fullNameZh ?? fullName）；有中文名時原拼音名以次行小字保留。
+  const displayName = contact.fullNameZh ?? contact.fullName;
+  const showRomanized = !!contact.fullNameZh && !!contact.fullName && contact.fullName !== contact.fullNameZh;
 
   const field = (label: string, fieldName: keyof Contact, editable = true) => (
     <ProvenanceField
@@ -64,12 +69,13 @@ export function PersonaCard({
     <div className="mc-persona">
       <div className="mc-persona__head">
         <span className="mc-persona__avatar" aria-hidden="true">
-          {contact.photoUrl ? <img src={contact.photoUrl} alt="" /> : initials(contact.fullName)}
+          {contact.photoUrl ? <img src={contact.photoUrl} alt="" /> : initials(displayName)}
         </span>
         <div className="mc-persona__id">
-          <span className="mc-persona__name">{contact.fullName}</span>
+          <span className="mc-persona__name">{displayName}</span>
+          {showRomanized ? <span className="mc-persona__aka">{contact.fullName}</span> : null}
           <span className="mc-persona__title">
-            {contact.title ?? "未知職稱"}
+            {contact.titleZh ?? contact.title ?? "未知職稱"}
             {contact.seniority ? ` · ${SENIORITY_LABEL[contact.seniority]}` : ""}
           </span>
         </div>
@@ -92,6 +98,14 @@ export function PersonaCard({
         {field("電話", "phone")}
         {field("LinkedIn", "linkedinUrl")}
       </div>
+
+      {contact.backgroundSummary ? <p className="mc-persona__bg">{contact.backgroundSummary}</p> : null}
+      {isZh && contact.backgroundSummaryZh ? (
+        <p className="mc-i18n-sum">
+          <span className="mc-i18n-sum__label">🌐 中文背景</span>
+          {contact.backgroundSummaryZh}
+        </p>
+      ) : null}
 
       <div className="mc-persona__trust">
         <div className="mc-persona__trust-head">

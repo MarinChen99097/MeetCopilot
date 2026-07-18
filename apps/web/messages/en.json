@@ -77,7 +77,9 @@
     "deepEntryLabel": "Deep research (full web + social)",
     "deepEntryDesc": "Full-web news / wiki / public records + the official site + social accounts, with per-field source attribution.",
     "timeHint": "May take 30–60 minutes. You can leave the page and come back for the results later.",
-    "start": "Start deep research"
+    "start": "Start deep research",
+    "staleBadge": "Interrupted",
+    "staleBody": "Research was interrupted (server restart or timeout). You can start it again."
   },
   "notesTab": {
     "aiNarrative": "AI narrative"

@@ -81,7 +81,11 @@ export function ContactsTab({ companyId }: { companyId: string }) {
         emptyHint="用研究引擎補齊，或手動新增人物。"
       >
         <ul className="mc-contactlist">
-          {items.map((c) => (
+          {items.map((c) => {
+            // 顯示以中文名為主（fullNameZh ?? fullName）；有中文名時原拼音名以次行小字保留。
+            const displayName = c.fullNameZh ?? c.fullName;
+            const showRomanized = !!c.fullNameZh && !!c.fullName && c.fullName !== c.fullNameZh;
+            return (
             <li key={c.id}>
               <button
                 type="button"
@@ -90,11 +94,12 @@ export function ContactsTab({ companyId }: { companyId: string }) {
                 aria-expanded={selected === c.id}
               >
                 <span className="mc-contactrow__avatar" aria-hidden="true">
-                  {c.photoUrl ? <img src={c.photoUrl} alt="" /> : c.fullName.slice(0, 2).toUpperCase()}
+                  {c.photoUrl ? <img src={c.photoUrl} alt="" /> : displayName.slice(0, 2).toUpperCase()}
                 </span>
                 <span className="mc-contactrow__id">
-                  <span className="mc-contactrow__name">{c.fullName}</span>
-                  <span className="mc-contactrow__title">{c.title ?? "未知職稱"}</span>
+                  <span className="mc-contactrow__name">{displayName}</span>
+                  {showRomanized ? <span className="mc-contactrow__aka">{c.fullName}</span> : null}
+                  <span className="mc-contactrow__title">{c.titleZh ?? c.title ?? "未知職稱"}</span>
                 </span>
                 <span className="mc-contactrow__badges">
                   {c.decisionPower ? <span className="mc-badge mc-badge--info">{DP_SHORT[c.decisionPower]}</span> : null}
@@ -103,7 +108,8 @@ export function ContactsTab({ companyId }: { companyId: string }) {
               </button>
               {selected === c.id ? <ContactPersona contactId={c.id} onChanged={load} /> : null}
             </li>
-          ))}
+            );
+          })}
         </ul>
       </StateBoundary>
     </div>
