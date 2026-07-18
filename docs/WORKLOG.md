@@ -126,3 +126,15 @@
   3. **同 commit 入憲**：CLAUDE.md 硬規則 1 改四點式「Fable=計畫者、執行派 Opus」（使用者 07-17 下令，參考 ezpage CLAUDE.md:13-17 寫法）；記憶同步。
   4. **部署**：web build SUCCESS → rev **00009-ftj**（只動 apps/web 故只重建 web）；冒煙 web 200＋線上 CSS 含 color-scheme:dark＋API 200。
   5. **記債**：ContactsTab 兩裸 input（color-scheme:dark 後反而變佳，日後統一）；admin button color:inherit。
+
+## 2026-07-18 session（CRM 品質四修：型號+圖片、中文名+照片、全繁中、研究卡死）
+
+- **使用者四指示**（看線上 CyberPower 詳頁截圖）：產品深檔要型號+圖片+簡介（只寫「USB 充電器」太模糊）；台灣人物要中文名+照片；除專有名詞外一律繁中 i18n；「研究此公司」卡「研究中」不消失要修。
+- **兩路 Opus 調查**：(a) 研究卡死＝背景 fire-and-forget job＋Cloud Run min-instances=0 回收時無人收尾（無 boot reaper、無心跳）→DB 列永遠 running；前端不看年齡、active 時關閉/重試全藏＝鎖死無逃生口。(b) 管線：schema 無 model 欄（prompt 把型號當獨立產品名）；mediaUrls/photoUrl 欄早存在但爬蟲不抓圖、抽取器不填；titleZh/backgroundSummaryZh 已落庫但 UI 從不 render；industry/中文名缺欄。
+- **Fable 拍板**（ROM 07-18 兩則）：reaper（boot 掃 queued/running→failed）＋前端 65 分逃生口；migration 015 加五欄（industry_zh/tagline_zh/business_model_zh/model/full_name_zh，SQLite+PG 各一支）；雙語不變量保留（主要欄留來源語言、繁中走 *Zh gloss+UI 優先）；圖片走既有欄免 migration（爬蟲抓 og:image+頁內 img、白名單防幻覺）；中文名嚴禁音譯捏造；deep 第三方人物照不做（記債）。
+- **Workflow 實作**（8 agents 全存活）：server 包 14 檔（migrations 015×2、crm-types/mappers/repos-prospect、crawler 抓圖+sanitize、extractor/deep-extractor schema+prompt、jobs.failInterrupted+index boot reaper、reaper.test+image-whitelist.test）＋web 包 11 檔（api.ts、ProductsTab 縮圖+型號、ContactsTab/PersonaCard 中文名+titleZh+backgroundSummaryZh、CompanyDetailView *Zh 優先+細填錨定主欄、EnrichPanel/JobProgressCard 逃生口、messages parity 186/186）。
+- **驗證**：build 全綠（server tsc+vitest 27 檔 120 測、web tsc+next build 16 路由、crm 7 檔 49 測含 migration 015）；雙對抗審查 3 findings 全修（medium＝sanitizeContacts 空字串 gloss 會讓 `??` 顯示空白人名——與 deep 端 cleanStr 對齊；low＝逃生口樂觀 job 補 createdAt 錨；low＝圖片排除移 gif 對齊契約）；複驗全綠。
+- **E2E（本地真跑）**：PORT=8790 起 server（8788 被佔改埠）、crawl-test 帳號對 Connact AI 重跑 deep→118 秒 done、fields_filled=46；**industry_zh=「軟體開發、行銷科技與電商人工智慧」落庫**（原 NULL）、Troy→full_name_zh=「程峻宏」、jobs API 回 createdAt、reaper 正常（無孤兒=0 筆）。SaaS 公司 model/media_urls 全 null 屬合理。
+- **未 commit（硬規則 10，等使用者核准）**。CHANGE_TRACKER 3 筆（server/web/fix）、ROM 3 則。
+- **部署後效果**：prod 卡死的 CyberPower job 會被新版 boot reaper 自動標 failed→按鈕解鎖；既有英文資料屬舊管線產物，重按「研究此公司」即以新管線重抽（型號/圖片/中文名/繁中）。
+- **記債**：deep 第三方來源人物照；contact 疑似重複列（E2E 見 Troy/Cheng Chun-Hung/Cheng Chun-hung(程峻宏) 三筆並存，屬合併鍵問題另輪處理）；本機 :8788 有 node tsx dev server（pid 39956，14:16 起，非本 session 所啟）待清。

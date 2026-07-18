@@ -34,6 +34,49 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-18 14:35 | 審查修復三則：crawl 聯絡人空 gloss 去空＋逃生口樂觀 job 時間錨＋圖片排除對齊契約四
+- **工作區**: apps/server, apps/web
+- **類型**: fix
+- **檔案**: `apps/server/src/research/extractor.ts`, `apps/server/src/research/crawler.ts`, `apps/server/src/research/image-whitelist.test.ts`, `apps/web/components/crm/EnrichPanel.tsx`
+- **改了什麼**:
+  - **extractor.ts sanitizeContacts 去空字串（medium 顯示回歸修復）**: 原本只驗 photoUrl、其餘欄位 `{ ...c }` 原封 spread。Gemini 結構化輸出對未填的 optional STRING 回 `""`，故 `fullNameZh`/`titleZh` 等空 gloss 一路落庫成 `full_name_zh=''`；web 端 `fullNameZh ?? fullName` 因「空字串非 nullish、不 fallback」→ 人物姓名/職稱顯示成空白（本輪引入之回歸）。Before：只 `validatePhotoUrl(photoUrl)`。After：先 `for (key of Object.keys(out))` 對每個 `typeof v==='string'` 欄套 `cleanStr`——空→`delete`（落庫 NULL）、非空→trim，再做 photoUrl 白名單驗證。與 deep-extractor 對同欄位 `cleanStr` 守護一致。非字串欄（seniority enum 等）不動。
+  - **EnrichPanel.tsx 樂觀 job 補 createdAt（low 逃生口修復）**: `submit()` 送出後設的樂觀 job `{id,targetType,targetId,mode,status:'queued'}` 無時間錨；若伺服器接受 POST 後、第一個成功 tick 前即不可達，`isJobStale` 的 `anchor=toEpochMs(startedAt)??toEpochMs(createdAt)` 全 null→逃生口永不翻轉，使用者卡死 spinner／按鈕鎖死。After：樂觀 job 加 `createdAt: new Date().toISOString()`（client 時戳），令此情境仍能於 65min 後翻成「已中斷」；首個成功輪詢後 setJob 以伺服器 job 覆蓋。ResearchJob.createdAt 型別已為 `number|string`，toEpochMs 吃 ISO。
+  - **crawler.ts 圖片排除對齊凍結契約四（low 字面偏差修復）**: `IMAGE_EXCLUDE_EXT_RE` 由 `/\.(svg|ico|gif)(\?|#|$)/i` 改為 `/\.(svg|ico)(\?|#|$)/i`——契約四僅列 `data:/svg/ico/明顯追蹤像素`，未列 gif；移除 gif 讓合法產品動態展示 gif 得以保留，追蹤像素仍由既有尺寸啟發式（w/h≤2px）攔截。同步更新註解。`image-whitelist.test.ts` 內 1x1 gif 案例仍被尺寸過濾攔下（測試續綠），僅更新其註解說明。
+- **為什麼**: 本輪 CRM 品質升級（13:55/14:20 兩批）經 code-review 確認三則問題：crawl 端漏了 deep 端已有的空 gloss 防護造成顯示回歸；逃生口對「送出後即不可達」的樂觀 job 失效與其自身註解矛盾；圖片排除多排了契約未列的 gif。皆為對齊既有契約/一致性的收斂修復，不改凍結契約。
+- **驗證**: server `npx tsc --noEmit` 綠、`npx vitest run` 27 檔 120 測全綠（含 image-whitelist 7 測）；web `npx tsc --noEmit` 綠、`next build` 綠（16 路由）。未 commit（硬規則 10）。
+
+### 2026-07-18 14:20 | web 包 CRM 品質消費：產品縮圖/型號＋人物中文名/職稱/背景＋公司 *Zh 優先＋研究逃生口(65min stale)
+- **工作區**: apps/web
+- **類型**: feat
+- **檔案**: `apps/web/lib/api.ts`, `apps/web/components/crm/ProductsTab.tsx`, `apps/web/components/crm/ContactsTab.tsx`, `apps/web/components/crm/PersonaCard.tsx`, `apps/web/components/crm/CompanyDetailView.tsx`, `apps/web/components/crm/EnrichPanel.tsx`, `apps/web/components/ui/JobProgressCard.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **改了什麼**:
+  - **api.ts ResearchJob 加 createdAt**: `createdAt?: number | string`（逃生口時間錨）。與 server 包一致——現行 `rowToJob` 回 epoch ms（number），型別放寬為 number|string 是對 ISO／SQLite「YYYY-MM-DD HH:MM:SS」的防禦性上界，解析交 `toEpochMs`。Company/CompanyProduct/Contact/ContactSummary 新欄（industryZh/taglineZh/businessModelZh/model/fullNameZh/titleZh）由 server 包在 `@meetcopilot/shared` 補齊（apps/web tsconfig 指向 shared 源碼），web 直接引用不另鏡像。
+  - **ProductsTab 縮圖＋型號**: 清單列 `mc-productrow__thumb`（mediaUrls[0]、方形、`loading="lazy"`、onError 隱藏容器）＋品名旁 `mc-productrow__model`（mono 小字）；明細 `mc-product-detail__media`（object-fit contain、onError 隱藏）＋型號 ProvenanceField 列。新 `hideImageParent(e)`：img onError → 隱藏 parentElement 防破圖佔位。
+  - **ContactsTab／PersonaCard 中文優先**: 人名 `fullNameZh ?? fullName`（有中文名時原拼音名以次行 `mc-contactrow__aka`/`mc-persona__aka` 小字保留）；職稱 `titleZh ?? title`；avatar initials 改用 displayName。PersonaCard 補 render `backgroundSummary`（`mc-persona__bg`）＋ isZh 時 `backgroundSummaryZh`（沿用既有 `mc-i18n-sum`），加 `useLocale`。
+  - **CompanyDetailView *Zh 優先**: 公司頭 `industryZh ?? industry`；OverviewTab 標語/產業/商業模式 value 改 `*Zh ?? 主 ?? "—"`，`field()` 加選填 rawValue＝**來源主要欄**（細填編輯錨定主欄，繁中 gloss 不覆寫主欄＝守雙語不變量）。
+  - **逃生口（EnrichPanel＋JobProgressCard）**: `STALE_MS=65min`＋`toEpochMs`（number/純數字字串/ISO/SQLite 空格式；無時區當 UTC 補 Z）＋`isJobStale(job,now)`。EnrichPanel 加 `nowTs` 20s 時鐘（僅 active&&!stale 跑，令輪詢中斷/伺服器不可達也能翻轉 stale）；stale→停輪詢；`busy=active&&!stale`（解鎖「研究此公司」）；`dismissJob`/`retryJob` 皆停輪詢＋清 localStorage（retry 再開面板）。JobProgressCard 加 `stale`/`staleTitle`/`staleBody` props：顯示「已中斷」warn badge＋文案＋重試（done/failed 區塊以 `!stale` gate），`mc-job.is-stale` warn 邊框。
+  - **i18n**: `enrichPanel.staleBadge`/`staleBody` 進 zh-TW.json＋en.json，兩檔 leaf parity 186=186。
+- **為什麼**: server 包（同批 13:55 記錄）新增產品型號/圖、人物中文名/職稱/背景 *Zh gloss 與 crawl_jobs reaper，web 端須顯示且守雙語不變量（繁中走 *Zh、不覆寫主欄），並補研究 job 前端逃生口（伺服器重啟/逾時致 queued/running 卡死 >65min 時顯示已中斷＋重試＋解鎖研究按鈕）。
+- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（EXIT=0）。未動 /present 播放視圖與 studio-present.css（I3）；globals.css 僅**新增** selector（mc-job.is-stale／mc-productrow__thumb/__namegroup/__model／mc-product-detail__media／mc-contactrow__aka／mc-persona__aka/__bg），未改既有 /present 規則。未 commit（硬規則 10）。
+
+### 2026-07-18 13:55 | CRM 品質升級（server 包）：*Zh 品質欄＋型號/SKU＋頁內圖片抓取＋imageUrls 白名單防幻覺＋crawl_jobs 開機 reaper
+- **工作區**: packages/shared, packages/crm, apps/server
+- **類型**: feat
+- **檔案**: `packages/crm/migrations/015_crm_quality.sql`(新), `packages/crm/migrations-pg/015_crm_quality.sql`(新), `packages/shared/src/crm-types.ts`, `packages/crm/src/mappers.ts`, `packages/crm/src/repos-prospect.ts`, `apps/server/src/research/crawler.ts`, `apps/server/src/research/extract-shared.ts`, `apps/server/src/research/extractor.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/jobs.ts`, `apps/server/src/index.ts`, `apps/server/src/research/reaper.test.ts`(新), `apps/server/src/research/image-whitelist.test.ts`(新)
+- **改了什麼**:
+  - **DB 新欄（migration 015，SQLite 一句一欄／PG 多欄一次＋IF NOT EXISTS）**: `companies +industry_zh/+tagline_zh/+business_model_zh`、`company_products +model`、`contacts +full_name_zh`（皆 TEXT／NULL／無 CHECK）。*_zh 為繁中 gloss，不覆寫來源語言主要欄；model＝型號/SKU（如 CP1500PFCLCD）。
+  - **型別＋映射（crm-types.ts / mappers.ts）**: `Company.taglineZh/industryZh/businessModelZh`、`CompanyProduct.model`、`Contact.fullNameZh`、`ContactSummary +fullNameZh/+titleZh`；COMPANY_DEFS/CONTACT_DEFS/COMPANY_PRODUCT_DEFS 補對應 col↔camelKey。
+  - **聯絡人清單 SELECT（repos-prospect.ts）**: `ContactRepository.list` 與 `listPeople` 的 SELECT 補 `full_name_zh/title_zh`；`mapContactSummary` 補 `fullNameZh/titleZh`。
+  - **爬蟲抓圖（crawler.ts）**: `CrawledPage` 加 `ogImage:string|null` 與 `images:{src,alt}[]`（透過 `pages[]` 供 RawCrawl 消費）。`extractPage` 加 string-form `page.evaluate` 抓 og:image/twitter:image＋頁內 `<img>`；新純函式 `sanitizeCrawledImages`（絕對 http(s)、去 svg/ico/gif/data:、去 ≤2px 追蹤像素、依 src 去重、每頁上限 15）與 `sanitizeOgImage`。抓圖失敗不影響文字抽取。
+  - **imageUrls 白名單防幻覺（extract-shared.ts）**: 新純函式 `filterToImageWhitelist(urls, whitelist)`／`validatePhotoUrl(url, whitelist)`——只保留確實爬到清單內的 URL（模型憑空捏造的一律濾掉）。
+  - **站點抽取器（extractor.ts）**: responseSchema＋SYSTEM 加 `products[].model/imageUrls`、`contacts[].fullNameZh/photoUrl`、`company.industryZh/taglineZh/businessModelZh`；`buildPrompt` 每頁尾附 `PAGE IMAGES` 清單（模型挑圖唯一合法來源，每頁 cap 10 控 token）。`toCompany` 建 `buildImageWhitelist(raw)` → `toProducts` 驗 imageUrls 併入 mediaUrls＋帶 model；`sanitizeContacts` 驗 photoUrl。明令 model 只抽規格頁型號、fullNameZh 僅來源有中文名才填（嚴禁音譯捏造）、imageUrls/photoUrl 只能從清單挑。
+  - **深度抽取器（deep-extractor.ts）**: COMPANY_PROPS 白名單加 `industryZh/taglineZh/businessModelZh`（→自動入 company＋逐欄 provenance）；people schema＋型別＋落庫加 `fullNameZh`；SYSTEM 補「*Zh 一律繁中台灣用語、industryZh 是產業別翻譯、fullNameZh 僅來源有中文名、deep 不做人物照」。
+  - **reaper（jobs.ts / index.ts）**: `CrawlJobStore.failInterrupted()`——跨 org 把 `status IN (queued,running)` 一律 UPDATE 成 failed、finished_at=now、error＝`伺服器重啟，研究已中斷，可重新發起`（匯出常數 `REAPER_INTERRUPTED_ERROR`），回筆數。`index.ts main()` 於 `core.migrate()` 後呼叫並 log 筆數（try/catch 非致命）。
+  - **落庫（orchestrator.ts）**: 無需改碼——新欄位經既有路徑自動持久化（company *Zh 走 upsertFromCrawl+COMPANY_DEFS；people fullNameZh 走 contacts.upsertFromCrawl+CONTACT_DEFS；product model＋驗證後 mediaUrls 走 upsertChild(PRODUCT_SPEC)+COMPANY_PRODUCT_DEFS）。
+  - **routes.ts createdAt**: 無需改——`rowToJob` 既有回傳 `createdAt`（epoch ms，對齊 `CrawlJob.createdAt:number` 型別；前端逃生口 `now-(startedAt??createdAt)` 算術即用），GET 回應已含。
+- **為什麼**: RESEARCH_UPGRADE 契約——CRM 加繁中品質欄與型號/SKU、爬蟲抓真實產品/人物圖並防模型幻覺 URL、server 重啟後清殘留研究 job 讓前端能逃生重試。
+- **驗證**: server `npx tsc --noEmit` 綠、`npx vitest run` 27 檔 120 測全綠（含新 reaper 2＋image-whitelist 9）；crm `npx vitest run` 7 檔 49 測全綠（含 admin-migration 套用 015）；shared/crm `typecheck` 綠。未 commit（硬規則 10）。
+
 ### 2026-07-17 23:40 | 深色對比徹查定案三修：button color:inherit＋:root color-scheme:dark＋新增公司表單裸 input 補 mc-input/id/name
 - **工作區**: apps/web
 - **類型**: fix

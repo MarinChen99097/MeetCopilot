@@ -36,6 +36,29 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-18 | CRM 品質四項的修法拍板（兩路 Opus 調查回報後 Fable 凍結契約）
+- **誰決定**: Fable（依兩路調查證據）
+- **決策**:
+  1. **研究卡死＝A+C 組合**：(A) 啟動 reaper——server boot 在 migrate 後把 crawl_jobs 殘留 queued/running 一律標 failed（max-instances=1 故安全；同時修掉 prod 現存的 CyberPower 卡死列，部署即自癒）；(C) 前端逃生口——EnrichPanel 對 running 且年齡 >65 分（startedAt??createdAt）顯示「已中斷，可重新發起」＋解鎖按鈕＋可關閉/重試。**不做** B 心跳欄（in-process watchdog 已涵蓋大宗，lazy-finalize 在 GET 寫 DB 味道差）與 D 部署層 min-instances≥1（成本高且不治本）。
+  2. **schema 加五欄**（SQLite＋PG 各一支新 migration）：companies.industry_zh／tagline_zh／business_model_zh、company_products.model、contacts.full_name_zh。**保留雙語不變量**（主要欄留來源語言、繁中走 *Zh gloss＋UI 優先顯示——不覆寫主要欄，護 provenance）。
+  3. **圖片走既有欄免 migration**：crawler 補抓 og:image＋頁內 <img>（絕對 URL、每頁上限、濾 icon/追蹤像素）→ 抽取器把產品圖填 mediaUrls、人物照填 photoUrl（僅官網來源 best-effort）；**deep 第三方來源的人物照不做**（比對人名成本高、錯配風險大）→ 記債。
+  4. **繁中 UI bug 一併修**：titleZh/backgroundSummaryZh 已落庫卻沒 render——PersonaCard/ContactsTab 補顯示；ContactSummary 型別＋清單 SELECT 加 titleZh、fullNameZh。
+  5. **人物中文名**：新欄 fullNameZh（不複用 preferredName——語意不同）；prompt 明令僅從來源取得、查不到留空，不得音譯捏造。
+  6. **派工結構**：Workflow 兩包平行（server 包＝migration/types/mappers/prompt/爬圖/orchestrator 落庫/reaper；web 包＝五元件＋api.ts＋i18n messages），契約（欄名/API 形狀）由 Fable 先凍結，兩包互不碰對方檔案（硬規則 6）；驗證＝build+vitest＋雙對抗審查＋本地對 Connact AI 重跑 deep E2E（驗 responseSchema 改動不炸真實 Gemini 呼叫）。
+- **考慮過的替代**: 只修 UI 顯示 *Zh 不加欄（否——使用者點名要型號＋中文名，缺欄裝不下）；產品型號塞 specs 不加欄（否——一級欄乾淨、UI 好 render）；改抽取器直接輸出全繁中覆寫主要欄（否——破壞來源語言可回溯）。
+- **影響**: apps/server/src/research/*、apps/server/src/index.ts、packages/crm（migrations×2＋mappers＋清單 repo）、packages/shared/crm-types.ts、apps/web CRM 五元件＋messages。既有 CyberPower 英文資料屬舊管線產物——部署後按鈕解鎖，重按「研究此公司」即以新管線重抽。
+
+### 2026-07-18 | CRM 資料品質整理四項要求（使用者看 CyberPower 詳頁截圖後下令）
+- **誰決定**: 使用者（線上 CRM 公司詳頁 CyberPower 截圖三張）
+- **決策**:
+  1. **產品深檔要能看懂對方公司的服務**：只寫「USB 充電器」太模糊——應呈現**型號＋圖片＋簡單功能簡介**。
+  2. **人物要中文名＋照片**：CyberPower 主管全是台灣人，目前只有英文拼音名（Ho, Lien-Hsun / President）——應有中文名字＋圖片。
+  3. **顯示內容以 i18n 為主**：除專有名詞外一律繁體中文（目前人物職稱、產業別 "Electrical Components & Equipment"、總覽 overview 都是英文）。
+  4. **「研究此公司」卡死要修**：研究早已停止，UI 仍顯示「研究中」＋按鈕鎖死——查根因並修。
+- **脈絡與理由**: 使用者實際用線上版對 CyberPower 跑全網深度研究後檢視成果，發現資料「過於混亂與不清楚」——CRM 是三產品的核心地基，資料品質直接決定 DynamicSlide／副駕／模擬訓練的輸出品質。
+- **考慮過的替代**: 無（使用者直接指示）。
+- **影響**: 待兩路 Opus 調查（抽取管線＋schema、研究 job 狀態生命週期）回報後定修法契約；預計動 apps/server/src/research/ 抽取 prompt、packages/shared crm-types、apps/web CRM 元件；修完照硬規則 10 問 commit＋部署。
+
 ### 2026-07-17 | 對比徹查結果採信＋修法拍板（button color:inherit＋color-scheme:dark）
 - **誰決定**: Fable（依 4 鏡頭對抗式徹查 workflow 證據；40 agents，raw 18→dedup 11→confirmed 6／killed 5）
 - **決策**:
