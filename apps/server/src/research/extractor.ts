@@ -29,14 +29,20 @@ import {
   NARRATIVE_UNCAT_SCHEMA,
   type UncategorizedIntel,
 } from "./extract-shared.js";
+// B4：頁面對齊複用 deep-extractor 的產品名正規化（單一來源，避免枚舉漂移）。單向依賴（deep-extractor 不 import 本檔）。
+import { normalizeProductName } from "./deep-extractor.js";
 export type { UncategorizedIntel };
 
 /** 統一爬蟲信心（provenance.confidence）。爬蟲抽取值一律標此值，人細填/確認才升信任。 */
 const CRAWL_CONFIDENCE = 0.6;
 // 多頁串接的 prompt 預算：detailed 會帶 ~20+ 頁（產品列表＋明細），需夠大才能餵進足量頁；
-// 每頁再各自截 PER_PAGE_PROMPT_CHARS 以保「廣度」（不讓某一長頁吃光預算）。gemini-3.5-flash 長 context 撐得住。
+// 每頁再各自截動態上限（computePerPageChars）以保「廣度」（不讓某一長頁吃光預算）。gemini-3.5-flash 長 context 撐得住。
 const MAX_PROMPT_CHARS = 180_000;
-const PER_PAGE_PROMPT_CHARS = 6_000;
+// B1 每頁截斷動態化：不再固定每頁砍 6000。若「sum(min(page.text, PER_PAGE_MAX_CHARS)) + 雜項（task/header/
+// 每頁框線/圖片清單）」放得進 MAX_PROMPT_CHARS，每頁給足 PER_PAGE_MAX_CHARS（＝crawler 每頁存的上限，等於不砍）；
+// 否則把「扣掉雜項的預算」按頁數等分、下限 PER_PAGE_MIN_CHARS（頁數過多時仍保每頁最低具體度，整體再由末端 slice 收尾）。
+const PER_PAGE_MAX_CHARS = 12_000; // 對齊 crawler.MAX_TEXT_CHARS（每頁最多存 12000 字）→ 放得下就整頁餵
+const PER_PAGE_MIN_CHARS = 6_000; // 頁數過多時的每頁下限
 // detailed 抽取要回「每產品含 specs/features」的較大 JSON——放寬輸出 token 上限，避免多產品被截斷。
 const EXTRACT_MAX_OUTPUT_TOKENS = 16_384;
 // 低溫抽取：預設溫度（~1.0）下同一批頁的產品數 run-to-run 劇烈跳動（實測 cyberpower 1 vs 33）；
@@ -47,6 +53,19 @@ const MAX_TECH = 12;
 const MAX_DEPARTMENTS = 10;
 // 每頁在 prompt 附上的圖片清單上限（控 token）。模型只能從此清單挑 imageUrls/photoUrl（其餘視為幻覺被程式濾掉）。
 const PROMPT_IMAGES_PER_PAGE = 10;
+// B4 二段式（per-product 聚焦補抽）參數。
+const PRODUCT_DETAIL_MAX_PAGES = 10; // 最多聚焦補抽的產品數（有對應爬取專頁者）
+const PRODUCT_DETAIL_CONCURRENCY = 3; // 聚焦補抽並行上限
+// 單一產品 rich schema 輸出上限。MAX_TOKENS 修法（E2E：某產品二段深抽整筆丟失）：gemini-3.5-flash 的 thinking token
+// 與輸出共用此預算，原本 4096 對「≥3 keyFeatures＋specs 表＋雙語 gloss」的 rich JSON 偏緊 → thinking 一多即截斷。
+// 上調 4096→8192，並在呼叫端壓低 thinkingBudget，確保 JSON 一定放得下。
+const PRODUCT_DETAIL_MAX_OUTPUT_TOKENS = 8_192;
+// 單品聚焦抽取的 thinking 上限（gemini-3.x flash）：小任務不需長思考，壓低以保 JSON 輸出不被 thinking 吃光。
+const PRODUCT_DETAIL_THINKING_BUDGET = 2_048;
+const PRODUCT_DETAIL_NEARBY_MAX = 2; // 每產品併入的鄰近相關頁上限
+const PRODUCT_NAME_MIN_MATCH = 4; // 名稱含式匹配頁的最短正規化長度（避免過短 token 誤配全站）
+/** 空圖片白名單（B4 聚焦抽取不請 imageUrls，foldProduct 需一個 whitelist）。 */
+const EMPTY_WHITELIST: ReadonlySet<string> = new Set<string>();
 
 export interface CrawlExtractor {
   toCompany(raw: RawCrawl): Promise<CompanyExtraction>;
@@ -78,6 +97,10 @@ interface ExtractedProduct {
   integrations?: string[];
   differentiators?: string[];
   targetPersonas?: string[];
+  /** B3：此產品用到/建於的技術棧（如 AWS、React；保留原名）。 */
+  techStack?: string[];
+  /** B3：此產品的競品（頁面明列時）。 */
+  competitors?: string[];
   keyFeatures?: { name?: string; detail?: string; benefit?: string }[];
   specs?: { name?: string; value?: string }[];
   /** 產品圖片 URL（模型只能從提供的頁面圖片清單挑；程式端過白名單驗證後併入 mediaUrls）。 */
@@ -267,6 +290,10 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
           integrations: { type: S.ARRAY, items: { type: S.STRING } },
           differentiators: { type: S.ARRAY, items: { type: S.STRING } },
           targetPersonas: { type: S.ARRAY, items: { type: S.STRING } },
+          // B3：此產品的技術棧（用到/建於的技術/平台；保留 AWS/React 等原名）。
+          techStack: { type: S.ARRAY, items: { type: S.STRING } },
+          // B3：此產品的競品（頁面明列「competitors / alternatives / 相較於」時）。
+          competitors: { type: S.ARRAY, items: { type: S.STRING } },
           // 產品重點功能（來自 feature 區塊）。
           keyFeatures: {
             type: S.ARRAY,
@@ -334,14 +361,16 @@ const SYSTEM = [
   "- `tagline`: ONLY the site's short headline slogan (roughly <= 12 words). Do NOT put the full description in `tagline`.",
   "- `productsOffered`: the product/service names.",
   "PRODUCTS — this is the highest-value output. List EVERY distinct product / model / series the site describes as its own `products[]` entry; do NOT cap the list (a hardware catalog may have a dozen or more). For each, fill from the detail/spec pages when present:",
+  "MINIMUM SPECIFICITY (hard requirement per product, whenever the site describes the product): at least 3 `keyFeatures[]` each WITH a concrete `detail`, AND at least one sentence of `targetMarket`. If the page shows a price you MUST fill `priceText`; if the page has a spec/comparison table you MUST fill `specs[]`. Do not return a bare `{name}` for a product that has a real page — dig the specifics out of the text. (Still: never invent facts the text does not contain.)",
   "- `model`: the product's model number / SKU EXACTLY as printed on the spec/detail page (e.g. 'CP1500PFCLCD', 'ABC-123'). Fill ONLY when the page actually shows one; otherwise leave empty. NEVER invent a model code.",
   "- `imageUrls`: image URLs for THIS product. You MUST pick ONLY from the `PAGE IMAGES` list shown under each page below, copying the URL VERBATIM. NEVER invent, guess, or modify an image URL. If none of the listed images clearly belongs to this product, leave it empty.",
   "- `category`: the product's family/type (e.g. '在線式 UPS 不斷電系統', 'PDU 電源分配器').",
   "- `oneLiner` + `description`: one short line + a short paragraph of what it is / who it's for.",
-  "- `pricingModel` + `priceText`: the pricing type, and the price EXACTLY as shown on the page (keep the currency and units, e.g. 'NT$4,290', '$99/mo'). Only if a price is actually shown.",
-  "- `targetMarket` (and `targetPersonas` if stated): who the product is for (e.g. '中小企業伺服器機房', '家庭與 SOHO').",
-  "- `keyFeatures[]`: the product's notable features (name + optional detail/benefit).",
-  "- `specs[]`: technical spec rows from a spec/comparison table as {name,value} pairs, e.g. {name:'容量', value:'1500VA/900W'}, {name:'輸出電壓', value:'110V'}, {name:'外型架構', value:'直立式'}. Product-detail AND product-comparison pages list models by attribute columns (capacity/architecture/form-factor/voltage/runtime) — attach those attribute values as specs[] on the matching product. A page WITH such a table SHOULD populate specs[].",
+  "- `pricingModel` + `priceText`: the pricing type, and the price EXACTLY as shown on the page (keep the currency and units, e.g. 'NT$4,290', '$99/mo'). If the page shows ANY price for this product you MUST fill `priceText` verbatim; leave it empty ONLY when no price appears at all. NEVER invent a price.",
+  "- `targetMarket` (and `targetPersonas` if stated): ALWAYS provide at least one sentence on who the product is for (e.g. '中小企業伺服器機房', '家庭與 SOHO'); infer it from the marketing copy even when it is not explicitly labelled.",
+  "- `keyFeatures[]`: list AT LEAST 3 of the product's notable features whenever the page describes it; each MUST have a `name` AND a concrete `detail` (what it does / the spec behind it), plus a `benefit` when the page states one. A one-or-two-item or detail-less feature list on a product with a real page is a failure — extract the specifics.",
+  "- `techStack` + `competitors`: the technologies the product is built on / integrates with (keep AWS/React/Kubernetes/SAP original) and named competing products or alternatives — ONLY when the page actually states them; otherwise leave empty.",
+  "- `specs[]`: technical spec rows from a spec/comparison table as {name,value} pairs, e.g. {name:'容量', value:'1500VA/900W'}, {name:'輸出電壓', value:'110V'}, {name:'外型架構', value:'直立式'}. Product-detail AND product-comparison pages list models by attribute columns (capacity/architecture/form-factor/voltage/runtime) — attach those attribute values as specs[] on the matching product. If a product's page contains such a table you MUST populate `specs[]` for that product from it.",
   "Also include, only when the text states them: HQ location, founded year, social links, key customers, and named people (as `contacts[]`).",
   "PEOPLE (contacts[]) — for each named person: `fullNameZh` = the person's Chinese name ONLY if it literally appears in the source text (official site/bio). NEVER transliterate a romanized name into Chinese or fabricate a Chinese name — leave it empty if the source has no Chinese name. `photoUrl` = the person's photo, picked ONLY from the `PAGE IMAGES` list VERBATIM; never invent one.",
   "TECH & DEPARTMENTS (only when the text states them): `company.techStack[]` = technologies/vendors/products the company itself uses or is built on ({category, vendor, product, detectedFrom = where on the page you saw it}); `company.departments[]` = the company's internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns in their original form (e.g. AWS, React, Kubernetes, SAP). Cap: at most 12 techStack items and at most 10 departments.",
@@ -376,18 +405,45 @@ function pageImagesBlock(p: CrawledPage): string {
   return `\n[PAGE IMAGES] (pick imageUrls/photoUrl ONLY from these, verbatim):\n${lines.join("\n")}`;
 }
 
+/**
+ * B1：由各頁文字長度與「雜項」預算算出**動態的每頁字元上限**。純函式（供單測）。
+ *  - textLengths：各頁 innerText 長度（爬蟲已各自截 ≤12000，但此處仍以 min 夾住以防呼叫端未截）。
+ *  - miscChars：非頁面文字的固定開銷（task + header + 每頁框線 label + PAGE IMAGES 清單 + join 換行）。
+ * 規則：sum(min(len, PER_PAGE_MAX_CHARS)) + miscChars ≤ MAX_PROMPT_CHARS → 回 PER_PAGE_MAX_CHARS（放得下就整頁餵）；
+ *       否則把「MAX_PROMPT_CHARS − miscChars」按頁數等分，clamp 到 [PER_PAGE_MIN_CHARS, PER_PAGE_MAX_CHARS]。
+ * 頁數極多以致每頁 < PER_PAGE_MIN_CHARS 時仍回下限（接受超出，整體 prompt 由末端 slice(MAX_PROMPT_CHARS) 硬收尾）。
+ */
+export function computePerPageChars(textLengths: number[], miscChars: number): number {
+  const n = textLengths.length;
+  if (n === 0) return PER_PAGE_MAX_CHARS;
+  const fullSum = textLengths.reduce((s, l) => s + Math.min(Math.max(0, l), PER_PAGE_MAX_CHARS), 0);
+  if (fullSum + miscChars <= MAX_PROMPT_CHARS) return PER_PAGE_MAX_CHARS;
+  const textBudget = Math.max(0, MAX_PROMPT_CHARS - miscChars);
+  const perPage = Math.floor(textBudget / n);
+  return Math.min(PER_PAGE_MAX_CHARS, Math.max(PER_PAGE_MIN_CHARS, perPage));
+}
+
 function buildPrompt(raw: RawCrawl): string {
   const header = `Source site: ${raw.finalUrl ?? raw.url}\nPage title: ${raw.title ?? ""}\nMeta description: ${raw.metaDescription ?? ""}\nPages crawled: ${raw.pages.length}\n`;
-  // 每頁各自截 PER_PAGE_PROMPT_CHARS（保廣度：不讓某一長頁吃光 prompt 預算），再整體截 MAX_PROMPT_CHARS。
-  // 每頁尾附 PAGE IMAGES 清單（模型挑 imageUrls/photoUrl 的唯一合法來源）。
-  const bodies = raw.pages
-    .map((p, i) => `\n--- PAGE ${i + 1}: ${p.url} ---\n${p.text.slice(0, PER_PAGE_PROMPT_CHARS)}${pageImagesBlock(p)}`)
-    .join("\n");
   const task =
     "TASK: Read the multi-page website text below (each page labelled with its URL) and produce a company-profile JSON. " +
     "Fill `description` and `industry` from what the site says the company does, even if not explicitly labelled. " +
     "List EVERY product/model/series the site describes under `products[]`, and enrich each with category, pricing (priceText as shown), targetMarket, keyFeatures[] and specs[] taken from the product-detail/spec pages. " +
     "Use only facts from the text; keep values short and do not repeat yourself.\n\n";
+  // 每頁尾附 PAGE IMAGES 清單（模型挑 imageUrls/photoUrl 的唯一合法來源）。先算「非頁面文字」的固定開銷（雜項），
+  // 再據此動態決定每頁能給多少字（B1）：放得下就整頁餵、否則按頁數等分（下限 6000）。
+  const frames = raw.pages.map((p, i) => ({
+    prefix: `\n--- PAGE ${i + 1}: ${p.url} ---\n`,
+    images: pageImagesBlock(p),
+    text: p.text,
+  }));
+  const miscChars =
+    task.length +
+    header.length +
+    frames.reduce((s, f) => s + f.prefix.length + f.images.length, 0) +
+    Math.max(0, frames.length - 1); // join("\n") 的換行
+  const perPage = computePerPageChars(frames.map((f) => f.text.length), miscChars);
+  const bodies = frames.map((f) => `${f.prefix}${f.text.slice(0, perPage)}${f.images}`).join("\n");
   return (task + header + bodies).slice(0, MAX_PROMPT_CHARS);
 }
 
@@ -427,65 +483,304 @@ const strArr = (v: unknown): string[] | undefined => {
 };
 
 /**
- * 把模型的 ExtractedProduct[] 摺成 domain 的 Partial<CompanyProduct>[]（specs 陣列→物件、priceText→priceFrom/currency/pricingNotes）。
+ * 把一筆模型 ExtractedProduct 摺成 domain 的 Partial<CompanyProduct>（specs 陣列→物件、priceText→priceFrom/
+ * currency/pricingNotes、keyFeatures 去空、techStack/competitors 去空去重）。無 name → undefined。
  * imageUrls 過白名單驗證（防幻覺，契約三）：只保留確實爬到的圖片 URL，通過者併入 mediaUrls。
+ * 共用於首段全站抽取（toProducts）與 B4 二段式聚焦抽取（extractOneProductDetail）。
+ */
+function foldProduct(p: ExtractedProduct, imageWhitelist: ReadonlySet<string>): Partial<CompanyProduct> | undefined {
+  const name = typeof p?.name === "string" ? p.name.trim() : "";
+  if (!name) return undefined;
+  const prod: Partial<CompanyProduct> = { name };
+  if (typeof p.model === "string" && p.model.trim()) prod.model = p.model.trim();
+  // 產品圖片：只收白名單內的（幻覺 URL 濾掉）→ 併入 mediaUrls。
+  const imgs = filterToImageWhitelist(p.imageUrls, imageWhitelist);
+  if (imgs.length > 0) prod.mediaUrls = imgs;
+  if (p.category) prod.category = p.category;
+  if (p.oneLiner) prod.oneLiner = p.oneLiner;
+  if (p.oneLinerZh) prod.oneLinerZh = p.oneLinerZh;
+  if (p.description) prod.description = p.description;
+  if (p.descriptionZh) prod.descriptionZh = p.descriptionZh;
+  const purl = cleanUrl(p.productUrl);
+  if (purl) prod.productUrl = purl;
+  const durl = cleanUrl(p.docsUrl);
+  if (durl) prod.docsUrl = durl;
+  if (p.pricingModel) prod.pricingModel = p.pricingModel;
+  if (p.targetMarket) prod.targetMarket = p.targetMarket;
+  const integrations = strArr(p.integrations);
+  if (integrations) prod.integrations = integrations;
+  const differentiators = strArr(p.differentiators);
+  if (differentiators) prod.differentiators = differentiators;
+  const targetPersonas = strArr(p.targetPersonas);
+  if (targetPersonas) prod.targetPersonas = targetPersonas;
+  // B3：techStack / competitors（去空去重）。
+  const techStack = strArr(p.techStack);
+  if (techStack) prod.techStack = techStack;
+  const competitors = strArr(p.competitors);
+  if (competitors) prod.competitors = competitors;
+  // 價格：原文留 pricingNotes；能解析就補 priceFrom/currency。
+  if (typeof p.priceText === "string" && p.priceText.trim()) {
+    prod.pricingNotes = p.priceText.trim();
+    const parsed = parsePrice(p.priceText);
+    if (parsed) {
+      prod.priceFrom = parsed.amount;
+      if (parsed.currency) prod.currency = parsed.currency;
+    }
+  }
+  // 功能：{name,detail?,benefit?}[]（ProductFeature）。
+  if (Array.isArray(p.keyFeatures)) {
+    const feats = p.keyFeatures
+      .filter((f): f is { name: string; detail?: string; benefit?: string } => Boolean(f) && typeof f.name === "string" && f.name.trim().length > 0)
+      .map((f) => ({ name: f.name.trim(), detail: f.detail?.trim() || undefined, benefit: f.benefit?.trim() || undefined }));
+    if (feats.length > 0) prod.keyFeatures = feats;
+  }
+  // 規格：{name,value}[] → 自由 key-value 物件。
+  if (Array.isArray(p.specs)) {
+    const specObj: Record<string, string> = {};
+    for (const s of p.specs) {
+      const k = typeof s?.name === "string" ? s.name.trim() : "";
+      const v = typeof s?.value === "string" ? s.value.trim() : "";
+      if (k && v) specObj[k] = v;
+    }
+    if (Object.keys(specObj).length > 0) prod.specs = specObj;
+  }
+  return prod;
+}
+
+/**
+ * 把模型的 ExtractedProduct[] 摺成 domain 的 Partial<CompanyProduct>[]（逐筆 foldProduct；無 name 者略）。
  */
 function toProducts(items: ExtractedProduct[] | undefined, imageWhitelist: ReadonlySet<string>): Partial<CompanyProduct>[] {
   if (!Array.isArray(items)) return [];
   const out: Partial<CompanyProduct>[] = [];
   for (const p of items) {
-    const name = typeof p?.name === "string" ? p.name.trim() : "";
-    if (!name) continue;
-    const prod: Partial<CompanyProduct> = { name };
-    if (typeof p.model === "string" && p.model.trim()) prod.model = p.model.trim();
-    // 產品圖片：只收白名單內的（幻覺 URL 濾掉）→ 併入 mediaUrls。
-    const imgs = filterToImageWhitelist(p.imageUrls, imageWhitelist);
-    if (imgs.length > 0) prod.mediaUrls = imgs;
-    if (p.category) prod.category = p.category;
-    if (p.oneLiner) prod.oneLiner = p.oneLiner;
-    if (p.oneLinerZh) prod.oneLinerZh = p.oneLinerZh;
-    if (p.description) prod.description = p.description;
-    if (p.descriptionZh) prod.descriptionZh = p.descriptionZh;
-    const purl = cleanUrl(p.productUrl);
-    if (purl) prod.productUrl = purl;
-    const durl = cleanUrl(p.docsUrl);
-    if (durl) prod.docsUrl = durl;
-    if (p.pricingModel) prod.pricingModel = p.pricingModel;
-    if (p.targetMarket) prod.targetMarket = p.targetMarket;
-    const integrations = strArr(p.integrations);
-    if (integrations) prod.integrations = integrations;
-    const differentiators = strArr(p.differentiators);
-    if (differentiators) prod.differentiators = differentiators;
-    const targetPersonas = strArr(p.targetPersonas);
-    if (targetPersonas) prod.targetPersonas = targetPersonas;
-    // 價格：原文留 pricingNotes；能解析就補 priceFrom/currency。
-    if (typeof p.priceText === "string" && p.priceText.trim()) {
-      prod.pricingNotes = p.priceText.trim();
-      const parsed = parsePrice(p.priceText);
-      if (parsed) {
-        prod.priceFrom = parsed.amount;
-        if (parsed.currency) prod.currency = parsed.currency;
-      }
-    }
-    // 功能：{name,detail?,benefit?}[]（ProductFeature）。
-    if (Array.isArray(p.keyFeatures)) {
-      const feats = p.keyFeatures
-        .filter((f): f is { name: string; detail?: string; benefit?: string } => Boolean(f) && typeof f.name === "string" && f.name.trim().length > 0)
-        .map((f) => ({ name: f.name.trim(), detail: f.detail?.trim() || undefined, benefit: f.benefit?.trim() || undefined }));
-      if (feats.length > 0) prod.keyFeatures = feats;
-    }
-    // 規格：{name,value}[] → 自由 key-value 物件。
-    if (Array.isArray(p.specs)) {
-      const specObj: Record<string, string> = {};
-      for (const s of p.specs) {
-        const k = typeof s?.name === "string" ? s.name.trim() : "";
-        const v = typeof s?.value === "string" ? s.value.trim() : "";
-        if (k && v) specObj[k] = v;
-      }
-      if (Object.keys(specObj).length > 0) prod.specs = specObj;
-    }
-    out.push(prod);
+    const prod = foldProduct(p, imageWhitelist);
+    if (prod) out.push(prod);
   }
+  return out;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// B4 二段式（per-product 聚焦補抽）：首段抽完清單後，對「有對應爬取專頁」的產品逐一跑聚焦抽取。
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 單一產品 rich schema（B4 第二段）：required 仍只留 name（防幻覺），其餘具體度靠 PRODUCT_DETAIL_SYSTEM 強制。 */
+const PRODUCT_DETAIL_SCHEMA: Record<string, unknown> = {
+  type: S.OBJECT,
+  properties: {
+    name: { type: S.STRING },
+    model: { type: S.STRING },
+    category: { type: S.STRING },
+    oneLiner: { type: S.STRING },
+    oneLinerZh: { type: S.STRING },
+    description: { type: S.STRING },
+    descriptionZh: { type: S.STRING },
+    pricingModel: { type: S.STRING },
+    priceText: { type: S.STRING },
+    targetMarket: { type: S.STRING },
+    targetPersonas: { type: S.ARRAY, items: { type: S.STRING } },
+    differentiators: { type: S.ARRAY, items: { type: S.STRING } },
+    integrations: { type: S.ARRAY, items: { type: S.STRING } },
+    techStack: { type: S.ARRAY, items: { type: S.STRING } },
+    competitors: { type: S.ARRAY, items: { type: S.STRING } },
+    keyFeatures: {
+      type: S.ARRAY,
+      items: {
+        type: S.OBJECT,
+        properties: { name: { type: S.STRING }, detail: { type: S.STRING }, benefit: { type: S.STRING } },
+        required: ["name"],
+      },
+    },
+    specs: {
+      type: S.ARRAY,
+      items: {
+        type: S.OBJECT,
+        properties: { name: { type: S.STRING }, value: { type: S.STRING } },
+        required: ["name", "value"],
+      },
+    },
+  },
+  required: ["name"],
+};
+
+const PRODUCT_DETAIL_SYSTEM = [
+  "You are a B2B product analyst. You are given the FULL text of ONE product's own page (plus nearby related pages from the same site) and the product's name.",
+  "Return a SINGLE rich JSON object describing ONLY that product, matching the schema.",
+  "Extract as much concrete detail as the page supports: at least 3 `keyFeatures` each WITH a `detail`; a one-sentence `targetMarket`; `priceText` EXACTLY as shown if any price appears; `specs[]` as {name,value} pairs from any spec/comparison table; plus `pricingModel`, `targetPersonas`, `differentiators`, `integrations`, `techStack` (keep AWS/React/Kubernetes/SAP original), `competitors`, and `model`/SKU when the page shows one.",
+  "LANGUAGE: keep primary fields verbatim in the page's own language; additionally emit `oneLinerZh` and `descriptionZh` as a concise Traditional-Chinese (zh-TW) gloss.",
+  "NEVER invent facts, prices, specs, or model codes the text does not contain. Leave a field empty when the page does not state it. Return ONLY valid JSON.",
+].join(" ");
+
+/** 正規化 URL 供頁面對齊（origin+pathname、lowercase、去尾斜線）；解析失敗回原字串小寫去尾斜線。 */
+function normUrlForMatch(u: string): string {
+  try {
+    const url = new URL(u);
+    let s = `${url.origin}${url.pathname}`.toLowerCase();
+    if (s.length > 1 && s.endsWith("/")) s = s.replace(/\/+$/, "");
+    return s;
+  } catch {
+    return u.trim().toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+/** 陣列 union 去重（case-insensitive，保留首見原文）；空 → undefined。供 B4 merge。 */
+function unionStrArr(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of [...(a ?? []), ...(b ?? [])]) {
+    const t = typeof x === "string" ? x.trim() : "";
+    if (!t) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** B4：一筆產品↔爬取頁的對齊結果。 */
+export interface ProductPageMatch {
+  productIndex: number;
+  page: CrawledPage;
+  nearby: CrawledPage[];
+}
+
+/**
+ * B4：把首段產品清單對齊到「有對應爬取專頁」的頁（≤max）。純函式，供單測。
+ * 優先 `productUrl` 完全命中爬取頁（正規化 URL 相等）；否則正規化產品名含式匹配頁 url/title
+ * （名稱正規化長度 < PRODUCT_NAME_MIN_MATCH 則不做名稱匹配，避免短 token 誤配全站）。
+ * nearby＝其餘同名（含式匹配）頁（≤PRODUCT_DETAIL_NEARBY_MAX，供聚焦抽取補鄰近脈絡）。
+ */
+export function matchProductsToPages(
+  products: { name?: string; productUrl?: string }[],
+  pages: CrawledPage[],
+  max = PRODUCT_DETAIL_MAX_PAGES,
+): ProductPageMatch[] {
+  const matches: ProductPageMatch[] = [];
+  for (let i = 0; i < products.length; i++) {
+    if (matches.length >= max) break;
+    const p = products[i]!;
+    const name = cleanStr(p.name);
+    if (!name) continue;
+    let page: CrawledPage | undefined;
+    // 1) productUrl 完全命中爬取頁
+    const purl = cleanStr(p.productUrl);
+    if (purl) {
+      const target = normUrlForMatch(purl);
+      page = pages.find((pg) => normUrlForMatch(pg.url) === target);
+    }
+    // 2) 正規化名稱含式匹配頁 url/title
+    const nname = normalizeProductName(name);
+    if (!page && nname.length >= PRODUCT_NAME_MIN_MATCH) {
+      page = pages.find((pg) => normalizeProductName(`${pg.url} ${pg.title ?? ""}`).includes(nname));
+    }
+    if (!page) continue;
+    const matchedUrl = page.url;
+    const nearby =
+      nname.length >= PRODUCT_NAME_MIN_MATCH
+        ? pages
+            .filter((pg) => pg.url !== matchedUrl && normalizeProductName(`${pg.url} ${pg.title ?? ""}`).includes(nname))
+            .slice(0, PRODUCT_DETAIL_NEARBY_MAX)
+        : [];
+    matches.push({ productIndex: i, page, nearby });
+  }
+  return matches;
+}
+
+/** B4：對單一產品的專頁（＋鄰近頁）跑聚焦抽取，回 rich Partial<CompanyProduct>。失敗上拋（呼叫端容忍）。 */
+async function extractOneProductDetail(
+  gemini: GeminiClient,
+  extractModel: string | undefined,
+  productName: string,
+  page: CrawledPage,
+  nearby: CrawledPage[],
+): Promise<Partial<CompanyProduct> | undefined> {
+  const parts = [`PRODUCT NAME: ${productName}`, "", `=== PRIMARY PAGE: ${page.url} ===`, page.text.slice(0, PER_PAGE_MAX_CHARS)];
+  for (const nb of nearby) {
+    parts.push("", `=== RELATED PAGE: ${nb.url} ===`, nb.text.slice(0, PER_PAGE_MAX_CHARS));
+  }
+  const prompt = parts.join("\n").slice(0, MAX_PROMPT_CHARS);
+  const ex = await gemini.generateJson<ExtractedProduct>({
+    model: extractModel,
+    system: PRODUCT_DETAIL_SYSTEM,
+    prompt,
+    schema: PRODUCT_DETAIL_SCHEMA,
+    maxOutputTokens: PRODUCT_DETAIL_MAX_OUTPUT_TOKENS,
+    thinkingBudget: PRODUCT_DETAIL_THINKING_BUDGET,
+    temperature: EXTRACT_TEMPERATURE,
+  });
+  // 聚焦抽取不請 imageUrls → 空白名單即可（不影響其餘欄位）。
+  return foldProduct(ex, EMPTY_WHITELIST);
+}
+
+/**
+ * B4 merge：把聚焦抽取的 detail 併回 base 產品——純量 fill-empty（不覆寫既有非空）、陣列 union 去重、
+ * keyFeatures 依名稱 union、specs 依 key union（既有 key 不覆寫）。就地變異 base。
+ */
+function mergeProductDetail(base: Partial<CompanyProduct>, detail: Partial<CompanyProduct>): void {
+  const isEmpty = (v: unknown): boolean => v === undefined || v === null || (typeof v === "string" && v.trim() === "");
+  const scalarKeys: (keyof CompanyProduct)[] = [
+    "model", "category", "oneLiner", "oneLinerZh", "description", "descriptionZh",
+    "pricingModel", "priceFrom", "currency", "pricingNotes", "targetMarket",
+  ];
+  for (const k of scalarKeys) {
+    if (isEmpty(base[k]) && !isEmpty(detail[k])) (base as Record<string, unknown>)[k] = detail[k];
+  }
+  const arrKeys: (keyof CompanyProduct)[] = ["differentiators", "competitors", "integrations", "techStack", "targetPersonas"];
+  for (const k of arrKeys) {
+    const merged = unionStrArr(base[k] as string[] | undefined, detail[k] as string[] | undefined);
+    if (merged) (base as Record<string, unknown>)[k] = merged;
+  }
+  // keyFeatures：依名稱（lowercase）union，既有優先、補新名。
+  if (detail.keyFeatures && detail.keyFeatures.length > 0) {
+    const seen = new Set((base.keyFeatures ?? []).map((f) => f.name.toLowerCase()));
+    const add = detail.keyFeatures.filter((f) => f.name && !seen.has(f.name.toLowerCase()));
+    if (add.length > 0) base.keyFeatures = [...(base.keyFeatures ?? []), ...add];
+  }
+  // specs：依 key union（既有 key 不覆寫）。
+  if (detail.specs && Object.keys(detail.specs).length > 0) {
+    base.specs = { ...detail.specs, ...(base.specs ?? {}) };
+  }
+  const media = unionStrArr(base.mediaUrls, detail.mediaUrls);
+  if (media) base.mediaUrls = media;
+}
+
+/**
+ * B4：二段式 per-product 聚焦補抽。對「有對應爬取專頁」的產品（≤10）逐一跑聚焦抽取（並行 ≤3），
+ * 回傳 rich 欄位以 fill-empty + 陣列 union 併回既有產品（不覆寫既有非空值）。
+ * 失敗容忍：單品失敗只略過該品、不影響其餘與全局。gemini 未設定/無頁/無產品 → 原樣返回。
+ * 回新陣列（就地複製產品，不變異入參）。由 orchestrator 在站點抽取完成後對 standard 與 deep 兩路徑呼叫。
+ */
+export async function enrichProductDetails(
+  gemini: GeminiClient,
+  extractModel: string | undefined,
+  products: Partial<CompanyProduct>[],
+  raw: RawCrawl,
+): Promise<Partial<CompanyProduct>[]> {
+  if (!gemini.isConfigured() || !Array.isArray(products) || products.length === 0) return products;
+  if (!raw?.pages || raw.pages.length === 0) return products;
+  const out = products.map((p) => ({ ...p }));
+  const matches = matchProductsToPages(out, raw.pages);
+  if (matches.length === 0) return out;
+  let idx = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = idx++;
+      if (i >= matches.length) return;
+      const m = matches[i]!;
+      const base = out[m.productIndex]!;
+      const name = cleanStr(base.name);
+      if (!name) continue;
+      try {
+        const detail = await extractOneProductDetail(gemini, extractModel, name, m.page, m.nearby);
+        if (detail) mergeProductDetail(base, detail);
+      } catch (e) {
+        console.error(`[extract:product-detail] "${name}" failed (non-fatal):`, e);
+      }
+    }
+  };
+  const n = Math.min(PRODUCT_DETAIL_CONCURRENCY, matches.length);
+  await Promise.all(Array.from({ length: n }, () => worker()));
   return out;
 }
 

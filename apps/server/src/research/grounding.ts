@@ -8,6 +8,11 @@ import type { GeminiClient, GroundedResult } from "../gemini.js";
 export interface GroundingContext {
   companyId?: string;
   companyName?: string;
+  /**
+   * S1-A3：覆寫本次 grounding 呼叫的 model（generateGrounded opts.model）。deep 研究路徑帶 extractModel（升模）；
+   * /ground 端點不帶 → 沿用 textModel（flash-lite）。
+   */
+  model?: string;
 }
 
 export interface GroundingProvider {
@@ -24,7 +29,7 @@ export function createGroundingProvider(gemini: GeminiClient): GroundingProvider
     async answer(query: string, ctx?: GroundingContext): Promise<GroundedResult> {
       if (!gemini.isConfigured()) throw new Error("GEMINI_API_KEY not configured");
       const hint = ctx?.companyName ? `\n(Context: the question concerns the company "${ctx.companyName}".)` : "";
-      return gemini.generateGrounded({ system: SYSTEM, prompt: `${query}${hint}` });
+      return gemini.generateGrounded({ system: SYSTEM, prompt: `${query}${hint}`, model: ctx?.model });
     },
   };
 }

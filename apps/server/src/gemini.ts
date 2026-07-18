@@ -32,6 +32,15 @@ export interface GenerateJsonOptions {
    * different product counts run-to-run (observed 1 vs 33 on cyberpower.com) — low temp stabilizes enumeration.
    */
   temperature?: number;
+  /**
+   * Thinking-token budget for models with a thinking phase (gemini-3.x flash), mapped to
+   * config.thinkingConfig.thinkingBudget. 0 = DISABLED, -1 = AUTOMATIC (the API default); a low positive
+   * value caps the thinking phase. WHY it matters: thinking tokens are drawn from the SAME maxOutputTokens
+   * budget, so on a SMALL task with a tight cap the model can spend the whole budget "thinking" and emit
+   * zero JSON → finishReason=MAX_TOKENS (observed on per-contact background + per-product detail extraction).
+   * For those small focused tasks, cap thinking low so the JSON always fits. Omit → model default (AUTOMATIC).
+   */
+  thinkingBudget?: number;
 }
 
 /** 一則 grounding 引用（Google Search grounding 的來源）。 */
@@ -123,6 +132,11 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * 用 client 預設 30s 會誤殺正常長生成。ASR 走自己的 GoogleGenAI（不共用本 client），維持自身短 deadline。
  */
 const GENERATE_JSON_TIMEOUT_MS = 120_000;
+/**
+ * generateGrounded 專用逾時 90s：Google-Search grounding 升模到 gemini-3.5-flash 後單次常 >30s，
+ * 用 client 預設 30s 會誤殺正常長 grounding（E2E 觀察到 attempt 1/2 與 2/2 皆 AbortError／504 DEADLINE_EXCEEDED）。
+ */
+const GENERATE_GROUNDED_TIMEOUT_MS = 90_000;
 
 const BASE_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 4_000;
@@ -265,6 +279,10 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
                 // 個別呼叫覆寫 client 預設 30s：deck 生成單次可能 >30s。
                 httpOptions: { timeout: GENERATE_JSON_TIMEOUT_MS },
                 ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+                // thinking token 上限（gemini-3.x flash）：小任務壓低，避免 thinking 吃光 maxOutputTokens → MAX_TOKENS。
+                ...(opts.thinkingBudget !== undefined
+                  ? { thinkingConfig: { thinkingBudget: opts.thinkingBudget } }
+                  : {}),
               },
             });
           } catch (err) {
@@ -309,17 +327,26 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
   async function generateGrounded(opts: GenerateGroundedOptions): Promise<GroundedResult> {
       const ai = client();
       const model = opts.model ?? cfg.textModel;
-      const attempts = opts.attempts ?? 2;
+      // 504/DEADLINE_EXCEEDED 韌性：grounding 升模後偶發上游逾時 → 預設 3 次嘗試（帶退避；上游 504 帶數字 status→可重試）。
+      const attempts = opts.attempts ?? 3;
       return withRetry<GroundedResult>(
         async () => {
-          const response = await ai.models.generateContent({
-            model,
-            contents: opts.prompt,
-            config: {
-              systemInstruction: opts.system,
-              tools: [{ googleSearch: {} }],
-            },
-          });
+          let response;
+          try {
+            response = await ai.models.generateContent({
+              model,
+              contents: opts.prompt,
+              config: {
+                systemInstruction: opts.system,
+                tools: [{ googleSearch: {} }],
+                // 覆寫 client 預設 30s：flash grounding 單次常 >30s（見 GENERATE_GROUNDED_TIMEOUT_MS 註解）。
+                httpOptions: { timeout: GENERATE_GROUNDED_TIMEOUT_MS },
+              },
+            });
+          } catch (err) {
+            // client 逾時/中止 → retryable=false（不白等第二次 90s）；上游 504/限流的 ApiError（帶數字 status）原樣可重試。
+            throw normalizeCallError(err);
+          }
           const answer = response.text;
           if (!answer) throw new Error("empty Gemini grounded response");
           const chunks =

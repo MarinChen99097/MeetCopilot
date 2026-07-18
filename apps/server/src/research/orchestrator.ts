@@ -19,19 +19,32 @@ import type {
   ContactCrawlPayload,
   Company,
   CompanyProduct,
+  Contact,
   NewCompanyNews,
   NewCompanyFunding,
   ProvenanceInput,
 } from "@meetcopilot/shared";
 import type { CrawlProvider, RawCrawl } from "./crawler.js";
-import { createCrawlExtractor, type CrawlExtractor, type CompanyExtraction } from "./extractor.js";
+import { createCrawlExtractor, enrichProductDetails, type CrawlExtractor, type CompanyExtraction } from "./extractor.js";
 import { cleanStr, type UncategorizedIntel } from "./extract-shared.js";
-import { createDeepExtractor, type DeepExtractor, type DeepExtraction } from "./deep-extractor.js";
+import {
+  createDeepExtractor,
+  productNameMatches,
+  normalizeProductName,
+  extractPersonBackground,
+  type DeepExtractor,
+  type DeepExtraction,
+  type DeepOpportunity,
+  type DeepProduct,
+} from "./deep-extractor.js";
 import {
   createDeepResearcher,
   resolveRedirects,
   classifySourceType,
   deepResearchRounds,
+  assembleSources,
+  hasCjk,
+  isGroundingRedirect,
   type DeepResearcher,
   type DeepResearchBundle,
   type SourceText,
@@ -55,6 +68,95 @@ import { safeFetcher, type SafeFetcher } from "../import/extract.js";
 
 /** deep 合成主管的 provenance 信心（對齊 deep-extractor 的 DEEP_CONFIDENCE）。 */
 const DEEP_CONFIDENCE = 0.55;
+
+/** S1-A6：per-contact 背景補查的主管上限（背景欄空缺者，取前 N）。 */
+const PERSON_ENRICH_MAX = 5;
+
+/** S1-A7：商機訊號類型 → zh-TW 標籤（筆記顯示用）。 */
+const OPPORTUNITY_SIGNAL_LABEL: Record<string, string> = {
+  hiring: "徵才擴編",
+  expansion: "擴張",
+  funding: "募資",
+  project: "專案／標案",
+  partnership: "合作結盟",
+  procurement: "採購",
+  other: "其他",
+};
+
+/** 陣列聯集去重（case-insensitive key，保留首見原文；供 S1-A8 產品 fill-empty/union）。 */
+function unionArr(a: string[] | undefined, b: string[] | undefined): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of [...(a ?? []), ...(b ?? [])]) {
+    const t = typeof x === "string" ? x.trim() : "";
+    if (!t) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * S1-A8：外部視角產品觀點對齊官網既有產品（正規化名稱含式匹配）。命中者 **fill-empty/union** 進
+ * differentiators/competitors（不覆寫既有非空值）、notableCustomers 併入 notes；**配不到→unmatched**（不建新產品列）。
+ * 純函式（就地複製 siteProducts，不變異入參），供 orchestrator 與單測。
+ */
+export function mergeDeepProducts(
+  siteProducts: Partial<CompanyProduct>[],
+  deepProducts: DeepProduct[],
+): { products: Partial<CompanyProduct>[]; unmatched: DeepProduct[] } {
+  const products = siteProducts.map((p) => ({ ...p }));
+  const unmatched: DeepProduct[] = [];
+  const named = (p: Partial<CompanyProduct>): p is Partial<CompanyProduct> & { name: string } =>
+    typeof p.name === "string" && p.name.trim().length > 0;
+  for (const dp of deepProducts) {
+    const name = typeof dp.name === "string" ? dp.name.trim() : "";
+    if (!name) continue;
+    const nName = normalizeProductName(name);
+    // 兩段配對：先「正規化後精確相等」，避免較短的基礎名（如 "Ghost"）在 first-match 貪婪吃掉本應歸於
+    // 更具體變體（"Ghost Pro"）的外部觀點；無精確命中才退回含式匹配（契約 A8 允許含式匹配）。
+    const target =
+      products.find((p) => named(p) && normalizeProductName(p.name) === nName) ??
+      products.find((p) => named(p) && productNameMatches(p.name, name));
+    if (!target) {
+      unmatched.push(dp);
+      continue;
+    }
+    if (dp.differentiators && dp.differentiators.length > 0) {
+      target.differentiators = unionArr(target.differentiators, dp.differentiators);
+    }
+    if (dp.competitors && dp.competitors.length > 0) {
+      target.competitors = unionArr(target.competitors, dp.competitors);
+    }
+    if (dp.notableCustomers && dp.notableCustomers.length > 0) {
+      const line = `知名客戶：${dp.notableCustomers.join("、")}`;
+      target.notes = target.notes && target.notes.trim() ? `${target.notes}\n${line}` : line;
+    }
+  }
+  return { products, unmatched };
+}
+
+/** S1-A6：驗 LinkedIn URL（只接受 https + linkedin.com 網域）；否則 undefined（不回填臆造連結）。 */
+function validLinkedinUrl(u: string | undefined): string | undefined {
+  const t = cleanStr(u);
+  if (!t) return undefined;
+  try {
+    const url = new URL(t);
+    if (url.protocol !== "https:") return undefined;
+    if (!/(^|\.)linkedin\.com$/i.test(url.hostname)) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/** S1-A6：取第一個「非 grounding-redirect」的真實 citation URL 作 provenance 來源；全是 redirect → 退回第一個。 */
+function firstCitationUrl(citations: { url: string }[]): string | undefined {
+  for (const c of citations) if (c.url && !isGroundingRedirect(c.url)) return c.url;
+  return citations[0]?.url;
+}
 
 export interface EnrichRequest {
   orgId: string;
@@ -213,6 +315,15 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     return extractor;
   };
 
+  /**
+   * B4：選 gemini client（per-product 二段式聚焦補抽用）。有 meter+gemini → 現包 metered（記 gemini_extract，
+   * 獨立 idemPrefix `product-detail:` 避與 site/deep 抽取撞鍵）；否則裸 deps.gemini；皆無 → undefined（跳過補抽）。
+   */
+  const geminiFor = (orgId: string, jobId: string, userId?: string): GeminiClient | undefined => {
+    if (deps.meter && deps.gemini) return meteredGeminiFor(orgId, `product-detail:${jobId}`, "gemini_extract", userId);
+    return deps.gemini;
+  };
+
   /** 選 deep 抽取器（獨立 idemPrefix，避與 site 抽取撞鍵而被誤去重）。 */
   const deepExtractorFor = (orgId: string, jobId: string, userId?: string): DeepExtractor => {
     if (deps.deepExtractor) return deps.deepExtractor;
@@ -236,8 +347,9 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
           async () => {
             const res = await base.answer(query, ctx);
             return {
+              // S1-A3：deep grounding 已升模到 extractModel → 估價 key 對齊 extractModel（缺→textModel）。
               result: res,
-              model: deps.textModel,
+              model: deps.extractModel ?? deps.textModel,
               inputTokens: Math.max(1, Math.ceil(query.length / 4)),
               outputTokens: Math.max(1, Math.ceil((res.answer?.length ?? 0) / 4)),
             };
@@ -253,7 +365,16 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     if (deps.deepResearcher) return deps.deepResearcher;
     if (!deps.grounding) throw new Error("deep research unavailable: no grounding provider");
     const grounding = meteredGrounding(deps.grounding, orgId, jobId, userId);
-    return createDeepResearcher(grounding, deps.fetcher ?? safeFetcher);
+    // S1-A5：JS 渲染 fallback＝crawler.fetchRaw（SSRF 安全：host-resolver pin + page.route 逐請求攔截；見 crawler.ts）。
+    // deep-research 端另加「每 job ≤8 次、並行 ≤2、單 URL 20s」限制。fetchRaw 回 null（失敗/逾時）→ 該來源丟棄照舊。
+    const renderFallback = async (url: string): Promise<{ text: string; finalUrl?: string } | null> => {
+      const r = await crawler.fetchRaw(url);
+      return r ? { text: r.text, finalUrl: r.finalUrl } : null;
+    };
+    return createDeepResearcher(grounding, deps.fetcher ?? safeFetcher, {
+      groundingModel: deps.extractModel, // S1-A3：deep grounding 升模
+      renderFallback,
+    });
   };
 
   /** 落庫前套「人工名稱不被爬蟲覆寫」守則：查 name 欄 provenance → guardHumanCompanyName（就地變異 payload）。 */
@@ -282,7 +403,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
   async function writeSingletonNotes(
     orgId: string,
     companyId: string,
-    data: { narrativeZh?: string; uncategorized?: UncategorizedIntel[] },
+    data: { narrativeZh?: string; uncategorized?: UncategorizedIntel[]; opportunities?: DeepOpportunity[] },
   ): Promise<number> {
     let written = 0;
     const narrative = cleanStr(data.narrativeZh);
@@ -296,17 +417,34 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       });
       written++;
     }
-    // 上游擷取器（dedupUncat）已 trim／去重／cap ≤25 → 直接用（免冗餘 re-filter/slice）。
-    const uncat = data.uncategorized ?? [];
+    // observations 單例筆記（冪等鍵＝note_type）：未歸類情報 ＋ S1-A7 研究商機線索**同一則**（避免兩個 observations
+    // 單例互相覆寫）。每條皆句尾附 [來源](url) 作 provenance。
+    const uncat = data.uncategorized ?? []; // 上游 dedupUncat 已 trim／去重／cap ≤25
+    const opps = data.opportunities ?? [];
+    const sections: string[] = [];
     if (uncat.length > 0) {
       const bullets = uncat
         .map((u) => (u.sourceUrl ? `- ${u.text}（[來源](${u.sourceUrl})）` : `- ${u.text}`))
         .join("\n");
+      sections.push(`## 未歸類情報\n\n${bullets}`);
+    }
+    if (opps.length > 0) {
+      const bullets = opps
+        .map((o) => {
+          const sig = OPPORTUNITY_SIGNAL_LABEL[o.signalType] ?? o.signalType;
+          const detail = o.detail ? `：${o.detail}` : "";
+          const src = o.sourceUrl ? `（[來源](${o.sourceUrl})）` : "";
+          return `- **${o.title}**${detail}（訊號：${sig}）${src}`;
+        })
+        .join("\n");
+      sections.push(`## 研究商機線索\n\n${bullets}`);
+    }
+    if (sections.length > 0) {
       await core.notes.upsertSingletonNote(orgId, {
         entityType: "company",
         entityId: companyId,
         noteType: "observations",
-        body: `## 未歸類情報\n\n${bullets}`,
+        body: sections.join("\n\n"),
       });
       written++;
     }
@@ -454,6 +592,15 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
           );
         }
       }
+      // B4：二段式 per-product 聚焦補抽（對有對應爬取專頁的產品，≤10；並行 ≤3；失敗容忍——不讓補抽失敗拖垮研究）。
+      const gm = geminiFor(orgId, jobId, args.requestedBy);
+      if (gm && payload.products && payload.products.length > 0) {
+        try {
+          payload.products = await enrichProductDetails(gm, deps.extractModel, payload.products, raw);
+        } catch (e) {
+          console.error("[research] product-detail enrich (standard) failed:", e);
+        }
+      }
       // provenance 守則：人工建立/確認的公司名不被爬蟲覆寫（P2-8）。
       const existing = await core.companies.findById(orgId, args.targetId);
       await protectHumanCompanyName(orgId, args.targetId, existing?.name, payload);
@@ -591,14 +738,57 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       }
     }
 
+    // B4：先對官網既有產品做二段式聚焦補抽（用官網爬到的專頁；有對應專頁者，≤10；並行 ≤3；失敗容忍）。
+    // 在 S1-A8 對齊之前——聚焦補抽後的官網產品再與外部視角 union，讓 fill-empty 有更豐富的既有值可比。
+    let siteProducts: Partial<CompanyProduct>[] = siteExtract?.products ?? [];
+    const gm = geminiFor(orgId, jobId, args.requestedBy);
+    if (gm && siteRaw && siteProducts.length > 0) {
+      try {
+        siteProducts = await enrichProductDetails(gm, deps.extractModel, siteProducts, siteRaw);
+      } catch (e) {
+        console.error("[research:deep] product-detail enrich failed:", e);
+      }
+    }
+
+    // S1-A8：外部視角產品觀點對齊官網既有產品（正規化名稱含式匹配；fill-empty/union；配不到→uncategorized，不建新列）。
+    // 在 resolve 前做——unmatched 落入 deep.uncategorized，其來源 URL 才會一起被下面的 redirect 還原成真實出處。
+    let mergedProducts: Partial<CompanyProduct>[] = siteProducts;
+    if (deep) {
+      const merged = mergeDeepProducts(siteProducts, deep.products ?? []);
+      mergedProducts = merged.products;
+      for (const up of merged.unmatched) {
+        const nm = cleanStr(up.name);
+        if (!nm) continue;
+        const bits = [
+          up.differentiators && up.differentiators.length > 0 ? `差異化：${up.differentiators.join("、")}` : "",
+          up.notableCustomers && up.notableCustomers.length > 0 ? `客戶：${up.notableCustomers.join("、")}` : "",
+        ].filter(Boolean);
+        deep.uncategorized.push({
+          text: `外部提及產品「${nm}」${bits.length > 0 ? `（${bits.join("；")}）` : ""}`,
+          sourceUrl: up.sourceUrl,
+        });
+      }
+    }
+
     // provenance 的 grounding-redirect URL → 真實出處 URL（有界、可容錯）：讓徽章顯示真正的新聞/維基網域，
     // 而非中介 redirect。深讀已解析的（citationUrl→resolved）先套用免重抓；其餘實抓。並依真實 URL 重新分類 sourceType。
     let resolvedMap = new Map<string, string>();
     if (deep) {
       resolvedMap = await resolveMerged(deep, bundle);
-      // 未歸類情報的來源 URL 也對回真實出處（供筆記區「[來源]」連結顯示真新聞/維基網域，非中介 redirect）。
+      // S1-A9：額外解析「已引用但未深讀」的 citation redirect（供 job.sources 收真實網址；不落 UI 欄位）。有界、best-effort。
+      if (bundle.citationUrls.length > 0) {
+        resolvedMap = await resolveRedirects(deps.fetcher ?? safeFetcher, bundle.citationUrls, {
+          known: resolvedMap,
+          budgetMs: 20_000,
+          max: 40,
+        });
+      }
+      // 未歸類情報 ＋ 商機線索的來源 URL 也對回真實出處（供筆記區「[來源]」連結顯示真新聞/維基網域，非中介 redirect）。
       for (const u of deep.uncategorized) {
         if (u.sourceUrl) u.sourceUrl = resolvedMap.get(u.sourceUrl) ?? u.sourceUrl;
+      }
+      for (const o of deep.opportunities ?? []) {
+        if (o.sourceUrl) o.sourceUrl = resolvedMap.get(o.sourceUrl) ?? o.sourceUrl;
       }
     }
 
@@ -608,7 +798,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       ...(siteExtract?.provenance ?? []),
       ...(deep?.companyProvenance ?? []),
     ];
-    const products: Partial<CompanyProduct>[] = siteExtract?.products ?? [];
+    const products: Partial<CompanyProduct>[] = mergedProducts;
 
     const upsertDomain = dom ?? domainFromUrl(siteRaw?.finalUrl ?? url) ?? "";
     const payload: CrawlPayload = { company: mergedCompany, contacts: [], products, news: [], provenance };
@@ -628,6 +818,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       fieldsFilled += deep.funding.length;
     }
     if (deep) {
+      const savedPeople: Contact[] = [];
       for (const person of deep.people) {
         const fullName = person.contact.fullName;
         if (!fullName) continue;
@@ -640,8 +831,15 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
             sourceType: person.sourceType,
             confidence: DEEP_CONFIDENCE,
           }));
-        await core.contacts.upsertFromCrawl(orgId, companyId, { contact: person.contact, provenance: prov });
+        const saved = await core.contacts.upsertFromCrawl(orgId, companyId, { contact: person.contact, provenance: prov });
+        savedPeople.push(saved);
         fieldsFilled += prov.length;
+      }
+      // S1-A6：per-contact 背景補查（背景欄空缺的主管，≤5）。best-effort，補查失敗不讓研究失敗。
+      try {
+        fieldsFilled += await enrichKeyPeople(orgId, jobId, companyId, companyName, savedPeople, args.requestedBy);
+      } catch (e) {
+        console.error("[research:deep] key-people enrich failed:", e);
       }
       if (deep.competitors.length > 0) {
         await writeCompetitorsNote(orgId, companyId, deep.competitors);
@@ -696,20 +894,25 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     // WP2 §2：單例 AI 筆記（narrative pinned + observations 每條附來源連結）。best-effort。
     if (deep) {
       try {
-        await writeSingletonNotes(orgId, companyId, { narrativeZh: deep.narrativeZh, uncategorized: deep.uncategorized });
+        // S1-A7：商機線索與未歸類情報同落 observations 單例筆記（研究商機線索 section）。
+        await writeSingletonNotes(orgId, companyId, {
+          narrativeZh: deep.narrativeZh,
+          uncategorized: deep.uncategorized,
+          opportunities: deep.opportunities,
+        });
       } catch (e) {
         console.error("[research:deep] singleton notes failed:", e);
       }
     }
 
-    // job.sources＝真正「取材自」的網址：官網爬過的頁 + 深讀的真實來源（含社群）+ 解析後的真實出處（不含中介 redirect 雜訊）。
-    const sources = [
-      ...new Set([
-        ...(siteRaw?.sourcesVisited ?? []),
-        ...bundle.sourceTexts.map((s) => s.url),
-        ...resolvedMap.values(),
-      ]),
-    ];
+    // job.sources＝真正「取材自」的網址（S1-A9）：官網爬過的頁 + 深讀真實來源（含社群）+ 解析後的真實出處
+    // + 已引用但未深讀的 citation（resolve 後真實 URL）。去重、官網頁優先序不變、cap 60、排除仍是中介 redirect 的雜訊。
+    const sources = assembleSources({
+      siteVisited: siteRaw?.sourcesVisited,
+      deepReadUrls: bundle.sourceTexts.map((s) => s.url),
+      citationUrls: bundle.citationUrls,
+      resolved: resolvedMap,
+    });
     return { fieldsFilled, sources };
   }
 
@@ -731,6 +934,8 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     // WP 缺口 2：只出現在 uncategorized 的來源 URL 也納入解析集合，否則其 grounding-redirect 不會被還原
     // （observations 筆記的 [來源] 就會停留在 vertexaisearch redirect）。同一 30s 預算、best-effort。
     deep.uncategorized.forEach((u) => add(u.sourceUrl));
+    // S1-A7：商機線索的來源 URL 也納入（同 observations 筆記，[來源] 需真實出處）。
+    (deep.opportunities ?? []).forEach((o) => add(o.sourceUrl));
 
     const known = new Map<string, string>();
     for (const st of bundle.sourceTexts) if (st.citationUrl) known.set(st.citationUrl, st.url);
@@ -768,6 +973,111 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       if (nu) f.sourceUrl = nu;
     }
     return resolved;
+  }
+
+  /**
+   * S1-A6：per-contact 背景補查。deep 落庫 people 後，對「背景欄空缺」的主管（≤5 人）各跑一條 grounded 查詢
+   * （姓名+公司+職稱 學經歷 LinkedIn，雙語擇一依姓名語言），把回答結構化，**僅回填空欄**（title/titleZh/
+   * backgroundSummary/backgroundSummaryZh/linkedinUrl/fullNameZh），帶 provenance（sourceUrl＝真實 citation）。
+   * 查無/失敗即跳過，**嚴禁捏造**。回新增的欄位數（fieldsFilled 計入）。需 grounding + gemini，缺一即 skip。
+   */
+  async function enrichKeyPeople(
+    orgId: string,
+    jobId: string,
+    companyId: string,
+    companyName: string,
+    people: Contact[],
+    userId?: string,
+  ): Promise<number> {
+    if (!deps.grounding || !deps.gemini) return 0;
+    const grounding = meteredGrounding(deps.grounding, orgId, jobId, userId);
+    const gm =
+      deps.meter && deps.gemini
+        ? meteredGeminiFor(orgId, `person-bg:${jobId}`, "gemini_extract", userId)
+        : deps.gemini;
+    // 觸發條件：backgroundSummary 空缺（deep 抽取從不填此欄 → 實際即「尚未補查過」的主管）。取前 N。
+    const targets = people.filter((p) => p.fullName && !cleanStr(p.backgroundSummary)).slice(0, PERSON_ENRICH_MAX);
+    let filled = 0;
+    for (const c of targets) {
+      const zh = hasCjk(c.fullName); // 姓名語言分流：中文名走中文查詢、否則英文
+      const query = (
+        zh
+          ? `${c.fullName} ${companyName} ${c.title ?? ""} 學經歷 背景 經歷 現職 LinkedIn`
+          : `${c.fullName} ${companyName} ${c.title ?? ""} background experience career current role LinkedIn`
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      let grounded;
+      try {
+        grounded = await grounding.answer(query, { companyName, model: deps.extractModel });
+      } catch (e) {
+        console.error("[research:deep] person grounding failed:", e);
+        continue;
+      }
+      const answer = cleanStr(grounded.answer);
+      if (!answer) continue; // 查無 → 跳過
+      let bg;
+      try {
+        bg = await extractPersonBackground(gm, deps.extractModel, answer);
+      } catch (e) {
+        console.error("[research:deep] person background extract failed:", e);
+        continue;
+      }
+      let srcUrl = firstCitationUrl(grounded.citations);
+      // A6：provenance 的 sourceUrl 必須是真實出處。firstCitationUrl 在「全部 citation 皆為 grounding-redirect」時
+      // 會退回中介 redirect（vertexaisearch），classifySourceType 會誤標為 'web'。→ 用 resolveRedirects 還原成真實
+      // URL（有界、best-effort；還原不出真實出處者保留原值，與 uncategorized/opportunities 路徑一致）。
+      if (srcUrl && isGroundingRedirect(srcUrl)) {
+        try {
+          const map = await resolveRedirects(
+            deps.fetcher ?? safeFetcher,
+            grounded.citations.map((cc) => cc.url).filter((u): u is string => typeof u === "string" && u.length > 0),
+            { budgetMs: 10_000, max: 8 },
+          );
+          for (const cc of grounded.citations) {
+            const real = map.get(cc.url);
+            if (real && !isGroundingRedirect(real)) {
+              srcUrl = real;
+              break;
+            }
+          }
+        } catch (e) {
+          console.error("[research:deep] person citation resolve failed:", e);
+        }
+      }
+      const patch: Partial<Contact> = {};
+      const prov: ProvenanceInput[] = [];
+      const fillEmpty = (field: keyof Contact, existing: unknown, val: string | undefined): void => {
+        const v = cleanStr(val);
+        if (!v) return; // 無據 → 不填
+        if (cleanStr(existing as string)) return; // 僅回填空欄（不覆寫既有非空值）
+        (patch as Record<string, unknown>)[field] = v;
+        prov.push({
+          fieldName: field,
+          value: v,
+          sourceUrl: srcUrl,
+          sourceType: srcUrl ? classifySourceType(srcUrl) : "web",
+          confidence: DEEP_CONFIDENCE,
+        });
+      };
+      fillEmpty("title", c.title, bg.title);
+      fillEmpty("titleZh", c.titleZh, bg.titleZh);
+      fillEmpty("backgroundSummary", c.backgroundSummary, bg.backgroundSummary);
+      fillEmpty("backgroundSummaryZh", c.backgroundSummaryZh, bg.backgroundSummaryZh);
+      fillEmpty("fullNameZh", c.fullNameZh, bg.fullNameZh);
+      fillEmpty("linkedinUrl", c.linkedinUrl, validLinkedinUrl(bg.linkedinUrl));
+      if (prov.length === 0) continue; // 全部欄位皆已有值或查無 → 不寫
+      try {
+        await core.contacts.upsertFromCrawl(orgId, companyId, {
+          contact: { fullName: c.fullName, ...patch },
+          provenance: prov,
+        });
+        filled += prov.length;
+      } catch (e) {
+        console.error("[research:deep] person enrich upsert failed:", e);
+      }
+    }
+    return filled;
   }
 
   /** 競爭對手 → 一則 research note（列名＋來源）。以 header 去重：已存在則更新，避免重跑堆疊重複 note。 */

@@ -91,7 +91,7 @@ export async function runDeepRounds(
 
 /**
  * 缺口分析（heuristic）：依各角度（angle）累積的 citation 數，對「證據薄弱（<2）」的角度產生更深入的 follow-up 查詢。
- * 不呼叫 LLM（省成本、確定性）。上限 8 條。社群模板已於 round 1 涵蓋，這裡聚焦結構化欄位缺口。
+ * 不呼叫 LLM（省成本、確定性）。上限 13 條（雙語各一，S1-A1）。社群模板已於 round 1 涵蓋，這裡聚焦結構化欄位缺口。
  */
 export function buildFollowUpQueries(
   companyName: string,
@@ -102,21 +102,26 @@ export function buildFollowUpQueries(
     byAngle.set(f.angle, (byAngle.get(f.angle) ?? 0) + f.citations.length);
   }
   const n = companyName;
-  const deepen: Record<string, string> = {
-    overview: `${n} 公司背景 歷史 沿革 主要股東 組織架構`,
-    leadership: `${n} 高階主管 完整名單 董事會 職稱 學經歷`,
-    funding: `${n} 財務 營收 資本額 募資 投資人 歷史`,
-    news: `${n} 2024 2025 最新 重大 消息 進展 公告`,
-    competitors: `${n} 產業地位 市佔率 競爭格局 主要對手`,
-    products: `${n} 產品線 服務項目 完整 定價 方案`,
+  // S1-A1：gap 加深查詢**改雙語各一條**（每個證據薄弱的角度同時出 zh + en 加深查詢）。
+  const deepen: Record<string, { zh: string; en: string }> = {
+    overview: { zh: `${n} 公司背景 歷史 沿革 主要股東 組織架構`, en: `${n} company background history major shareholders org structure` },
+    leadership: { zh: `${n} 高階主管 完整名單 董事會 職稱 學經歷`, en: `${n} executives full list board of directors titles background` },
+    funding: { zh: `${n} 財務 營收 資本額 募資 投資人 歷史`, en: `${n} financials revenue capital funding investors history` },
+    news: { zh: `${n} 2024 2025 最新 重大 消息 進展 公告`, en: `${n} 2024 2025 latest major news developments announcements` },
+    competitors: { zh: `${n} 產業地位 市佔率 競爭格局 主要對手`, en: `${n} market position market share competitive landscape rivals` },
+    products: { zh: `${n} 產品線 服務項目 完整 定價 方案`, en: `${n} product line services full pricing plans` },
   };
   const out: { angle: string; query: string }[] = [];
-  for (const [angle, query] of Object.entries(deepen)) {
-    if ((byAngle.get(angle) ?? 0) < 2) out.push({ angle, query });
+  for (const [angle, q] of Object.entries(deepen)) {
+    if ((byAngle.get(angle) ?? 0) < 2) {
+      out.push({ angle, query: q.zh });
+      out.push({ angle, query: q.en });
+    }
   }
   // round 1 一定跑過社群模板；若社群角度證據仍薄，補一條深入社群輿情查詢。
   if ((byAngle.get("social") ?? 0) < 2) {
     out.push({ angle: "social", query: buildSocialQueries({ companyName: n }).slice(-1)[0]?.query ?? `${n} social media` });
   }
-  return out.slice(0, 8);
+  // 雙語各一條 → 上限放寬到 13（6 角度 × 2 + 社群 1）。仍由 ROUND_QUERY_CEIL 二次收斂。
+  return out.slice(0, 13);
 }

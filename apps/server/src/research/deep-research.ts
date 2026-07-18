@@ -20,12 +20,20 @@ import type { SafeFetcher } from "../import/extract.js";
 // WP3「深與廣（30–60 分鐘級）」：整場軟 deadline 大幅放寬（多輪研究＋社群模板需更多時間）。
 const DEFAULT_BUDGET_MS = 1_200_000; // 整場軟 deadline（env DEEP_RESEARCH_BUDGET_MS，clamp 30s–1800s）
 const BUDGET_CEIL_MS = 1_800_000; // clamp 上界（30 分鐘）
-const DEFAULT_MAX_QUERIES = 9; // grounding 扇出上限（env DEEP_RESEARCH_MAX_QUERIES，clamp 3–12）
-const DEFAULT_MAX_SOURCES = 6; // 深讀來源上限（env DEEP_RESEARCH_MAX_SOURCES，clamp 0–10）
+// S1-A1/A2「基礎查詢一律雙語 × 全部角度（11 角度）」：11×2=22 條基礎查詢須容得下，故扇出上限上調到 22（env
+// DEEP_RESEARCH_MAX_QUERIES，clamp 3–24）。round 1 = 22 基礎 + 7 社群 = 29 ≤ ROUND_QUERY_CEIL(32)。
+const DEFAULT_MAX_QUERIES = 22; // grounding 扇出上限（env DEEP_RESEARCH_MAX_QUERIES，clamp 3–24）
+const DEFAULT_MAX_SOURCES = 12; // 深讀來源上限（S1-A4：6→12；env DEEP_RESEARCH_MAX_SOURCES，clamp 0–20）
 const DEFAULT_ROUNDS = 3; // 多輪研究輪數（env DEEP_RESEARCH_ROUNDS，clamp 1–5）；一輪無新事實即提早停
-const GROUNDING_CONCURRENCY = 3; // grounding 平行度
+// grounding 平行度（env DEEP_RESEARCH_GROUNDING_CONCURRENCY，clamp 1–6）。3→2：升模 gemini-3.5-flash 後單次
+// grounding 變慢，過高並行會互相拖慢上游 → 觸發 504 DEADLINE_EXCEEDED。降預設並提供旋鈕，仍在 budget 內（多數 round 為 follow-up 小查詢集）。
+const DEFAULT_GROUNDING_CONCURRENCY = 2;
 const SOURCE_CONCURRENCY = 3; // 深讀平行度
 const MIN_SOURCE_TEXT_CHARS = 200; // 太短（多半是攔截頁/空頁）不收
+// S1-A5：SafeFetcher（純 undici、不渲染 JS）失敗或內文太短時，用 Playwright 渲染 fallback 抓 innerText。
+const MAX_RENDER_FALLBACKS_PER_JOB = 8; // 每 job（跨輪，researcher 實例存活整場）渲染 fallback 次數上限
+const RENDER_FALLBACK_CONCURRENCY = 2; // 渲染 fallback 並行上限
+const RENDER_FALLBACK_TIMEOUT_MS = 20_000; // 單 URL 渲染逾時
 
 function clampEnvInt(name: string, def: number, min: number, max: number): number {
   const raw = Number(process.env[name]);
@@ -80,7 +88,8 @@ export interface DeepResearcher {
 }
 
 // ── 語言推斷 ──────────────────────────────────────────────
-function hasCjk(s: string): boolean {
+/** 字串是否含中日韓表意文字（供語言分流：姓名/公司名含 CJK → 走中文查詢）。匯出供 orchestrator per-contact 補查用。 */
+export function hasCjk(s: string): boolean {
   return /[㐀-鿿豈-﫿]/.test(s);
 }
 /** TW/華語公司 → 雙語（zh-TW＋英文）；否則英文為主。依名稱含 CJK 或網域 .tw 推斷。 */
@@ -126,19 +135,52 @@ const ANGLES: Angle[] = [
     zh: (n) => `${n} 產品 服務 解決方案 市場定位`,
     en: (n) => `${n} products services solutions market positioning`,
   },
+  // ── S1-A2：新增五角度（雙語），擴大廣度（徵才/客戶案例/評測口碑/商工登記/獲獎補助）──
+  {
+    key: "hiring",
+    zh: (n) => `${n} 徵才 職缺 招聘 104 CakeResume 人力銀行`,
+    en: (n) => `${n} jobs hiring careers open positions`,
+  },
+  {
+    key: "caseStudies",
+    zh: (n) => `${n} 客戶案例 導入實績 合作客戶 成功案例`,
+    en: (n) => `${n} customer case study clients success story`,
+  },
+  {
+    key: "reviews",
+    zh: (n) => `${n} 評測 評價 使用心得 比較 優缺點`,
+    en: (n) => `${n} review comparison alternatives pros cons`,
+  },
+  {
+    key: "registry",
+    zh: (n) => `${n} 政府商工登記 統一編號 資本額 公司登記`,
+    en: (n) => `${n} business registration company registry filing`,
+  },
+  {
+    key: "awards",
+    zh: (n) => `${n} 獲獎 得獎 補助 入選 加速器`,
+    en: (n) => `${n} awards grants accelerator recognition`,
+  },
 ];
-/** locale 敏感角度（雙語時額外出 zh-TW 查詢）。 */
-const ZH_ANGLES = new Set(["overview", "news", "leadership"]);
 
-/** 建 grounding 查詢清單（角度 × 語言）。雙語＝ zh(3 個 locale-敏感) + en(全部)；否則 en(全部)。上限 maxQueries。 */
+/**
+ * 建 grounding 查詢清單（角度 × 語言）。S1-A1：**對全部角度一律同時出 zh+en**（基礎查詢一律雙語）——
+ * isBilingual **只影響排序**（不再排除任何語言）：華語公司 zh 先出、否則 en 先出，逐角度交錯（zh,en / en,zh），
+ * 使任一 maxQueries 上限下都同時涵蓋雙語且優先語言的高價值角度不被截掉。上限 maxQueries。
+ */
 export function buildQueries(input: DeepResearchInput, maxQueries: number): { angle: string; query: string }[] {
   const n = input.companyName;
-  const bilingual = isBilingual(input);
+  const bilingual = isBilingual(input); // 只用於排序（決定 zh/en 誰先），不用於排除
   const out: { angle: string; query: string }[] = [];
-  if (bilingual) {
-    for (const a of ANGLES) if (ZH_ANGLES.has(a.key)) out.push({ angle: a.key, query: a.zh(n) });
+  for (const a of ANGLES) {
+    if (bilingual) {
+      out.push({ angle: a.key, query: a.zh(n) });
+      out.push({ angle: a.key, query: a.en(n) });
+    } else {
+      out.push({ angle: a.key, query: a.en(n) });
+      out.push({ angle: a.key, query: a.zh(n) });
+    }
   }
-  for (const a of ANGLES) out.push({ angle: a.key, query: a.en(n) });
   return out.slice(0, maxQueries);
 }
 
@@ -159,8 +201,8 @@ export function buildSocialQueries(input: DeepResearchInput): { angle: string; q
   ];
 }
 
-/** 單輪 grounding 查詢的整體上限（多輪＋社群模板疊加時仍有界，避免扇出爆量）。 */
-const ROUND_QUERY_CEIL = 24;
+/** 單輪 grounding 查詢的整體上限（多輪＋社群模板疊加時仍有界，避免扇出爆量）。S1-A2：22 基礎(雙語×11角度)+7社群=29 ≤ 32。 */
+const ROUND_QUERY_CEIL = 32;
 
 /** 依 input（含 includeBaseQueries/includeSocial/extraQueries）組出本輪要跑的 grounding 查詢集。 */
 function queriesForRound(input: DeepResearchInput, maxQueries: number): { angle: string; query: string }[] {
@@ -278,10 +320,86 @@ export async function resolveRedirects(
   return out;
 }
 
+/**
+ * S1-A9：組 job.sources（真正「取材自」的網址）。優先序＝官網爬過的頁 → 深讀真實來源（含社群）→ 解析後的真實出處
+ * → **已引用但未深讀的 citation（resolve 後真實 URL）**。去重、官網頁優先序不變、仍是 grounding-redirect（未解析出
+ * 真實出處）的中介 URL 一律排除、總量 cap（預設 60）。純函式，供單測。
+ */
+export function assembleSources(input: {
+  siteVisited?: string[];
+  deepReadUrls?: string[];
+  citationUrls?: string[];
+  resolved?: Map<string, string>;
+  cap?: number;
+}): string[] {
+  const cap = input.cap ?? 60;
+  const resolved = input.resolved ?? new Map<string, string>();
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (u?: string): void => {
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    out.push(u);
+  };
+  for (const u of input.siteVisited ?? []) add(u); // 官網頁優先
+  for (const u of input.deepReadUrls ?? []) add(u); // 深讀真實來源（含社群）
+  for (const u of resolved.values()) add(u); // 解析後的真實出處
+  // A9：已引用但未深讀的 citation → resolve 後真實 URL（redirect 用映射還原；仍為中介 redirect 者不入 sources）。
+  for (const c of input.citationUrls ?? []) {
+    const real = resolved.get(c) ?? c;
+    if (isGroundingRedirect(real)) continue;
+    add(real);
+  }
+  return out.slice(0, cap);
+}
+
+/** 極簡計數旗號（限制並行）：acquire 逾額則排隊，release 放行下一個。供 A5 渲染 fallback 限並行用。 */
+function createSemaphore(max: number): { acquire: () => Promise<void>; release: () => void } {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  return {
+    acquire: () =>
+      new Promise<void>((resolve) => {
+        if (active < max) {
+          active++;
+          resolve();
+        } else {
+          queue.push(() => {
+            active++;
+            resolve();
+          });
+        }
+      }),
+    release: () => {
+      active--;
+      const next = queue.shift();
+      if (next) next();
+    },
+  };
+}
+
+/** 對一項工作施加逾時；逾時回 null（不 reject）。供 A5 渲染 fallback 單 URL 逾時。 */
+function withRenderTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T | null>;
+}
+
 export interface DeepResearcherOptions {
   budgetMs?: number;
   maxQueries?: number;
   maxSources?: number;
+  /** S1-A3：deep grounding 升模——grounding.answer 帶此 model（generateGrounded opts.model）；缺→沿用 textModel。 */
+  groundingModel?: string;
+  /**
+   * S1-A5：JS 渲染 fallback。SafeFetcher（純 undici、不渲染）失敗或內文太短時，用此渲染器抓 innerText。
+   * 必須 SSRF 安全（呼叫端傳入 crawler 的 Playwright 逐請求攔截路徑）；缺→不 fallback。回 null 表失敗/逾時。
+   */
+  renderFallback?: (url: string) => Promise<{ text: string; finalUrl?: string; title?: string } | null>;
 }
 
 export function createDeepResearcher(
@@ -289,22 +407,51 @@ export function createDeepResearcher(
   fetcher: SafeFetcher,
   options: DeepResearcherOptions = {},
 ): DeepResearcher {
+  // S1-A5：渲染 fallback 的整場（跨輪，同一 researcher 實例服務整個 job）預算：次數上限 + 並行旗號。
+  let rendersUsed = 0;
+  const renderSem = createSemaphore(RENDER_FALLBACK_CONCURRENCY);
+  /** 受限渲染：超過每 job 上限或無 renderFallback → 回 null；並行 ≤2、單 URL 逾時 20s。 */
+  const renderWithLimits = async (
+    url: string,
+  ): Promise<{ text: string; finalUrl?: string; title?: string } | null> => {
+    const fn = options.renderFallback;
+    if (!fn) return null;
+    if (rendersUsed >= MAX_RENDER_FALLBACKS_PER_JOB) return null;
+    rendersUsed++; // 記「嘗試次數」（含失敗）以硬性有界成本
+    // 觀測性（不改行為）：E2E log 中零提及此路徑 → 觸發時印一行，方便確認 JS 渲染 fallback 有在跑。
+    console.log(`[research:deep] render fallback: ${url}`);
+    await renderSem.acquire();
+    try {
+      return await withRenderTimeout(fn(url), RENDER_FALLBACK_TIMEOUT_MS);
+    } catch {
+      return null;
+    } finally {
+      renderSem.release();
+    }
+  };
   return {
     async research(input: DeepResearchInput): Promise<DeepResearchBundle> {
       const start = Date.now();
       const budgetMs = options.budgetMs ?? deepBudgetMs();
       const deadlineAt = start + budgetMs;
-      const maxQueries = options.maxQueries ?? clampEnvInt("DEEP_RESEARCH_MAX_QUERIES", DEFAULT_MAX_QUERIES, 3, 12);
-      const maxSources = options.maxSources ?? clampEnvInt("DEEP_RESEARCH_MAX_SOURCES", DEFAULT_MAX_SOURCES, 0, 10);
+      const maxQueries = options.maxQueries ?? clampEnvInt("DEEP_RESEARCH_MAX_QUERIES", DEFAULT_MAX_QUERIES, 3, 24);
+      const maxSources = options.maxSources ?? clampEnvInt("DEEP_RESEARCH_MAX_SOURCES", DEFAULT_MAX_SOURCES, 0, 20);
+      const groundingConcurrency = clampEnvInt(
+        "DEEP_RESEARCH_GROUNDING_CONCURRENCY",
+        DEFAULT_GROUNDING_CONCURRENCY,
+        1,
+        6,
+      );
 
       // a. 扇出 grounding 查詢（有界平行）。round 1＝基礎角度＋社群模板；follow-up round＝只跑 extraQueries。
       const queries = queriesForRound(input, maxQueries);
       const groundedFindings = await runPool<{ angle: string; query: string }, GroundedFinding>(
         queries,
-        GROUNDING_CONCURRENCY,
+        groundingConcurrency,
         deadlineAt,
         async ({ angle, query }) => {
-          const res = await grounding.answer(query, { companyName: input.companyName });
+          // S1-A3：帶 groundingModel（升模，deep 走 extractModel）；grounding provider 依 ctx.model 選模，缺→textModel。
+          const res = await grounding.answer(query, { companyName: input.companyName, model: options.groundingModel });
           if (!res.answer || !res.answer.trim()) return undefined;
           return { angle, query, answer: res.answer.trim(), citations: res.citations };
         },
@@ -342,12 +489,33 @@ export function createDeepResearcher(
               SOURCE_CONCURRENCY,
               deadlineAt,
               async ({ citation }) => {
-                const { title, text, finalUrl } = await fetcher.extractFromUrl(citation.url);
-                const resolved = finalUrl ?? citation.url;
+                let title: string | undefined;
+                let text = "";
+                let resolved = citation.url;
+                try {
+                  const r = await fetcher.extractFromUrl(citation.url);
+                  title = r.title;
+                  text = (r.text ?? "").trim();
+                  resolved = r.finalUrl ?? citation.url;
+                } catch {
+                  /* SafeFetcher 失敗 → 下方嘗試 render fallback（純 undici 抓不到 JS-heavy 頁時） */
+                }
+                // S1-A5：SafeFetcher 失敗或內文太短（<200 字）→ Playwright 渲染 fallback 抓 innerText（SSRF 安全同 crawler）。
+                if (text.length < MIN_SOURCE_TEXT_CHARS) {
+                  const rendered = await renderWithLimits(citation.url);
+                  if (rendered) {
+                    const rt = (rendered.text ?? "").trim();
+                    if (rt.length >= MIN_SOURCE_TEXT_CHARS) {
+                      text = rt;
+                      resolved = rendered.finalUrl ?? resolved;
+                      title = title ?? rendered.title;
+                    }
+                  }
+                }
                 // 深讀後才知真實 host：若重導回官網 → 丟棄（site-crawl 已覆蓋）。
                 if (isCompanyDomain(resolved, input.domain)) return undefined;
-                if (!text || text.trim().length < MIN_SOURCE_TEXT_CHARS) return undefined;
-                return { url: resolved, title: title ?? citation.title, text: text.trim(), citationUrl: citation.url };
+                if (text.length < MIN_SOURCE_TEXT_CHARS) return undefined;
+                return { url: resolved, title: title ?? citation.title, text, citationUrl: citation.url };
               },
             );
 

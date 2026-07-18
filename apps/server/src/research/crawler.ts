@@ -196,9 +196,9 @@ const LINK_KEYWORDS: { re: RegExp; weight: number }[] = [
   // 團隊／主管
   { re: /team|leadership|people|management|founders?|executives?|board/i, weight: 3 },
   { re: /團隊|主管|領導|經營團隊|管理團隊|創辦人|高層|董事/, weight: 3 },
-  // 客戶／案例
-  { re: /customers?|case-?stud(y|ies)|clients?|success|references?/i, weight: 2 },
-  { re: /客戶|案例|實績|成功案例|合作夥伴/, weight: 2 },
+  // 客戶／案例（B5：客戶案例＝CRM 高價值——導入實績/合作客戶，權重由 2 上調到 4，排在新聞/媒體之前）
+  { re: /customers?|case-?stud(y|ies)|clients?|success|references?/i, weight: 4 },
+  { re: /客戶|案例|實績|成功案例|合作夥伴/, weight: 4 },
   // 新聞／媒體
   { re: /news|press|blog|media|events?|insights?/i, weight: 2 },
   { re: /新聞|消息|公告|媒體|活動|部落格/, weight: 2 },

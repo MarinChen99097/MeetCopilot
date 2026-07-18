@@ -43,9 +43,29 @@ const NEWS_CATEGORIES: CompanyNewsCategory[] = [
   "other",
 ];
 const SENIORITIES: Seniority[] = ["c_level", "vp", "director", "manager", "ic", "founder", "board"];
+// S1-A7：商機訊號類型（signalType 的 enum；不建 deals，只落一則觀察筆記）。
+export type OpportunitySignalType =
+  | "hiring"
+  | "expansion"
+  | "funding"
+  | "project"
+  | "partnership"
+  | "procurement"
+  | "other";
+const OPPORTUNITY_SIGNALS: OpportunitySignalType[] = [
+  "hiring",
+  "expansion",
+  "funding",
+  "project",
+  "partnership",
+  "procurement",
+  "other",
+];
 // 子表輸出上限（避免 JSON 爆量／截斷）。
 const MAX_TECH = 12;
 const MAX_DEPARTMENTS = 10;
+const MAX_OPPORTUNITIES = 15; // S1-A7：商機線索輸出上限
+const MAX_DEEP_PRODUCTS = 20; // S1-A8：外部產品觀點輸出上限
 
 // ── 模型輸出形狀 ──────────────────────────────────────────
 interface ExtractedDeep {
@@ -75,8 +95,35 @@ interface ExtractedDeep {
   competitors?: { name?: string; sourceIndex?: number }[];
   /** 公司官方社群帳號 URL（每平台選填完整 URL；WP 缺口 1b）。 */
   socialLinks?: { youtube?: string; facebook?: string; instagram?: string; threads?: string };
+  /** S1-A7：商機線索（不建 deals，只落一則觀察筆記）。 */
+  opportunities?: { title?: string; detail?: string; signalType?: string; sourceIndex?: number }[];
+  /** S1-A8：外部視角的產品觀點（對齊官網既有產品做 fill-empty/union；配不到→uncategorized）。 */
+  products?: {
+    name?: string;
+    differentiators?: string[];
+    competitors?: string[];
+    notableCustomers?: string[];
+    sourceIndex?: number;
+  }[];
   narrativeZh?: string;
   uncategorized?: { text?: string; sourceIndex?: number }[];
+}
+
+/** S1-A7：一則商機線索（落成 observations 筆記；帶來源 URL 作 provenance）。 */
+export interface DeepOpportunity {
+  title: string;
+  detail?: string;
+  signalType: OpportunitySignalType;
+  sourceUrl?: string;
+}
+
+/** S1-A8：外部視角的一項產品觀點（orchestrator 以正規化名稱對齊官網既有產品）。 */
+export interface DeepProduct {
+  name: string;
+  differentiators?: string[];
+  competitors?: string[];
+  notableCustomers?: string[];
+  sourceUrl?: string;
 }
 
 export interface DeepPerson {
@@ -102,6 +149,10 @@ export interface DeepExtraction {
    * 併入 social_links（官網爬到的優先）。WP 缺口 1b/1c。可能為 []（來源無或不確定即不填）。
    */
   socialLinks: string[];
+  /** S1-A7：商機線索（每則帶真實來源 URL）→ orchestrator 落一則 observations 筆記「研究商機線索」。可能為 []。 */
+  opportunities?: DeepOpportunity[];
+  /** S1-A8：外部視角產品觀點（每則帶真實來源 URL）→ orchestrator 對齊官網既有產品 fill-empty/union。可能為 []。 */
+  products?: DeepProduct[];
   /** zh-TW 平鋪直敘敘事（8–20 句）→ 筆記區 narrative 單例（WP2 §2）。 */
   narrativeZh?: string;
   /** 未歸類情報（≤25，每條帶來源 URL）→ 筆記區 observations 單例（WP2 §2）。 */
@@ -260,6 +311,35 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         threads: { type: S.STRING },
       },
     },
+    // S1-A7：商機線索（signalType 限定枚舉；title 必填）。
+    opportunities: {
+      type: S.ARRAY,
+      items: {
+        type: S.OBJECT,
+        properties: {
+          title: { type: S.STRING },
+          detail: { type: S.STRING },
+          signalType: { type: S.STRING, enum: OPPORTUNITY_SIGNALS as unknown as string[] },
+          sourceIndex: { type: S.INTEGER },
+        },
+        required: ["title"],
+      },
+    },
+    // S1-A8：外部視角產品觀點（name 必填；差異化/競品/知名客戶皆選填）。
+    products: {
+      type: S.ARRAY,
+      items: {
+        type: S.OBJECT,
+        properties: {
+          name: { type: S.STRING },
+          differentiators: { type: S.ARRAY, items: { type: S.STRING } },
+          competitors: { type: S.ARRAY, items: { type: S.STRING } },
+          notableCustomers: { type: S.ARRAY, items: { type: S.STRING } },
+          sourceIndex: { type: S.INTEGER },
+        },
+        required: ["name"],
+      },
+    },
     // WP2 §2：narrativeZh + uncategorized（共用片段，見 extract-shared.NARRATIVE_UNCAT_SCHEMA）。
     ...NARRATIVE_UNCAT_SCHEMA,
   },
@@ -277,6 +357,8 @@ const SYSTEM = [
   "competitors: named competitor companies.",
   "socialLinks (OPTIONAL): the company's OFFICIAL social-media account URLs — youtube, facebook, instagram, threads. For each platform, give the FULL https URL of the account/page ONLY when a source explicitly confirms it is THIS company's own official account. If you are unsure, or cannot confirm the official account from the provided sources, OMIT that platform entirely — do NOT guess or fabricate handles.",
   "company.techStack[] (only when stated): technologies/vendors/products the company uses or is built on ({category, vendor, product, detectedFrom}); company.departments[] (only when stated): internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns original (e.g. AWS, React, Kubernetes). Cap: at most 12 techStack items and at most 10 departments.",
+  "opportunities[] (only when the sources state a concrete buying/sales signal): each {title (a short zh-TW label), detail (one zh-TW sentence), signalType, sourceIndex}. signalType is ONE of: hiring (they are hiring / expanding a team), expansion (new office/market/product-line expansion), funding (raised or seeking capital), project (a named initiative/RFP/deployment), partnership (a new alliance/channel), procurement (a purchase/tender/vendor-selection), other. Only real signals present in the sources — do NOT invent. At most 15.",
+  "products[] (external view; only products the sources actually attribute to THIS company): each {name (the product's own name, verbatim), differentiators[] (zh-TW), competitors[] (competing products/companies named), notableCustomers[] (named customers/logos), sourceIndex}. This is the OUTSIDE-IN view of the company's products from news/reviews/case-studies — used to enrich the official-site product list; do NOT fabricate names. At most 20.",
   "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the language of the sources (Traditional Chinese for zh sources; do NOT translate the primary fields; keep values concise; never repeat text). IN ADDITION, emit a concise Traditional-Chinese (zh-TW, Taiwan usage) gloss in each `*Zh` field: company.descriptionZh (of description), company.industryZh (the Traditional-Chinese TRANSLATION of the industry label), company.businessModelZh (of businessModel), company.taglineZh (a concise Traditional-Chinese positioning line for the company), news[].titleZh/summaryZh (of that item's title/summary), and people[].titleZh (of that person's title) — each at most 2 sentences; if the source is already zh-TW you may condense it. (fullNameZh is NOT a gloss — only fill it from a Chinese name actually present in the sources.)",
   "narrativeZh: write a Traditional-Chinese (zh-TW), plain-language narrative of 8-20 sentences that synthesizes the company's type, business model, current situation/recent developments, and its social-media presence & sentiment (from the social findings). Keep proper nouns (brand/product/person names) in their original form. This is a readable briefing, NOT a bullet list.",
   "uncategorized: CRITICAL — EVERY important fact you found in the sources that does NOT fit any structured field above (company/news/funding/people/competitors/techStack/departments) MUST be captured here as {text, sourceIndex} — DO NOT discard it. Examples: partnerships, awards, controversies, market share, notable customers, hiring drives, event/campaign activity, community sentiment. At most 25 items; each `text` one concise sentence with its supporting [S#] as sourceIndex.",
@@ -450,6 +532,225 @@ function toDeepSocialLinks(v: unknown): string[] {
   return out;
 }
 
+/** 陣列文字欄正規化：去空/非字串、trim、去重（保序）。回 undefined 表無有效項（供 fill-empty 判斷）。 */
+function cleanStrArr(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of v) {
+    const t = cleanStr(x);
+    if (!t) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * S1-A7：模型 opportunities（unknown）→ DeepOpportunity[]。title 必填、signalType 落枚舉（缺/非法→'other'）、
+ * sourceUrl 由 resolveUrl(sourceIndex) 決定；上限 MAX_OPPORTUNITIES。
+ */
+function toDeepOpportunities(
+  v: unknown,
+  resolveUrl: (idx: unknown) => string | undefined,
+): DeepOpportunity[] {
+  if (!Array.isArray(v)) return [];
+  const out: DeepOpportunity[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const title = cleanStr(o.title);
+    if (!title || seen.has(title)) continue;
+    seen.add(title);
+    const sig = cleanStr(o.signalType);
+    const signalType: OpportunitySignalType =
+      sig && (OPPORTUNITY_SIGNALS as string[]).includes(sig) ? (sig as OpportunitySignalType) : "other";
+    const row: DeepOpportunity = { title, signalType };
+    const detail = cleanStr(o.detail);
+    if (detail) row.detail = detail;
+    const src = resolveUrl(o.sourceIndex);
+    if (src) row.sourceUrl = src;
+    out.push(row);
+    if (out.length >= MAX_OPPORTUNITIES) break;
+  }
+  return out;
+}
+
+/**
+ * S1-A8：模型 products（unknown）→ DeepProduct[]。name 必填、陣列欄去空去重、sourceUrl 由 resolveUrl 決定；
+ * 上限 MAX_DEEP_PRODUCTS。orchestrator 再以正規化名稱對齊官網既有產品。
+ */
+function toDeepProducts(v: unknown, resolveUrl: (idx: unknown) => string | undefined): DeepProduct[] {
+  if (!Array.isArray(v)) return [];
+  const out: DeepProduct[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const p = raw as Record<string, unknown>;
+    const name = cleanStr(p.name);
+    if (!name) continue;
+    const key = normalizeProductName(name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const row: DeepProduct = { name };
+    const diff = cleanStrArr(p.differentiators);
+    if (diff) row.differentiators = diff;
+    const comp = cleanStrArr(p.competitors);
+    if (comp) row.competitors = comp;
+    const cust = cleanStrArr(p.notableCustomers);
+    if (cust) row.notableCustomers = cust;
+    const src = resolveUrl(p.sourceIndex);
+    if (src) row.sourceUrl = src;
+    out.push(row);
+    if (out.length >= MAX_DEEP_PRODUCTS) break;
+  }
+  return out;
+}
+
+/**
+ * S1-A8/A10：產品名稱正規化（對齊 key）——lowercase、去所有空白/標點/符號（Unicode-aware）。
+ * 例：「CP1500 PFCLCD」與「cp1500pfclcd」→ 同 key。純函式，供 orchestrator 對齊與單測。
+ */
+export function normalizeProductName(name: string): string {
+  return name.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+/**
+ * S1-A8/A10：兩產品名是否對齊——正規化後相等，或**任一含另一**（含式匹配可接受）。
+ * 空字串一律不匹配（避免空 key 對齊到全部）。純函式，供 orchestrator 對齊與單測。
+ */
+export function productNameMatches(a: string, b: string): boolean {
+  const na = normalizeProductName(a);
+  const nb = normalizeProductName(b);
+  if (!na || !nb) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+// ── S1-A6：per-contact 背景補查（把一則 grounded 答案結構化成可回填的背景欄）──
+/** per-contact 補查抽取結果（僅供 orchestrator「回填空欄」；每欄皆選填、無據即缺）。 */
+export interface PersonBackground {
+  title?: string;
+  titleZh?: string;
+  backgroundSummary?: string;
+  backgroundSummaryZh?: string;
+  linkedinUrl?: string;
+  fullNameZh?: string;
+}
+/** 模型輸出邊界的原始形狀（未消毒）；形狀同 PersonBackground，經 cleanStr/saneTitle 消毒後才成 PersonBackground。 */
+type PersonBackgroundRaw = PersonBackground;
+const PERSON_BG_SCHEMA: Record<string, unknown> = {
+  type: S.OBJECT,
+  properties: {
+    title: { type: S.STRING },
+    titleZh: { type: S.STRING },
+    backgroundSummary: { type: S.STRING },
+    backgroundSummaryZh: { type: S.STRING },
+    linkedinUrl: { type: S.STRING },
+    fullNameZh: { type: S.STRING },
+  },
+};
+const PERSON_BG_SYSTEM = [
+  "You are a B2B sales research analyst. You are given a grounded web answer about ONE named executive at a company.",
+  "Extract a concise structured profile as JSON. Use ONLY facts stated in the answer; do NOT invent titles, employers, dates, URLs, or Chinese names.",
+  // title MUST be a SINGLE primary title. If the person holds many roles (e.g. CTO + co-founder + advisor + board member),
+  // pick the ONE most-senior/primary title and IGNORE the rest — do NOT enumerate or concatenate roles. (Root-cause guard:
+  // enumerating overlapping roles into titleZh sends gemini-3.5-flash into a token-repetition loop → MAX_TOKENS.)
+  "title = the person's SINGLE primary current job title at this company, in the source language (a few words only; if the person holds several roles, pick the ONE most senior/primary title and IGNORE the rest — never list or concatenate multiple titles). backgroundSummary = a concise career/education background of AT MOST 3 sentences (source language) — do NOT exceed 3 sentences.",
+  "Bilingual gloss: titleZh = the Traditional-Chinese (zh-TW) of the SINGLE primary title, AT MOST 8 characters, ONE title only — NEVER concatenate or list multiple titles, NEVER repeat a word, and NEVER put dates, URLs, or a summary in this field. backgroundSummaryZh = a Traditional-Chinese (zh-TW) summary of AT MOST 2 sentences. If the source is already zh-TW you may condense it.",
+  "linkedinUrl = the person's own LinkedIn profile URL ONLY if it explicitly appears in the answer. fullNameZh = the person's Chinese name ONLY if the answer explicitly gives it; NEVER transliterate a romanized name.",
+  "OUTPUT ONLY the single JSON object defined by the schema — no preamble, no markdown fences, no repetition. OMIT any field you are not certain of (do NOT emit empty strings, placeholders, or guesses); a JSON object with only the few fields you can confirm is CORRECT and preferred. Keep EVERY value SHORT; never repeat a word, phrase, or sentence.",
+].join(" ");
+
+/** 初次餵入 extractPersonBackground 的 grounded 答案截斷（減少誘發面；非根因，但降 token）。 */
+const PERSON_BG_INPUT_CHARS = 6_000;
+/** MAX_TOKENS 單次重試時的更嚴截斷（再砍半）＋重取一次獨立樣本。 */
+const PERSON_BG_RETRY_CHARS = 3_000;
+/** 職稱欄長度上限（防污染守衛）：真實職稱極短，超過此長度＝模型把背景灌進職稱欄。EN 職稱寬列 80、zh titleZh 40。 */
+const PERSON_TITLE_MAXLEN = 80;
+const PERSON_TITLEZH_MAXLEN = 40;
+
+/** finishReason=MAX_TOKENS 判定：gemini.ts 對截斷輸出丟出的錯誤訊息含 "finishReason=MAX_TOKENS"。 */
+function isMaxTokensError(e: unknown): boolean {
+  return e instanceof Error && /MAX_TOKENS/.test(e.message);
+}
+
+/**
+ * 職稱欄防污染守衛（寧缺勿錯）：職稱本質簡短，若過長／含 URL／含換行＝模型把日期/背景/連結灌進職稱欄的欄位污染
+ *（實測 temp 稍高時偶發 `titleZh="營運長2020年起…https://…"`）→ 視為缺（回 undefined，不落庫垃圾）。純函式。
+ */
+function saneTitle(v: string | undefined, maxLen: number): string | undefined {
+  if (!v) return undefined;
+  if (v.length > maxLen) return undefined;
+  if (/https?:\/\//i.test(v) || /[\n\r]/.test(v)) return undefined;
+  return v;
+}
+
+/**
+ * S1-A6：把一則 grounded 答案結構化成可回填的背景欄（title/titleZh/backgroundSummary/backgroundSummaryZh/
+ * linkedinUrl/fullNameZh）。低溫、maxOutputTokens 有界。**嚴禁捏造**（見 SYSTEM）。失敗/空 → 回 {} 或上拋。
+ *
+ * MAX_TOKENS 修法 v3（根因經 usageMetadata 實測定位）：先前 v2（放寬 8192／壓 thinkingBudget）**無效**——實測顯示
+ * finishReason=MAX_TOKENS 時 `thoughtsTokenCount=undefined`（thinking 非元兇），而 `candidatesTokenCount` 撐滿整個
+ * maxOutputTokens：模型對 `titleZh` 進入**退化重複循環**（如 "技術長合夥創辦人兼技術長技術長技術長…" 灌爆輸出→JSON 未收尾
+ * →不可解析）。誘因＝人物身兼多職（CTO＋共同創辦人＋顧問＋董事），模型想把所有職稱塞進單一 gloss 欄而繞不出來。
+ * gemini-3.5-flash **不支援 frequencyPenalty**（「Penalty is not enabled for this model」），故改以四管齊下：
+ *  1. **prompt 硬性單一職稱**（根因解）：title/titleZh 只取「單一主要職稱」、titleZh ≤8 字、禁列舉/禁重複/禁塞日期URL（見 SYSTEM）。
+ *  2. **thinkingConfig 關閉 + maxOutputTokens 2048 + temperature 0.4**：實測 6/6 乾淨（temp 0.3 偏易循環、1.0 反更糟；
+ *     max 2048 對 ~250 token 的小 JSON 綽綽有餘，且循環時 ~5s 快失敗而非 ~20s）。thinking 必須關（否則 thinking token 會吃掉 2048）。
+ *  3. **輸入截斷 6000／MAX_TOKENS 重試砍半 3000 重取獨立樣本**（每次獨立取樣在新配置下 ~100% 成功；再失敗才上拋，呼叫端逐人隔離跳過）。
+ *  4. **職稱欄防污染守衛 saneTitle**：擋殘餘的欄位污染（過長/含 URL/含換行的 title/titleZh 視為缺，寧缺勿錯）。
+ */
+export async function extractPersonBackground(
+  gemini: GeminiClient,
+  extractModel: string | undefined,
+  groundedAnswer: string,
+): Promise<PersonBackground> {
+  const answer = cleanStr(groundedAnswer);
+  if (!answer) return {};
+  const runOnce = (chars: number): Promise<PersonBackgroundRaw> =>
+    gemini.generateJson<PersonBackgroundRaw>({
+      model: extractModel,
+      system: PERSON_BG_SYSTEM,
+      prompt: `WEB ANSWER (about the executive):\n${answer.slice(0, chars)}`,
+      schema: PERSON_BG_SCHEMA,
+      maxOutputTokens: 2048,
+      thinkingBudget: 0, // 關閉 thinking：小任務不需，且與 max=2048 共存的必要條件（否則 thinking 吃光預算）。
+      temperature: 0.4,
+      attempts: 2,
+    });
+
+  let ex: PersonBackgroundRaw;
+  try {
+    ex = await runOnce(PERSON_BG_INPUT_CHARS);
+  } catch (e) {
+    // MAX_TOKENS 單次重試：輸入再砍半並重取一次獨立樣本（新配置下退化循環為罕見隨機事件，重取幾乎必成）。
+    // 仍失敗/非 MAX_TOKENS 即上拋 → 呼叫端 enrichKeyPeople 逐人 try/catch 隔離跳過（維持寧缺勿錯、單人失敗不影響他人）。
+    if (!isMaxTokensError(e) || answer.length <= PERSON_BG_RETRY_CHARS) throw e;
+    console.warn(
+      `[research:deep] person background MAX_TOKENS — retrying with halved input (${answer.length}→${PERSON_BG_RETRY_CHARS} chars)`,
+    );
+    ex = await runOnce(PERSON_BG_RETRY_CHARS);
+  }
+
+  const out: PersonBackground = {};
+  const title = saneTitle(cleanStr(ex?.title), PERSON_TITLE_MAXLEN);
+  if (title) out.title = title;
+  const titleZh = saneTitle(cleanStr(ex?.titleZh), PERSON_TITLEZH_MAXLEN);
+  if (titleZh) out.titleZh = titleZh;
+  const bg = cleanStr(ex?.backgroundSummary);
+  if (bg) out.backgroundSummary = bg;
+  const bgZh = cleanStr(ex?.backgroundSummaryZh);
+  if (bgZh) out.backgroundSummaryZh = bgZh;
+  const li = cleanHttpUrl(ex?.linkedinUrl);
+  if (li) out.linkedinUrl = li;
+  const nameZh = cleanStr(ex?.fullNameZh);
+  if (nameZh) out.fullNameZh = nameZh;
+  return out;
+}
+
 export function createDeepExtractor(gemini: GeminiClient, extractModel?: string): DeepExtractor {
   return {
     async toDeep(input: DeepExtractInput): Promise<DeepExtraction> {
@@ -584,6 +885,11 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
       // ── WP 缺口 1b/1c：公司官方社群 URL（機械保險：只 https＋四平台；orchestrator 以「補缺」併入）──
       const socialLinks = toDeepSocialLinks(ex.socialLinks);
 
+      // ── S1-A7/A8：商機線索 + 外部產品觀點（每則錨定其 [S#] 的真實 URL；provenance 沿用 resolve→primary fallback）──
+      const srcOf = (idx: unknown): string | undefined => (resolve(idx) ?? primary)?.url;
+      const opportunities = toDeepOpportunities(ex.opportunities, srcOf);
+      const products = toDeepProducts(ex.products, srcOf);
+
       // ── WP2：zh-TW 敘事 + 未歸類情報（每條錨定其 [S#] 的真實 URL；共用 dedupUncat）──
       const narrativeZh = cleanStr(ex.narrativeZh);
       const uncategorized = dedupUncat(ex.uncategorized, (u) => (resolve(u.sourceIndex) ?? primary)?.url);
@@ -598,6 +904,8 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
         techStack,
         departments,
         socialLinks,
+        opportunities,
+        products,
         narrativeZh,
         uncategorized,
       };
