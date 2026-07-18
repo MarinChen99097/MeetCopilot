@@ -36,6 +36,32 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-18 | 研究引擎擴編的修法拍板（兩路調查回報後 Fable 凍結契約）
+- **誰決定**: Fable（依兩路 Opus 調查證據）
+- **決策**（廣度包 S1＋產品包 S2＋web 包，S1→S2 依序、web 平行——S1/S2 共用 orchestrator/deep-extractor 檔案故不平行）：
+  1. **P0 語言判定治本**：基礎查詢**一律雙語**（zh+en 全角度都出），isBilingual 廢除排除語意只留排序用——Connact AI（英文名＋.ai 域）被誤判非華語、round 1 全英文是「外部只剩 1 筆 bnext」的第一因。gap 加深查詢同步雙語化。
+  2. **P0 grounding 升模**：generateGrounded 帶 extractModel（gemini-3.5-flash）取代 textModel（flash-lite，config 自註對抽取 UNRELIABLE）。
+  3. **P1 深讀擴編**：DEEP_RESEARCH_MAX_SOURCES 預設 6→12、clamp 上限 10→20；SafeFetcher 失敗/<200 字時 **fallback 到 Playwright 渲染抓取**（SSRF 防護沿用 crawler 機制、上限 8 個/每個 20s）——救回 104/cakeresume/中文 SPA 新聞站。
+  4. **P1 查詢角度擴編**：ANGLES 加 徵才(104/cakeresume)/客戶案例/評測/政府商工登記/獲獎 五角度（雙語）。
+  5. **P2 per-contact 補查**：對 deep 找到的主管（≤5 人）逐人一條 grounding 補職稱/學經歷/linkedin，僅填空欄。
+  6. **P2 商機路徑開通**：deep-extractor 加 opportunities[]（採購訊號/擴編/新專案/合作），落**筆記（observations）**帶 provenance——**不自動建 deals**（deals 語意=我方銷售管線，研究訊號≠成交案；自動建會污染 pipeline，留給使用者判斷後手動建）。
+  7. **產品治本＝per-product 二段式**：第一段列清單後，對每個有專頁的產品（≤10）單獨跑聚焦抽取（該頁全文 12K 不砍半＋單品 rich schema 含 techStack/competitors），fill-empty merge；prompt 加硬性最低具體度（≥3 keyFeatures 含 detail、目標客群、有規格表必填 specs）。
+  8. **每頁截斷動態化**：頁數少時每頁給足 12K（總量逼近 180K 才降回 6K）——修「小站被大站防呆誤傷」。
+  9. **deep 產品外部回填**：deep-extractor 加 products[]（differentiators/competitors/notableCustomers），僅以名稱對齊**回填官網既有產品**（配不到的進 uncategorized，不建新品防重複）。
+  10. **來源展示補真**：job.sources 納入已引用未深讀的 citation（resolve 後，總量 cap 60）；官網 case-study 連結權重 2→4。
+  11. **UI 補顯示既有資料**：ProductsTab 補 render specs 表格、keyFeatures 的 detail/benefit、targetPersonas/competitors/pricingNotes/productUrl/docsUrl。
+- **考慮過的替代**: isBilingual 加更多啟發式訊號（否——多語查詢成本極低，直接全雙語最穩）；商機自動建 deals（否——語意錯置＋污染管線）；deep 外部產品建新列（否——重複風險）；S1/S2 平行＋worktree（否——同檔合併成本高於序跑）。
+- **影響**: apps/server/src/research/*（deep-research/deep-rounds/deep-extractor/extractor/crawler/orchestrator/grounding）＋gemini.ts＋config/.env.example＋apps/web ProductsTab/messages。預估單次 deep 耗時 118s→250-350s、token 成本↑（grounding 升模＋查詢×2＋深讀×2＋二段式），均在 20 分軟預算/60 分 job 上限內；admin 用量報表可觀察。驗證含 Connact AI 本地重跑**前後對照**。
+
+### 2026-07-18 | 研究引擎廣度/深度不足＋產品不夠具體（使用者看 ConnactAI 重研究結果後下令）
+- **誰決定**: 使用者（部署 00012-drd/00010-lmf 後對 ConnactAI 重跑深度研究，看結果截圖）
+- **決策**: 兩項不滿意，立案改善：
+  1. **找的範圍不夠多也不夠深**：來源 12 筆中 11 筆是 connact.ai 自家頁面、外部僅 1 筆 bnext——「全網深度研究」實質上還是官網爬蟲＋一點點外部；主管 1/新聞 2/商機 0，資料量太少。
+  2. **產品/服務不夠具體**：4 個產品仍是泛描述，看不出對方實際賣什麼、怎麼賣。
+- **脈絡與理由**: 品質四修（migration 015 輪）解決了「欄位裝不下＋UI 不顯示」，但引擎本身的搜索廣度（query 角度數、外部深讀數、輪數）與產品頁挖掘深度是另一層瓶頸，這輪處理引擎。
+- **考慮過的替代**: 無（使用者直接指示）。
+- **影響**: 待兩路 Opus 調查（引擎預算/來源管線、產品具體度路徑）回報後定契約；預計動 apps/server/src/research/ 的 deep-research/deep-rounds/deep-extractor/crawler/extractor。
+
 ### 2026-07-18 | CRM 品質四項的修法拍板（兩路 Opus 調查回報後 Fable 凍結契約）
 - **誰決定**: Fable（依兩路調查證據）
 - **決策**:

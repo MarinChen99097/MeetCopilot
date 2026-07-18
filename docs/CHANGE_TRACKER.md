@@ -34,6 +34,91 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-18 21:40 | 研究引擎擴編輪 化簡：PersonBackgroundRaw 重複介面收斂為別名＋ProductsTab 巢狀三元運算子扁平化
+- **工作區**: apps/server, apps/web
+- **類型**: refactor
+- **檔案**: `apps/server/src/research/deep-extractor.ts`, `apps/web/components/crm/ProductsTab.tsx`
+- **改了什麼**:
+  - **deep-extractor.ts（重複邏輯收斂）**: `PersonBackgroundRaw` 與 `PersonBackground` 兩介面欄位完全相同（6 個同名 optional string），前者僅用於 `gemini.generateJson<PersonBackgroundRaw>` 模型輸出邊界。將 `interface PersonBackgroundRaw {…6 欄…}` 改為 `type PersonBackgroundRaw = PersonBackground;`（別名保留「Raw＝未消毒模型形狀」語意，消掉重複欄位清單）。Before：兩個各列 6 欄的 interface。After：`PersonBackground` interface ＋ `type PersonBackgroundRaw = PersonBackground;`。行為零變（同型別，消毒流程 cleanStr/saneTitle 不動）。
+  - **ProductsTab.tsx（巢狀三元運算子扁平化）**: `const oneLiner = product ? (isZh && product.oneLinerZh ? product.oneLinerZh : product.oneLiner) : undefined;` 巢狀三元→改 guard＋單層三元（對齊本檔 line 78 既有 `const oneLine = isZh && p.oneLinerZh ? p.oneLinerZh : p.oneLiner;` 慣例）。After：`let oneLiner: string | undefined; if (product) oneLiner = isZh && product.oneLinerZh ? product.oneLinerZh : product.oneLiner;`。型別/行為零變。
+- **為什麼**: 研究引擎擴編輪（S1/S2，未 commit）化簡精煉——保功能完全不變，僅收斂重複與去巢狀三元。刻意**不動**：`OpportunitySignalType` 型別＋`OPPORTUNITY_SIGNALS` 陣列雖看似重複，但對齊本檔既有 `SENIORITIES`/`NEWS_CATEGORIES`（型別＋顯式字面陣列）慣例，改 `as const` 派生反增 readonly cast 摩擦，故保留；`withRenderTimeout` 的 `as Promise<T | null>` 非冗餘（`Promise.race` 產 `Awaited<T>` 對泛型 T 不可證等於 T，cast 承載型別橋接），保留；`unionArr`/`unionStrArr`/`cleanStrArr` 三處相似小工具分居三檔、語意各異（回 [] vs undefined），跨檔抽共用屬過度工程，保留；`enrichKeyPeople` 內 gm 選取雖與 `geminiFor` 相似，但改用 helper 會因回傳 `GeminiClient | undefined` 需加 `!` 斷言，內聯反而更清楚，保留。不違反 I1/I2/I3。
+- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 31 檔 152 測全綠（基準不變）；`cd apps/web; npx tsc --noEmit` 綠（EXIT=0）。未 commit（硬規則 10）。
+
+### 2026-07-18 21:05 | per-contact 人物背景抽取 MAX_TOKENS 根因修復 v3：定位為 titleZh 退化重複循環→prompt 硬性單一職稱＋關 thinking＋temp 0.4＋職稱防污染守衛
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/research/deep-extractor.ts`
+- **改了什麼**:
+  - **根因（用 usageMetadata 微型實測定位，推翻前一版假設）**: 前一版（20:05）以為 MAX_TOKENS 是「thinking token 吃光 maxOutputTokens」，遂放寬 8192／壓 thinkingBudget——**無效**。用 raw `generateContent` 直讀 usageMetadata 實測：撞 MAX_TOKENS 時 `thoughtsTokenCount=undefined`（thinking 非元兇），而 `candidatesTokenCount` 撐滿整個 maxOutputTokens——模型對 **`titleZh` 欄進入退化重複循環**（如 `"技術長合夥創辦人兼技術長技術長技術長…"` 灌爆輸出→JSON 未收尾→不可解析）。誘因＝人物身兼多職（CTO＋共同創辦人＋顧問＋董事），模型想把所有職稱塞進單一 gloss 欄而繞不出來。gemini-3.5-flash **不支援 frequencyPenalty**（實測回 400「Penalty is not enabled for this model」），故不能用懲罰項打斷。
+  - **修法（四管齊下，全部經實測驗證）**: (1) **PERSON_BG_SYSTEM 硬性單一職稱**（根因解）——title/titleZh 只取「單一主要職稱」、`titleZh ≤8 字`、明令禁列舉/禁串接/禁重複字/禁塞日期URL。(2) **config 改 `maxOutputTokens 8192→2048`＋`thinkingBudget 512→0`（關閉）＋`temperature 0.3→0.4`**（實測 temp 0.3 偏易循環、1.0 反更糟、0.4/0.6 皆 6/6 乾淨；max 2048 對 ~250 token 小 JSON 綽綽有餘，循環時 ~5s 快失敗而非 ~20s；thinking 必須關，否則 thinking token 會吃掉 2048）。(3) **輸入截斷 `8000→6000`＋MAX_TOKENS 單次重試砍半 `3000` 重取獨立樣本**（新 `isMaxTokensError`＋`runOnce(chars)`；新配置下每次獨立取樣 ~100% 成功，再失敗才上拋→呼叫端 `enrichKeyPeople` 逐人 try/catch 隔離跳過，寧缺勿錯）。(4) **職稱防污染守衛 `saneTitle(v,maxLen)`**（純函式）——title/titleZh 若過長（EN 80／zh 40）或含 URL／含換行＝欄位污染（實測 temp 稍高時偶發 `titleZh="營運長2020年起…https://…"`）→視為缺回 undefined，不落庫垃圾。
+  - Before：`maxOutputTokens:4096, thinkingBudget:1024, temperature:0.3`、`answer.slice(0,8000)`、無重試、titleZh 直接 `cleanStr` 落庫、PERSON_BG_SYSTEM 未限單一職稱。After：如上（含 `PERSON_BG_INPUT_CHARS=6000`/`PERSON_BG_RETRY_CHARS=3000`/`PERSON_TITLE_MAXLEN=80`/`PERSON_TITLEZH_MAXLEN=40` 常數）。
+- **為什麼**: S1-A6 per-contact 補查在 gemini-3.5-flash 下 E2E 實測 8 位主管 backgroundSummary 全空，微型實測（本次）於「身兼多職」長文 3/5 撞 MAX_TOKENS，根因為 titleZh 退化重複循環（非 thinking）。硬性單一職稱＋關 thinking＋適中溫度打斷循環、防污染守衛擋殘餘欄位污染、重試＋隔離兜住罕見殘餘。沿用雙語不變量（主要欄留來源語言、繁中走 *Zh gloss）與 fill-empty；不違反 I1/I2/I3。
+- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 31 檔 152 測全綠。微型實測（一次性 tsx，放 session scratchpad 未進 repo，從 apps/server/.env 唯讀 GEMINI_API_KEY，gemini-3.5-flash）：**修後**真實 `extractPersonBackground` 對 (a) ~5.7K「身兼多職」中英混合長文 3/3 OK＋(b) ~611 字正常長文 3/3 OK，共 6/6 無 MAX_TOKENS，titleZh 皆單一職稱（技術長／營運長）、backgroundSummary ≤3 句、繁中 gloss ≤2 句、姓名/LinkedIn 正確，1.4–2.0s；stub 決定性驗證：MAX_TOKENS 重試路徑（首呼 6034 字→拋 MAX_TOKENS→砍半 3034 字重取→復原）PASS、輸入本已短時不重試直接上拋 PASS。**修前**同長文 3/3 撞 MAX_TOKENS 且砍半重試亦 3/3 失敗（證舊「砍輸入」策略對輸出重複循環無效）。.env 唯讀未動。未 commit（硬規則 10）。
+
+### 2026-07-18 20:05 | S1/S2 E2E 品質尾巴修復：per-contact／per-product 抽取 MAX_TOKENS 韌性＋grounding 504 逾時放寬＋render fallback 觀測
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/gemini.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/extractor.ts`, `apps/server/src/research/deep-research.ts`, `.env.example`, `apps/server/src/research/product-detail-isolation.test.ts`(新)
+- **改了什麼**:
+  - **症狀1+2 MAX_TOKENS（thinking 吃光預算）**: gemini-3.5-flash 的 thinking token 與可見輸出**共用** `maxOutputTokens`，小任務給太緊時 thinking 吃光預算→零 JSON→`finishReason=MAX_TOKENS`。`gemini.ts`：`GenerateJsonOptions` 新增 `thinkingBudget?`，`generateJsonMetered` config 於有值時帶 `thinkingConfig:{thinkingBudget}`。`deep-extractor.extractPersonBackground`：`maxOutputTokens` 2048→4096＋`thinkingBudget:1024`＋PERSON_BG_SYSTEM 明限（背景 ≤3 句、繁中 gloss ≤2 句）。`extractor`：`PRODUCT_DETAIL_MAX_OUTPUT_TOKENS` 4096→8192、新增 `PRODUCT_DETAIL_THINKING_BUDGET=2048`，`extractOneProductDetail` 帶 `thinkingBudget`。失敗仍**寧缺勿錯**（維持跳過，不退化填原文）；單人/單品失敗隔離既有（enrichKeyPeople／enrichProductDetails 迴圈各有 try/catch continue），新增測試覆蓋。
+  - **症狀3 grounding 504 DEADLINE_EXCEEDED**: `generateGrounded` 原沿用 client 預設逾時 30s，升模 gemini-3.5-flash 後單次常 >30s→attempt 1/2、2/2 皆 AbortError／504。新增 `GENERATE_GROUNDED_TIMEOUT_MS=90_000` 並於呼叫帶 `httpOptions:{timeout}`；預設 `attempts` 2→3；加 try/catch `normalizeCallError`（client 逾時→retryable=false 不白等第二次 90s；上游 504 帶數字 status→原樣可重試退避）。`deep-research.ts`：`GROUNDING_CONCURRENCY` 由固定 3 改 env `DEEP_RESEARCH_GROUNDING_CONCURRENCY`（clamp 1–6，**預設 3→2** 降上游互相拖慢），`.env.example` 同步一行註解。
+  - **症狀4 render fallback 觀測**: `deep-research.renderWithLimits` 觸發時補一行 `console.log('[research:deep] render fallback: <url>')`（僅觀測、不改行為、每 job ≤8 次有界）。
+- **為什麼**: 研究引擎擴編（S1/S2，未 commit）E2E 對 Connact AI 實測發現三品質尾巴——8 位主管 backgroundSummary 全空、一產品二段深抽整筆丟失、多筆 grounding 逾時。根因皆為升模 gemini-3.5-flash 後 thinking 變重＋grounding 變慢，而小任務 token 預算與 grounded 逾時未同步放寬。沿用雙語不變量與欄位級 provenance；不違反 I1/I2/I3。
+- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 31 檔 152 測全綠（新 product-detail-isolation.test.ts 1 測：一品拋 MAX_TOKENS、另一品成功→不上拋、失敗品保原樣、成功品被補抽；standard-retry／breadth-s1／merge-deep-products 回歸綠）。.env 未動（唯讀），僅改 .env.example。未 commit（硬規則 10）。
+
+### 2026-07-18 19:30 | S1 code-review 修復：A8 mergeDeepProducts base/variant 誤配＋A6 per-contact provenance grounding-redirect 未還原
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/merge-deep-products.test.ts`(新)
+- **改了什麼**:
+  - **A8 mergeDeepProducts 精確配對優先**: 官網同時有基礎名與變體（如 `Ghost` / `Ghost Pro`）時，原 `products.find(... productNameMatches ...)` 因 `productNameMatches` 對稱含式匹配（`na.includes(nb) || nb.includes(na)`）＋ first-match，會把外部 `Ghost Pro` 觀點誤併入排序在前的較短基礎名 `Ghost`。改為**兩段配對**：先 `normalizeProductName(p.name) === normalizeProductName(name)`（正規化後精確相等），無精確命中才退回 `productNameMatches`（含式，契約 A8 允許）。Before：`const target = products.find((p)=>...&&productNameMatches(p.name,name));` After：`const target = products.find((p)=>named(p)&&normalizeProductName(p.name)===nName) ?? products.find((p)=>named(p)&&productNameMatches(p.name,name));`（`named` 為 hoisted type-guard）。新 import `normalizeProductName`。合併規則（fill-empty/union、notableCustomers 併 notes、unmatched 不建新列）不變。
+  - **A6 per-contact provenance sourceUrl 還原真實出處**: `enrichKeyPeople` 內 `firstCitationUrl` 在「該人物新查詢的 citations 全為 grounding-redirect（vertexaisearch，Gemini grounding 常態）」時會退回中介 redirect，且此 URL 從未經 `resolveRedirects` 還原 → `classifySourceType` 誤標 `web`，與 deep.people/uncategorized/opportunities（皆已還原）不一致。改為：取得 `srcUrl` 後若 `isGroundingRedirect(srcUrl)`，用 `resolveRedirects(deps.fetcher ?? safeFetcher, citations, { budgetMs:10_000, max:8 })` 還原，依 citation 順序取第一個非 redirect 真實 URL 覆寫 `srcUrl`（有界、best-effort、失敗保留原值——與 uncategorized/opportunities 路徑一致）。`srcUrl` 由 `const` 改 `let`。
+- **為什麼**: S1 廣度包 code-review 確認缺陷。A8（medium）：base+variant 產品目錄（X / X Pro、Cloud / Cloud Enterprise）下外部競品/客戶/差異化錯置到基礎名；精確相等優先解決 first-match 貪婪選短名的碰撞，不改契約。A6（low）：契約 A6 明列「sourceUrl＝真實 citation」，還原後 UI 徽章顯示真新聞/維基網域而非中介 redirect。沿用雙語不變量與欄位級 provenance；不違反 I1/I2/I3。
+- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 30 檔 151 測全綠（新 merge-deep-products.test.ts 6 測：精確配對優先/順序顛倒/含式 fallback/fill-empty union/unmatched 不建列/不變異入參；breadth-s1、name-guard、deep-notes 回歸綠）。未動 web。未 commit（硬規則 10）。
+
+### 2026-07-18 19:05 | S2 產品包 B1–B5：每頁截斷動態化＋prompt 最低具體度＋產品 schema 補 techStack/competitors＋per-product 二段式聚焦補抽＋爬蟲客戶案例加權
+- **工作區**: apps/server
+- **類型**: feat
+- **檔案**: `apps/server/src/research/extractor.ts`, `apps/server/src/research/crawler.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/product-detail-s2.test.ts`(新)
+- **改了什麼**:
+  - **B1 每頁截斷動態化**: extractor 移除固定 `PER_PAGE_PROMPT_CHARS=6000`，改 `PER_PAGE_MAX_CHARS=12000`/`PER_PAGE_MIN_CHARS=6000` ＋純函式 `computePerPageChars(textLengths, miscChars)`（匯出供測）：`sum(min(len,12000))+雜項 ≤ MAX_PROMPT_CHARS(180K)` → 每頁給足 12000；否則 `(180K−雜項)/頁數` clamp `[6000,12000]`。`buildPrompt` 先算「非頁面文字」雜項（task/header/每頁框線 label/PAGE IMAGES 清單/join 換行）再據此 slice 每頁（Before：每頁一律 `.slice(0,6000)`，就算預算沒用滿也砍）。
+  - **B2 prompt 硬性最低具體度**: SYSTEM 產品段加「MINIMUM SPECIFICITY」硬要求（每產品 ≥3 keyFeatures 含 detail、≥1 句 targetMarket；頁面有價格 MUST 填 priceText；有規格表 MUST 填 specs），並把 priceText/targetMarket/keyFeatures/specs 各行語氣由 SHOULD/optional 改 MUST/at least。**schema required 仍只留 name（防幻覺）**，純靠 prompt 強制。
+  - **B3 產品 schema 補 techStack/competitors**: `ExtractedProduct`＋`RESPONSE_SCHEMA.products.items.properties` 加 `techStack`/`competitors`（string[]），`foldProduct` 落庫（`strArr` 去空去重）。**knownIssues 不加**。落庫路徑既有（mappers `tech_stack_json`/`competitors_json`）→ 無需改 crm。
+  - **B4 per-product 二段式**: extractor 抽出共用 `foldProduct`（toProducts 逐筆呼叫）；新增純函式 `matchProductsToPages`（匯出供測：productUrl 完全命中爬取頁優先→正規化名稱含式匹配 url/title，短名 <4 不匹配，cap 10，nearby 收其餘同名頁 ≤2）、`extractOneProductDetail`（單品 rich schema `PRODUCT_DETAIL_SCHEMA`/`PRODUCT_DETAIL_SYSTEM`，只餵該頁全文 ≤12000＋鄰近頁，maxOutputTokens 4096，required 仍只 name）、`mergeProductDetail`（純量 fill-empty、陣列 union、keyFeatures 依名 union、specs 依 key union，就地變異，不覆寫既有非空）、匯出 `enrichProductDetails`（並行 ≤3、單品失敗容忍、gemini 未設/無頁/無產品→原樣返回）。orchestrator 加 `geminiFor`（metered `product-detail:` idem 或裸 gemini），runStandard（用 `raw`）與 runDeep 產品組裝區（用 `siteRaw`、在 S1-A8 對齊前）各跑一次，try/catch 容忍。**維持既有 halveCrawlPages MAX_TOKENS 減半重試不動**。
+  - **B5 爬蟲客戶案例權重**: crawler `LINK_KEYWORDS` 客戶/案例兩條（英 customers|case-study|clients|success｜中 客戶|案例|實績|成功案例|合作夥伴）weight 2→4（排在新聞/媒體之前）。
+- **為什麼**: RESEARCH 產品深度升級（S2，S1 完成後跑）——首段全站抽取常因固定砍 6000 字/頁而漏規格、且對有專頁的產品只得 `{name}`。B1 讓預算沒用滿時整頁餵、B2 用 prompt 逼最低具體度、B4 對有專頁產品二段式聚焦補抽（fill-empty/union 不覆寫），B3 補兩欄、B5 讓客戶案例頁更易被爬到。沿用雙語不變量（主要欄留來源語言、繁中走 *Zh gloss）與欄位級 provenance；不違反 I1/I2/I3。
+- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 29 檔 145 測全綠（含新 product-detail-s2 14 測：computePerPageChars 7＋matchProductsToPages 7；breadth-s1 11 測回歸綠）。未 commit（硬規則 10）。
+
+### 2026-07-18 18:55 | S1 廣度包 A1–A10：深度研究扇出雙語×全角度＋新五角度＋grounding升模＋深讀擴編/JS fallback＋per-contact補查＋商機/產品外部回填＋sources補真
+- **工作區**: apps/server
+- **類型**: feat
+- **檔案**: `apps/server/src/research/deep-research.ts`, `apps/server/src/research/deep-rounds.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/grounding.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/breadth-s1.test.ts`(新), `.env.example`
+- **改了什麼**:
+  - **A1 基礎查詢一律雙語**: `buildQueries` 改為**對全部角度同時出 zh+en**，`isBilingual` 只決定排序（zh 先/en 先，逐角度交錯），不再排除 zh；移除 `ZH_ANGLES`。`deep-rounds.buildFollowUpQueries` gap 加深查詢改**雙語各一條**（deepen map 由 `Record<string,string>` 改 `{zh,en}`，每弱角度 push 兩條），slice 上限 8→13。
+  - **A2 新增五角度（雙語）**: `ANGLES` 加 hiring／caseStudies／reviews／registry／awards（各 zh+en）；`ROUND_QUERY_CEIL` 24→32。為容 11 角度×2=22 條基礎查詢：`DEFAULT_MAX_QUERIES` 9→22、clamp `[3,12]`→`[3,24]`（round1＝22 基礎+7 社群=29≤32）。
+  - **A3 grounding 升模**: `GroundingContext` 加 `model?`，`createGroundingProvider` 把 `ctx.model` 傳入 `generateGrounded`；`DeepResearcherOptions.groundingModel` → `research()` 的 `grounding.answer(q,{...,model})`；orchestrator `deepResearcherFor` 帶 `groundingModel: deps.extractModel`（deep 走 flash 而非 flash-lite）；`meteredGrounding` 估價 key 對齊 `extractModel ?? textModel`。**/ground 端點不帶 model → 仍 textModel（不受影響）**。
+  - **A4 深讀擴編**: `DEFAULT_MAX_SOURCES` 6→12、env clamp `[0,10]`→`[0,20]`。
+  - **A5 深讀 JS fallback**: `DeepResearcherOptions.renderFallback` 注入（orchestrator 傳 `crawler.fetchRaw`＝Playwright、SSRF 安全同 crawler：host-resolver pin＋page.route 逐請求攔截）。source pool worker 在 `extractFromUrl` throw 或 `text<200` 時走 render fallback；deep-research 端 closure 限「每 job ≤8 次（跨輪）、並行 ≤2（semaphore）、單 URL 20s（withRenderTimeout）」。
+  - **A6 per-contact 補查**: orchestrator `enrichKeyPeople`——deep 落 people 後對 backgroundSummary 空缺者（≤5）各跑一條 grounded 查詢（姓名+公司+職稱 學經歷 LinkedIn，依姓名 CJK 分流雙語擇一），`deep-extractor.extractPersonBackground` 結構化，**僅 fill-empty**（title/titleZh/backgroundSummary/backgroundSummaryZh/linkedinUrl(驗 https+linkedin.com)/fullNameZh）＋provenance（sourceUrl＝真實 citation）；查無/失敗跳過，嚴禁捏造。people 迴圈改捕捉 `savedPeople: Contact[]`。
+  - **A7 商機路徑**: deep-extractor `RESPONSE_SCHEMA`/`ExtractedDeep`/`DeepExtraction` 加 `opportunities[]`{title,detail,signalType(enum),sourceUrl?}＋SYSTEM 指示；orchestrator 落入 **observations 單例筆記「## 研究商機線索」**（與未歸類情報同一則，避免兩個 observations 單例互覆寫），每條附 [來源]；sourceUrl 走 resolveMerged/citation resolve 還原。**不建 deals**。
+  - **A8 產品外部回填**: deep-extractor 加 `products[]`{name,differentiators?,competitors?,notableCustomers?,sourceUrl?}＋SYSTEM 指示；orchestrator `mergeDeepProducts`（`productNameMatches`＝正規化 lowercase+去空白標點符號＋含式匹配）對齊官網既有產品，**fill-empty/union** 進 differentiators/competitors（`unionArr` 不覆寫既有非空）、notableCustomers 併入 notes；配不到→uncategorized（不建新產品列）。
+  - **A9 sources 補真**: `deep-research.assembleSources`（純函式）——官網頁優先→深讀真實來源→解析後真實出處→**已引用但未深讀的 citation（resolve 後真實 URL）**；去重、cap 60、排除仍是 grounding-redirect 的中介 URL。orchestrator 另加一趟 `resolveRedirects(bundle.citationUrls, {max:40,budget:20s})`。
+  - **A10 純函式 vitest**（`breadth-s1.test.ts`）: buildQueries 雙語（非 CJK 名也含 zh）＋全角度＋交錯截斷；`normalizeProductName`/`productNameMatches`；`assembleSources` cap 60/去重/官網優先/排除中介 redirect。
+- **為什麼**: RESEARCH 廣度升級（S1 凍結契約）——把深度研究從「單語為主、9 扇出、6 深讀、純 undici 抓取」擴為「全角度雙語、22 扇出、12 深讀＋JS 渲染 fallback、grounding 升模」，並補三類消費（主管背景 per-contact 補查、商機線索筆記、產品外部回填），使 sources 顯示真實出處。沿用雙語不變量（主要欄留來源語言、繁中走 *Zh gloss）與欄位級 provenance；不建 deals、不建新產品列、不違反 I1/I2/I3。
+- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 28 檔 131 測全綠（含新 breadth-s1 11 測；deep-notes/deep-rounds/social-discovery 回歸綠）。未 commit（硬規則 10）。
+
+### 2026-07-18 15:15 | WEB 包 C1/C2：ProductsTab 明細補 render（specs 表/keyFeatures 副行/personas/competitors/pricingNotes/oneLiner/外開連結）＋ productsTab i18n namespace
+- **工作區**: apps/web
+- **類型**: feat
+- **檔案**: `apps/web/components/crm/ProductsTab.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **改了什麼**:
+  - **ProductsTab 明細補 render（C1）**: (1) `SpecTable` 把 `product.specs`（JsonObject）render 成 key-value 表格（`fmtSpecValue` 值序列化：string/number/boolean 直出、陣列 join、其餘 JSON.stringify；空值/空物件不 render；`mc-spectable__wrap` overflow-x 橫捲）。(2) `FeatureList` 取代原「keyFeatures 只 render `.name` chip」——名稱主行＋ `detail`／`benefit` 副行（**有值才顯示副行**，benefit 以 ✓ 綠字標價值點）。(3) 新增 `targetPersonas`（ListBlock accent）、`competitors`（ListBlock warn）。(4) `pricingNotes` 以 `field()`（ProvenanceField，可細填/驗證，與 targetMarket 一致）插入定價群組。(5) `oneLiner(Zh)` 於明細頭部（`isZh && oneLinerZh ? oneLinerZh : oneLiner`，`mc-product-detail__oneliner`）。(6) `productUrl`/`docsUrl` 外開連結（`mc-extlink`、`target="_blank" rel="noopener noreferrer"`）。既有 techStack/integrations/differentiators/knownIssues ListBlock 沿用不動。
+  - **i18n 化 ProductsTab 標籤（C2 前置）**: 全元件 UI 標籤改走 `useTranslations("productsTab")`（原本硬編繁中，且英文 locale 會看到繁中標籤——latent i18n 缺口）；資料語言邏輯（oneLinerZh/descriptionZh 依 `useLocale` 擇顯）維持不動。原因：C1 新標籤須經 messages，若只新標籤走 t() 會與既有硬編繁中在同一明細面板混排（英文使用者半英半中），故將明細面板＋外層清單標籤一併收斂到 t() 以維持面板一致。
+  - **globals.css 新增 class**: `mc-product-detail__oneliner`、`mc-product-detail__links`、`mc-extlink`(+hover)、`mc-spectable__wrap`/`mc-spectable`(th/td/last-child)、`mc-featurelist`/`__item`/`__name`/`__detail`/`__benefit`。全用既有 `var(--mc-*)` token（benefit 用 `--mc-ok` 綠、extlink border 沿用 info 藍 rgba），僅**新增** selector，未改既有規則、未動 studio-present.css（I3）。
+  - **messages productsTab namespace（C2）**: zh-TW.json＋en.json 各新增 25 鍵 `productsTab.*`（title/emptyTitle/emptyHint/loadError/uncategorized/category/model/status/pricingModel/priceFrom/pricingNotes/targetMarket/productLink/docsLink/zhSummary/keyFeatures/specs/techStack/integrations/targetPersonas/differentiators/competitors/knownIssues/peopleTitle/peopleEmpty）。
+- **為什麼**: 本輪 server 包開始外部回填產品級 techStack/competitors 及 specs/keyFeatures 明細（S1/S2 契約），web 端須把既有型別已有、但明細完全沒 render 的欄位（specs 完全沒 render、keyFeatures 只顯示 name、targetPersonas/competitors/pricingNotes/productUrl/docsUrl/oneLiner 明細皆缺）補齊消費，並將新標籤正規 i18n（雙語 parity）。不違反 I1/I2/I3。
+- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（EXIT=0）；messages 兩檔 JSON 合法、leaf key parity 211=211（productsTab 25=25）。未動 /present 播放視圖與 studio-present.css。未 commit（硬規則 10）。
+
 ### 2026-07-18 14:35 | 審查修復三則：crawl 聯絡人空 gloss 去空＋逃生口樂觀 job 時間錨＋圖片排除對齊契約四
 - **工作區**: apps/server, apps/web
 - **類型**: fix
