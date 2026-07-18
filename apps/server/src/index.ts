@@ -14,6 +14,7 @@ import { createAdminRouter } from "./admin-routes/index.js";
 import { loadPricingOverrides } from "./ops/pricing.js";
 import { createCrmRouter } from "./crm-routes/index.js";
 import { createResearchRouter } from "./research/routes.js";
+import { createCrawlJobStore } from "./research/jobs.js";
 import { createTrainRouter } from "./train/routes.js";
 import { createGeminiClient } from "./gemini.js";
 import { RealtimeHub } from "./realtime/hub.js";
@@ -37,6 +38,17 @@ async function main(): Promise<void> {
 
   const core = await initCrm(config.dbPath);
   await core.migrate();
+
+  // crawl_jobs reaper（契約五）：server 重啟後把殘留 queued/running 的研究 job 一律標 failed（其背景流程已隨舊進程消失，
+  // 永不會再收尾）。必須在 migrate() 之後、開始接流量前跑一次；跨 org。前端逃生口據 error 文案顯示「已中斷」。
+  try {
+    const interrupted = await createCrawlJobStore(core.db).failInterrupted();
+    if (interrupted > 0) {
+      console.log(`[research] reaper: marked ${interrupted} interrupted crawl job(s) as failed on boot`);
+    }
+  } catch (e) {
+    console.error("[research] reaper failed on boot (non-fatal):", e);
+  }
 
   // Pricing env overrides (ADMIN_CONTRACT §3.4): fold PRICING__<MODEL>__* into the central PRICING constants
   // once at boot so estimateCostUsd + GET /api/admin/pricing reflect operator calibration.

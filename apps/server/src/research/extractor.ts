@@ -20,8 +20,15 @@ import type {
   NewCompanyTech,
   NewCompanyDepartment,
 } from "@meetcopilot/shared";
-import type { RawCrawl } from "./crawler.js";
-import { cleanStr, dedupUncat, NARRATIVE_UNCAT_SCHEMA, type UncategorizedIntel } from "./extract-shared.js";
+import type { RawCrawl, CrawledPage } from "./crawler.js";
+import {
+  cleanStr,
+  dedupUncat,
+  filterToImageWhitelist,
+  validatePhotoUrl,
+  NARRATIVE_UNCAT_SCHEMA,
+  type UncategorizedIntel,
+} from "./extract-shared.js";
 export type { UncategorizedIntel };
 
 /** 統一爬蟲信心（provenance.confidence）。爬蟲抽取值一律標此值，人細填/確認才升信任。 */
@@ -38,6 +45,8 @@ const EXTRACT_TEMPERATURE = 0.3;
 // 新增子表輸出上限（避免 JSON 爆量／截斷）：techStack/departments 各設硬上限，*Zh 簡介另以 prompt 限 <=2 句。
 const MAX_TECH = 12;
 const MAX_DEPARTMENTS = 10;
+// 每頁在 prompt 附上的圖片清單上限（控 token）。模型只能從此清單挑 imageUrls/photoUrl（其餘視為幻覺被程式濾掉）。
+const PROMPT_IMAGES_PER_PAGE = 10;
 
 export interface CrawlExtractor {
   toCompany(raw: RawCrawl): Promise<CompanyExtraction>;
@@ -52,6 +61,8 @@ export interface CrawlExtractor {
  */
 interface ExtractedProduct {
   name?: string;
+  /** 型號/SKU（如 CP1500PFCLCD）；規格/明細頁有才填。 */
+  model?: string;
   category?: string;
   oneLiner?: string;
   /** zh-TW 一句話定位（另產；不覆寫來源語言的 oneLiner）。 */
@@ -69,6 +80,8 @@ interface ExtractedProduct {
   targetPersonas?: string[];
   keyFeatures?: { name?: string; detail?: string; benefit?: string }[];
   specs?: { name?: string; value?: string }[];
+  /** 產品圖片 URL（模型只能從提供的頁面圖片清單挑；程式端過白名單驗證後併入 mediaUrls）。 */
+  imageUrls?: string[];
 }
 
 /** 模型輸出的技術棧單筆（zh-TW，惟技術/產品專有名保留原名）。摺成 NewCompanyTech。 */
@@ -136,9 +149,15 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         // zh-TW 精簡公司簡介（另產；不覆寫來源語言的 description）。
         descriptionZh: { type: S.STRING },
         tagline: { type: S.STRING },
+        // zh-TW 精簡標語（另產；不覆寫來源語言的 tagline）。
+        taglineZh: { type: S.STRING },
         industry: { type: S.STRING },
+        // zh-TW 產業別（industry 的繁中翻譯；另產）。
+        industryZh: { type: S.STRING },
         subIndustries: { type: S.ARRAY, items: { type: S.STRING } },
         businessModel: { type: S.STRING },
+        // zh-TW 商業模式（businessModel 的繁中 gloss；另產）。
+        businessModelZh: { type: S.STRING },
         keywords: { type: S.ARRAY, items: { type: S.STRING } },
         foundedYear: { type: S.INTEGER },
         ownershipType: { type: S.STRING },
@@ -199,8 +218,12 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         type: S.OBJECT,
         properties: {
           fullName: { type: S.STRING },
+          // zh-TW 姓名（僅來源實際出現中文名才填；嚴禁音譯捏造）。
+          fullNameZh: { type: S.STRING },
           firstName: { type: S.STRING },
           lastName: { type: S.STRING },
+          // 人物照片 URL（只能從提供的頁面圖片清單挑；程式端過白名單驗證）。
+          photoUrl: { type: S.STRING },
           title: { type: S.STRING },
           // zh-TW 職稱簡述（另產；不覆寫來源語言的 title）。
           titleZh: { type: S.STRING },
@@ -226,6 +249,8 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         type: S.OBJECT,
         properties: {
           name: { type: S.STRING },
+          // 型號/SKU（如 CP1500PFCLCD）；規格/明細頁有才填。
+          model: { type: S.STRING },
           category: { type: S.STRING },
           oneLiner: { type: S.STRING },
           // zh-TW 一句話定位（另產）。
@@ -267,6 +292,8 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
               required: ["name", "value"],
             },
           },
+          // 產品圖片 URL（只能從下方每頁 PAGE IMAGES 清單逐字挑；程式端過白名單驗證後併入 mediaUrls）。
+          imageUrls: { type: S.ARRAY, items: { type: S.STRING } },
         },
         required: ["name"],
       },
@@ -307,6 +334,8 @@ const SYSTEM = [
   "- `tagline`: ONLY the site's short headline slogan (roughly <= 12 words). Do NOT put the full description in `tagline`.",
   "- `productsOffered`: the product/service names.",
   "PRODUCTS — this is the highest-value output. List EVERY distinct product / model / series the site describes as its own `products[]` entry; do NOT cap the list (a hardware catalog may have a dozen or more). For each, fill from the detail/spec pages when present:",
+  "- `model`: the product's model number / SKU EXACTLY as printed on the spec/detail page (e.g. 'CP1500PFCLCD', 'ABC-123'). Fill ONLY when the page actually shows one; otherwise leave empty. NEVER invent a model code.",
+  "- `imageUrls`: image URLs for THIS product. You MUST pick ONLY from the `PAGE IMAGES` list shown under each page below, copying the URL VERBATIM. NEVER invent, guess, or modify an image URL. If none of the listed images clearly belongs to this product, leave it empty.",
   "- `category`: the product's family/type (e.g. '在線式 UPS 不斷電系統', 'PDU 電源分配器').",
   "- `oneLiner` + `description`: one short line + a short paragraph of what it is / who it's for.",
   "- `pricingModel` + `priceText`: the pricing type, and the price EXACTLY as shown on the page (keep the currency and units, e.g. 'NT$4,290', '$99/mo'). Only if a price is actually shown.",
@@ -314,18 +343,45 @@ const SYSTEM = [
   "- `keyFeatures[]`: the product's notable features (name + optional detail/benefit).",
   "- `specs[]`: technical spec rows from a spec/comparison table as {name,value} pairs, e.g. {name:'容量', value:'1500VA/900W'}, {name:'輸出電壓', value:'110V'}, {name:'外型架構', value:'直立式'}. Product-detail AND product-comparison pages list models by attribute columns (capacity/architecture/form-factor/voltage/runtime) — attach those attribute values as specs[] on the matching product. A page WITH such a table SHOULD populate specs[].",
   "Also include, only when the text states them: HQ location, founded year, social links, key customers, and named people (as `contacts[]`).",
+  "PEOPLE (contacts[]) — for each named person: `fullNameZh` = the person's Chinese name ONLY if it literally appears in the source text (official site/bio). NEVER transliterate a romanized name into Chinese or fabricate a Chinese name — leave it empty if the source has no Chinese name. `photoUrl` = the person's photo, picked ONLY from the `PAGE IMAGES` list VERBATIM; never invent one.",
   "TECH & DEPARTMENTS (only when the text states them): `company.techStack[]` = technologies/vendors/products the company itself uses or is built on ({category, vendor, product, detectedFrom = where on the page you saw it}); `company.departments[]` = the company's internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns in their original form (e.g. AWS, React, Kubernetes, SAP). Cap: at most 12 techStack items and at most 10 departments.",
-  "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the page's own source language (e.g. Traditional Chinese if the page is Chinese; do NOT translate the primary fields; quote the company's own wording). IN ADDITION, for each `*Zh` field — company.descriptionZh, products[].oneLinerZh, products[].descriptionZh, contacts[].titleZh, contacts[].backgroundSummaryZh, news[].titleZh, news[].summaryZh — emit a concise Traditional-Chinese (zh-TW) gloss of that item's corresponding primary field, each at most 2 sentences. If the source is already zh-TW you may condense it. Field NAMES stay as in the schema (English keys).",
+  "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the page's own source language (e.g. Traditional Chinese if the page is Chinese; do NOT translate the primary fields; quote the company's own wording). IN ADDITION, for each `*Zh` field — company.descriptionZh, company.taglineZh, company.industryZh, company.businessModelZh, products[].oneLinerZh, products[].descriptionZh, contacts[].titleZh, contacts[].backgroundSummaryZh, news[].titleZh, news[].summaryZh — emit a concise Traditional-Chinese (zh-TW, Taiwan usage) gloss of that item's corresponding primary field, each at most 2 sentences. company.industryZh is the Traditional-Chinese TRANSLATION of the industry label. If the source is already zh-TW you may condense it. (fullNameZh is NOT a gloss — see PEOPLE: only fill it from a Chinese name actually present in the source.) Field NAMES stay as in the schema (English keys).",
   "narrativeZh: write a Traditional-Chinese (zh-TW), plain-language narrative of 8-20 sentences synthesizing the company's type, business model, current situation, and (if visible) social presence. Keep proper nouns original; a readable briefing, NOT a bullet list.",
   "uncategorized: EVERY important fact in the text that does NOT fit the structured fields above (company/contacts/products/news) MUST be captured here as {text, sourceIndex} — DO NOT discard it (e.g. partnerships, awards, certifications context, notable customers, events). At most 25 items; each `text` one concise sentence. sourceIndex may be 0 (single-site source).",
   "Leave a field empty ONLY when the text does not state it. Do NOT fabricate identifiers, prices, numbers, or specs you cannot see in the text. Keep each text value concise and never repeat text. Return ONLY valid JSON matching the schema.",
 ].join(" ");
 
+/** 由爬到的所有頁面圖片（ogImage + images.src）組白名單——擷取器據此驗證模型回傳的 imageUrls/photoUrl（防幻覺，契約三）。 */
+export function buildImageWhitelist(raw: RawCrawl): Set<string> {
+  const s = new Set<string>();
+  for (const p of raw.pages) {
+    if (p.ogImage) s.add(p.ogImage);
+    for (const img of p.images ?? []) if (img?.src) s.add(img.src);
+  }
+  return s;
+}
+
+/** 組單頁 PAGE IMAGES 區塊（og:image 先、其後頁內 img；每頁上限 PROMPT_IMAGES_PER_PAGE）。無圖回空字串。 */
+function pageImagesBlock(p: CrawledPage): string {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  const add = (u: string | null | undefined, alt?: string): void => {
+    if (!u || seen.has(u) || lines.length >= PROMPT_IMAGES_PER_PAGE) return;
+    seen.add(u);
+    lines.push(alt ? `- ${u} | ${alt}` : `- ${u}`);
+  };
+  add(p.ogImage);
+  for (const img of p.images ?? []) add(img.src, img.alt || undefined);
+  if (lines.length === 0) return "";
+  return `\n[PAGE IMAGES] (pick imageUrls/photoUrl ONLY from these, verbatim):\n${lines.join("\n")}`;
+}
+
 function buildPrompt(raw: RawCrawl): string {
   const header = `Source site: ${raw.finalUrl ?? raw.url}\nPage title: ${raw.title ?? ""}\nMeta description: ${raw.metaDescription ?? ""}\nPages crawled: ${raw.pages.length}\n`;
   // 每頁各自截 PER_PAGE_PROMPT_CHARS（保廣度：不讓某一長頁吃光 prompt 預算），再整體截 MAX_PROMPT_CHARS。
+  // 每頁尾附 PAGE IMAGES 清單（模型挑 imageUrls/photoUrl 的唯一合法來源）。
   const bodies = raw.pages
-    .map((p, i) => `\n--- PAGE ${i + 1}: ${p.url} ---\n${p.text.slice(0, PER_PAGE_PROMPT_CHARS)}`)
+    .map((p, i) => `\n--- PAGE ${i + 1}: ${p.url} ---\n${p.text.slice(0, PER_PAGE_PROMPT_CHARS)}${pageImagesBlock(p)}`)
     .join("\n");
   const task =
     "TASK: Read the multi-page website text below (each page labelled with its URL) and produce a company-profile JSON. " +
@@ -370,14 +426,21 @@ const strArr = (v: unknown): string[] | undefined => {
   return out.length > 0 ? out : undefined;
 };
 
-/** 把模型的 ExtractedProduct[] 摺成 domain 的 Partial<CompanyProduct>[]（specs 陣列→物件、priceText→priceFrom/currency/pricingNotes）。 */
-function toProducts(items: ExtractedProduct[] | undefined): Partial<CompanyProduct>[] {
+/**
+ * 把模型的 ExtractedProduct[] 摺成 domain 的 Partial<CompanyProduct>[]（specs 陣列→物件、priceText→priceFrom/currency/pricingNotes）。
+ * imageUrls 過白名單驗證（防幻覺，契約三）：只保留確實爬到的圖片 URL，通過者併入 mediaUrls。
+ */
+function toProducts(items: ExtractedProduct[] | undefined, imageWhitelist: ReadonlySet<string>): Partial<CompanyProduct>[] {
   if (!Array.isArray(items)) return [];
   const out: Partial<CompanyProduct>[] = [];
   for (const p of items) {
     const name = typeof p?.name === "string" ? p.name.trim() : "";
     if (!name) continue;
     const prod: Partial<CompanyProduct> = { name };
+    if (typeof p.model === "string" && p.model.trim()) prod.model = p.model.trim();
+    // 產品圖片：只收白名單內的（幻覺 URL 濾掉）→ 併入 mediaUrls。
+    const imgs = filterToImageWhitelist(p.imageUrls, imageWhitelist);
+    if (imgs.length > 0) prod.mediaUrls = imgs;
     if (p.category) prod.category = p.category;
     if (p.oneLiner) prod.oneLiner = p.oneLiner;
     if (p.oneLinerZh) prod.oneLinerZh = p.oneLinerZh;
@@ -465,6 +528,34 @@ function toDepartments(items: ExtractedDepartment[] | undefined): NewCompanyDepa
   return out;
 }
 
+/**
+ * 主管清單：先逐欄 cleanStr 去空字串（與 deep-extractor 一致），再對 photoUrl 過白名單驗證（防幻覺，契約三）。
+ * Gemini 結構化輸出會對未填的 optional STRING 回空字串（""）——若原封落庫，fullNameZh/titleZh 等空 gloss
+ * 會在 web 端經 `fullNameZh ?? fullName` 因「空字串非 nullish、不 fallback」蓋掉本來一定有值的 fullName，
+ * 導致人物姓名/職稱顯示成空白。故此處把每個字串欄的空值刪除（＝落庫為 NULL），非空值 trim。
+ * 回新物件（不變異模型輸出）。
+ */
+function sanitizeContacts(
+  items: Partial<Contact>[] | undefined,
+  imageWhitelist: ReadonlySet<string>,
+): Partial<Contact>[] {
+  if (!Array.isArray(items)) return [];
+  return items.map((c) => {
+    const out: Partial<Contact> = { ...c };
+    for (const key of Object.keys(out) as (keyof Contact)[]) {
+      const v = out[key];
+      if (typeof v !== "string") continue; // enum/陣列/數值欄不動
+      const cleaned = cleanStr(v);
+      if (cleaned === undefined) delete out[key]; // 空字串 gloss → 刪除（落庫 NULL；勿蓋 web 端 `??` fallback）
+      else (out as Record<string, unknown>)[key] = cleaned;
+    }
+    const photo = validatePhotoUrl(out.photoUrl, imageWhitelist);
+    if (photo) out.photoUrl = photo;
+    else delete out.photoUrl; // 幻覺照片 URL（不在爬到清單）→ 丟棄
+    return out;
+  });
+}
+
 /** 由抽出的 company 物件逐欄合成公司級 provenance（爬蟲來源）。 */
 function companyProvenance(company: Partial<Company> | undefined, sourceUrl?: string): ProvenanceInput[] {
   if (!company) return [];
@@ -496,6 +587,8 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
     async toCompany(raw: RawCrawl): Promise<CompanyExtraction> {
       const ex = await extract(raw);
       const sourceUrl = cleanUrl(raw.finalUrl ?? raw.url) ?? (raw.finalUrl ?? raw.url);
+      // 圖片白名單（防幻覺，契約三）：products[].imageUrls / contacts[].photoUrl 只認確實爬到的圖片 URL。
+      const imageWhitelist = buildImageWhitelist(raw);
       // techStack/departments 由模型掛在 company 下但屬子表 → 先拆出，勿讓其污染 company 欄位與 provenance。
       const exCompany: ExtractedCompany = ex.company ?? {};
       const { techStack: rawTech, departments: rawDepts, ...companyFields } = exCompany;
@@ -510,8 +603,8 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
       const narrativeZh = cleanStr(ex.narrativeZh);
       return {
         company,
-        contacts: ex.contacts ?? [],
-        products: toProducts(ex.products),
+        contacts: sanitizeContacts(ex.contacts, imageWhitelist),
+        products: toProducts(ex.products, imageWhitelist),
         news: ex.news ?? [],
         techStack: toTechStack(rawTech),
         departments: toDepartments(rawDepts),
@@ -523,7 +616,8 @@ export function createCrawlExtractor(gemini: GeminiClient, extractModel?: string
 
     async toContacts(raw: RawCrawl): Promise<Partial<Contact>[]> {
       const ex = await extract(raw);
-      return ex.contacts ?? [];
+      // photoUrl 過白名單（防幻覺）；fullNameZh/titleZh 等字串欄 cleanStr 去空（見 sanitizeContacts）。
+      return sanitizeContacts(ex.contacts, buildImageWhitelist(raw));
     },
   };
 }

@@ -71,7 +71,7 @@ interface ExtractedDeep {
     investors?: string[];
     sourceIndex?: number;
   }[];
-  people?: { fullName?: string; title?: string; titleZh?: string; seniority?: string; sourceIndex?: number }[];
+  people?: { fullName?: string; fullNameZh?: string; title?: string; titleZh?: string; seniority?: string; sourceIndex?: number }[];
   competitors?: { name?: string; sourceIndex?: number }[];
   /** 公司官方社群帳號 URL（每平台選填完整 URL；WP 缺口 1b）。 */
   socialLinks?: { youtube?: string; facebook?: string; instagram?: string; threads?: string };
@@ -131,7 +131,13 @@ const COMPANY_PROPS: Record<string, unknown> = {
   // zh-TW 精簡公司簡介（另產；不覆寫來源語言的 description）。是 companies 欄位（走 COMPANY_FIELD_KEYS/provenance）。
   descriptionZh: { type: S.STRING },
   industry: { type: S.STRING },
+  // zh-TW 產業別（industry 的繁中翻譯；另產）。
+  industryZh: { type: S.STRING },
+  // zh-TW 精簡標語（公司定位的繁中 gloss；另產）。
+  taglineZh: { type: S.STRING },
   businessModel: { type: S.STRING },
+  // zh-TW 商業模式（businessModel 的繁中 gloss；另產）。
+  businessModelZh: { type: S.STRING },
   foundedYear: { type: S.INTEGER },
   ownershipType: { type: S.STRING },
   stockTicker: { type: S.STRING },
@@ -227,6 +233,7 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         type: S.OBJECT,
         properties: {
           fullName: { type: S.STRING },
+          fullNameZh: { type: S.STRING }, // zh-TW 姓名（僅來源實際出現中文名才填；嚴禁音譯捏造）
           title: { type: S.STRING },
           titleZh: { type: S.STRING }, // zh-TW 職稱簡述（另產）
           seniority: { type: S.STRING, enum: SENIORITIES as unknown as string[] },
@@ -266,11 +273,11 @@ const SYSTEM = [
   "company: fill description (2-3 sentences on what the company does), industry, businessModel, foundedYear, ownershipType (e.g. 'public'/'private'/'subsidiary'), stockTicker, employeeCount/employeeRange, hqCountry/hqRegion/hqCity, revenueRange/annualRevenue, fundingStage/fundingTotal/valuation, investors[] — ONLY when the sources state them.",
   "news: recent, concrete developments (title, the article url if present, source/outlet, a one-line summary, publishedDate as YYYY or YYYY-MM-DD, and a category).",
   "funding: rounds if mentioned (roundType, amount as a number, currency, announcedDate, leadInvestor, investors[]).",
-  "people: named executives/leaders with their title and seniority.",
+  "people: named executives/leaders with their title and seniority. `fullNameZh` = the person's Chinese name ONLY if a source explicitly gives it; NEVER transliterate a romanized name into Chinese or fabricate one — leave empty otherwise. (Do NOT emit person photos in deep mode.)",
   "competitors: named competitor companies.",
   "socialLinks (OPTIONAL): the company's OFFICIAL social-media account URLs — youtube, facebook, instagram, threads. For each platform, give the FULL https URL of the account/page ONLY when a source explicitly confirms it is THIS company's own official account. If you are unsure, or cannot confirm the official account from the provided sources, OMIT that platform entirely — do NOT guess or fabricate handles.",
   "company.techStack[] (only when stated): technologies/vendors/products the company uses or is built on ({category, vendor, product, detectedFrom}); company.departments[] (only when stated): internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns original (e.g. AWS, React, Kubernetes). Cap: at most 12 techStack items and at most 10 departments.",
-  "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the language of the sources (Traditional Chinese for zh sources; do NOT translate the primary fields; keep values concise; never repeat text). IN ADDITION, emit a concise Traditional-Chinese (zh-TW) gloss in each `*Zh` field: company.descriptionZh (of description), news[].titleZh/summaryZh (of that item's title/summary), and people[].titleZh (of that person's title) — each at most 2 sentences; if the source is already zh-TW you may condense it.",
+  "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the language of the sources (Traditional Chinese for zh sources; do NOT translate the primary fields; keep values concise; never repeat text). IN ADDITION, emit a concise Traditional-Chinese (zh-TW, Taiwan usage) gloss in each `*Zh` field: company.descriptionZh (of description), company.industryZh (the Traditional-Chinese TRANSLATION of the industry label), company.businessModelZh (of businessModel), company.taglineZh (a concise Traditional-Chinese positioning line for the company), news[].titleZh/summaryZh (of that item's title/summary), and people[].titleZh (of that person's title) — each at most 2 sentences; if the source is already zh-TW you may condense it. (fullNameZh is NOT a gloss — only fill it from a Chinese name actually present in the sources.)",
   "narrativeZh: write a Traditional-Chinese (zh-TW), plain-language narrative of 8-20 sentences that synthesizes the company's type, business model, current situation/recent developments, and its social-media presence & sentiment (from the social findings). Keep proper nouns (brand/product/person names) in their original form. This is a readable briefing, NOT a bullet list.",
   "uncategorized: CRITICAL — EVERY important fact you found in the sources that does NOT fit any structured field above (company/news/funding/people/competitors/techStack/departments) MUST be captured here as {text, sourceIndex} — DO NOT discard it. Examples: partnerships, awards, controversies, market share, notable customers, hiring drives, event/campaign activity, community sentiment. At most 25 items; each `text` one concise sentence with its supporting [S#] as sourceIndex.",
   "Field NAMES stay English per the schema. Return ONLY valid JSON matching the schema.",
@@ -553,6 +560,8 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
         if (!fullName) continue;
         const ref = resolve(p.sourceIndex) ?? primary;
         const contact: Partial<Contact> = { fullName };
+        const fullNameZh = cleanStr(p.fullNameZh);
+        if (fullNameZh) contact.fullNameZh = fullNameZh;
         const title = cleanStr(p.title);
         if (title) contact.title = title;
         const titleZh = cleanStr(p.titleZh);

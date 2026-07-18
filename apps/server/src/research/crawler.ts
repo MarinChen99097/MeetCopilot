@@ -50,6 +50,7 @@ const NAV_TIMEOUT_MAX_MS = 120_000;
 const RETRY_NAV_TIMEOUT_MS = 10_000;
 const SETTLE_TIMEOUT_MS = 4_000; // networkidle 等待上限（超時不視為失敗）
 const MAX_TEXT_CHARS = 12_000; // 每頁抽取文字上限
+const IMAGES_PER_PAGE = 15; // 每頁保留的頁內圖片上限（契約四；過濾後取前 N）
 // detailed BFS 參數（RESEARCH_UPGRADE_CONTRACT WP3「深與廣」：頁數/深度大幅放寬）：
 const MAX_CRAWL_PAGES_DEFAULT = 150; // 整場總頁數（含首頁）預設；env MAX_CRAWL_PAGES 覆寫，clamp [2,300]
 const MAX_CRAWL_PAGES_CEIL = 300; // clamp 上界（配合 30 分鐘 deadline 才有意義）
@@ -114,12 +115,22 @@ export function maxCrawlDepth(): number {
 // browser.close() 在此機器上會永久卡住 → 給它 5s，逾時就 SIGKILL 底層 Chromium process。
 const BROWSER_CLOSE_TIMEOUT_MS = 5_000;
 
+/** 頁內圖片（絕對 http(s) URL + alt 文字）。供擷取器把 imageUrls/photoUrl 過白名單驗證（防幻覺）。 */
+export interface CrawledImage {
+  src: string;
+  alt: string;
+}
+
 /** 抽取到的單頁內容。 */
 export interface CrawledPage {
   url: string;
   title?: string;
   text: string;
   screenshot?: string; // data:image/png;base64,...（僅 detailed + screenshots 開啟時）
+  /** og:image / twitter:image（絕對 http(s) URL；無則 null）。擷取器可挑作產品/主圖候選。 */
+  ogImage?: string | null;
+  /** 頁內 `<img>`（絕對 http(s) URL、每頁上限 IMAGES_PER_PAGE、排除 data:/svg/ico/明顯追蹤像素）。 */
+  images?: CrawledImage[];
 }
 
 /** 爬蟲原始輸出（餵給 CrawlExtractor）。 */
@@ -348,6 +359,43 @@ function makeRouteGuard(cache: Map<string, Promise<boolean>>) {
   };
 }
 
+/** 裝飾用圖檔（排除；無 CRM 圖片價值）：svg/ico（契約四僅列此二類；gif 不排除，追蹤像素改由尺寸啟發式攔）。 */
+const IMAGE_EXCLUDE_EXT_RE = /\.(svg|ico)(\?|#|$)/i;
+
+/**
+ * 過濾頁內圖片（契約四）：只留絕對 http(s) URL；排除 data:/svg/ico、明顯追蹤/間隔像素（寬或高 ≤2px）；
+ * 依 src 去重；每頁上限 max（預設 IMAGES_PER_PAGE）。純函式（無 IO），供 extractPage 呼叫與單測。
+ */
+export function sanitizeCrawledImages(raw: unknown, max = IMAGES_PER_PAGE): CrawledImage[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CrawledImage[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as { src?: unknown; alt?: unknown; w?: unknown; h?: unknown };
+    if (typeof o.src !== "string") continue;
+    const src = o.src.trim();
+    if (!src || seen.has(src)) continue;
+    if (!/^https?:\/\//i.test(src)) continue; // 只接受絕對 http(s)（自動排除 data:）
+    if (IMAGE_EXCLUDE_EXT_RE.test(src)) continue; // 排除 svg/ico
+    const w = typeof o.w === "number" ? o.w : 0;
+    const h = typeof o.h === "number" ? o.h : 0;
+    if ((w > 0 && w <= 2) || (h > 0 && h <= 2)) continue; // 明顯追蹤/間隔像素
+    const alt = typeof o.alt === "string" ? o.alt.replace(/\s+/g, " ").trim().slice(0, 200) : "";
+    seen.add(src);
+    out.push({ src, alt });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** og:image / twitter:image 正規化：絕對 http(s) 才回，其餘（含 data:/相對/非法）回 null。 */
+export function sanitizeOgImage(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  return /^https?:\/\//i.test(t) ? t : null;
+}
+
 /** 去掉 URL 的 #fragment（純 client-side，不影響 server 導航，去掉更乾淨、避免奇怪等待）。原 URL 由呼叫端另留作 provenance。 */
 function stripHash(url: string): string {
   try {
@@ -394,6 +442,20 @@ async function extractPage(
   if (!title && text.length === 0) {
     throw new Error(`crawl navigation produced no content: ${navUrl}`);
   }
+  // og:image / twitter:image + 頁內 <img>（絕對化＋去噪在 sanitize*；契約四）。抓圖失敗不影響文字抽取（best-effort）。
+  // string-form evaluate（瀏覽器內執行），避免在 Node lib（無 DOM）下 typecheck `document`。
+  const rawImg = await browserPage
+    .evaluate(
+      "(function(){function abs(u){if(!u)return null;try{return new URL(u,document.baseURI).href;}catch(e){return null;}}var og=null;var sels=['meta[property=\"og:image\"]','meta[property=\"og:image:secure_url\"]','meta[property=\"og:image:url\"]','meta[name=\"twitter:image\"]','meta[name=\"twitter:image:src\"]'];for(var i=0;i<sels.length;i++){var m=document.querySelector(sels[i]);if(m){var a=abs(m.getAttribute('content'));if(a){og=a;break;}}}var nodes=Array.prototype.slice.call(document.querySelectorAll('img'));var images=[];for(var j=0;j<nodes.length&&images.length<60;j++){var el=nodes[j];var s=el.currentSrc||el.getAttribute('src')||el.src||'';var a2=abs(s);if(!a2)continue;images.push({src:a2,alt:el.getAttribute('alt')||'',w:el.naturalWidth||el.width||0,h:el.naturalHeight||el.height||0});}return{ogImage:og,images:images};})()",
+    )
+    .catch(() => null);
+  let ogImage: string | null = null;
+  let images: CrawledImage[] = [];
+  if (rawImg && typeof rawImg === "object") {
+    const r = rawImg as { ogImage?: unknown; images?: unknown };
+    ogImage = sanitizeOgImage(r.ogImage);
+    images = sanitizeCrawledImages(r.images);
+  }
   let screenshot: string | undefined;
   if (wantShot) {
     const buf = await browserPage
@@ -401,7 +463,7 @@ async function extractPage(
       .catch(() => null);
     if (buf) screenshot = `data:image/png;base64,${Buffer.from(buf).toString("base64")}`;
   }
-  return { url: browserPage.url() || navUrl, title: title || undefined, text, screenshot };
+  return { url: browserPage.url() || navUrl, title: title || undefined, text, screenshot, ogImage, images };
 }
 
 /** BROWSER_CLOSE_TIMEOUT_MS 後 resolve 的計時器（有界等待；配合 server.kill() 強制收尾）。 */

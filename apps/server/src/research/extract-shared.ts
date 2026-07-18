@@ -27,6 +27,32 @@ export function cleanStr(v: unknown): string | undefined {
 /** 未歸類情報去重上限（兩擷取器一致）。 */
 export const MAX_UNCATEGORIZED = 25;
 
+/**
+ * 圖片白名單驗證（防幻覺；契約三）：只保留「確實存在於爬到的圖片清單（whitelist）」的 URL。
+ * 模型憑空捏造、清單中沒有的 URL 一律丟棄。trim → 去空/非字串 → 白名單過濾 → 保序去重。純函式，供單測。
+ */
+export function filterToImageWhitelist(urls: unknown, whitelist: ReadonlySet<string>): string[] {
+  if (!Array.isArray(urls)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const u of urls) {
+    if (typeof u !== "string") continue;
+    const t = u.trim();
+    if (!t || seen.has(t)) continue;
+    if (!whitelist.has(t)) continue; // 不在爬到的清單＝模型幻覺 → 丟棄
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+/** 單一圖片 URL 白名單驗證（人物 photoUrl 用）：在清單中才回傳，否則 undefined。 */
+export function validatePhotoUrl(url: unknown, whitelist: ReadonlySet<string>): string | undefined {
+  if (typeof url !== "string") return undefined;
+  const t = url.trim();
+  return t.length > 0 && whitelist.has(t) ? t : undefined;
+}
+
 /** 模型回傳的未歸類單筆原形（text 經 cleanStr；sourceIndex 由呼叫端 resolveUrl 解讀成真實來源）。 */
 export interface RawUncat {
   text?: string;

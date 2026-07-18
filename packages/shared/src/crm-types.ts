@@ -163,11 +163,17 @@ export interface Company {
   /** 繁中(zh-TW)精簡簡介（擷取時另產；不覆寫來源語言的 description）。 */
   descriptionZh?: string;
   tagline?: string;
+  /** 繁中(zh-TW)精簡標語（擷取時另產；不覆寫來源語言的 tagline）。 */
+  taglineZh?: string;
   // ── 分類 ──
   industry?: string;
+  /** 繁中(zh-TW)產業別（industry 的繁中翻譯；不覆寫來源語言的 industry）。 */
+  industryZh?: string;
   subIndustries?: string[];
   naicsSic?: string[];
   businessModel?: string;
+  /** 繁中(zh-TW)商業模式（businessModel 的繁中 gloss；不覆寫來源語言的 businessModel）。 */
+  businessModelZh?: string;
   keywords?: string[];
   // ── 規模/財務 ──
   foundedYear?: number;
@@ -308,6 +314,8 @@ export interface CompanyProduct {
   companyId: string;
   // ── 身分/分類 ──
   name: string;
+  /** 型號/SKU（如 CP1500PFCLCD；擷取自規格/明細頁）。無則不填。 */
+  model?: string;
   category?: string;
   oneLiner?: string;
   /** 繁中(zh-TW)一句話定位（擷取時另產；不覆寫來源語言的 oneLiner）。 */
@@ -393,6 +401,8 @@ export interface Contact {
   companyId: string;
   // ── 身分 ──
   fullName: string;
+  /** 繁中(zh-TW)姓名（僅官網/來源查得到中文名才填；嚴禁音譯捏造；不覆寫來源語言的 fullName）。 */
+  fullNameZh?: string;
   firstName?: string;
   lastName?: string;
   preferredName?: string;
@@ -698,7 +708,11 @@ export interface ContactSummary {
   id: string;
   companyId: string;
   fullName: string;
+  /** 繁中(zh-TW)姓名（清單顯示以中文名為主：fullNameZh ?? fullName）。 */
+  fullNameZh?: string;
   title?: string;
+  /** 繁中(zh-TW)頭銜（清單顯示以中文為主：titleZh ?? title）。 */
+  titleZh?: string;
   seniority?: Seniority;
   decisionPower?: DecisionPower;
   verifiedStatus: VerifiedStatus;

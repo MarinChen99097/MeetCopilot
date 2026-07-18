@@ -68,7 +68,16 @@ export interface CrawlJobStore {
    * 讓 admin job 監控（輪詢 crawl_jobs）看得到階段推進。status 維持 'running'；markDone 收尾時覆寫最終值。
    */
   markProgress(orgId: string, id: string, sources: string[]): Promise<void>;
+  /**
+   * 開機 reaper（契約五）：server 重啟後，殘留在 queued/running 的研究 job 其背景流程已隨舊進程消失、
+   * 永遠不會再收尾（否則前端會卡在「研究中」）。**跨 org**（無 org_id 過濾）把它們一律標 failed、
+   * finished_at=now、error＝可行動文案。回被標記的筆數（供 boot log）。在 core.migrate() 後、開始接流量前呼叫一次。
+   */
+  failInterrupted(): Promise<number>;
 }
+
+/** 開機 reaper 寫入 crawl_jobs.error 的固定文案（契約五；前端逃生口據此顯示「已中斷」）。 */
+export const REAPER_INTERRUPTED_ERROR = "伺服器重啟，研究已中斷，可重新發起";
 
 export function createCrawlJobStore(db: DbPort): CrawlJobStore {
   return {
@@ -128,6 +137,23 @@ export function createCrawlJobStore(db: DbPort): CrawlJobStore {
         "UPDATE crawl_jobs SET sources_json = ? WHERE org_id = ? AND id = ? AND status = 'running'",
         [JSON.stringify(sources), orgId, id],
       );
+    },
+
+    async failInterrupted() {
+      const now = Date.now();
+      // 先數殘留筆數（供 boot log），再一次 UPDATE 全部標 failed。跨 org：無 org_id 過濾（開機清理系統級殘留）。
+      const row = await db.get<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM crawl_jobs WHERE status IN ('queued', 'running')",
+        [],
+      );
+      const n = row?.n ?? 0;
+      if (n > 0) {
+        await db.run(
+          "UPDATE crawl_jobs SET status = 'failed', finished_at = ?, error = ? WHERE status IN ('queued', 'running')",
+          [now, REAPER_INTERRUPTED_ERROR],
+        );
+      }
+      return n;
     },
   };
 }

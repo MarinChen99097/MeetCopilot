@@ -374,7 +374,7 @@ export class SqliteContactRepository implements ContactRepository {
 
   async list(orgId: string, companyId: string): Promise<ContactSummary[]> {
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT id, company_id, full_name, title, seniority, decision_power, verified_status, photo_url
+      `SELECT id, company_id, full_name, full_name_zh, title, title_zh, seniority, decision_power, verified_status, photo_url
        FROM contacts WHERE org_id = ? AND company_id = ? ORDER BY created_at DESC`,
       [orgId, companyId],
     );
@@ -457,7 +457,9 @@ function mapContactSummary(r: Record<string, unknown>): ContactSummary {
     id: r.id as string,
     companyId: r.company_id as string,
     fullName: r.full_name as string,
+    fullNameZh: (r.full_name_zh as string | null) ?? undefined,
     title: (r.title as string | null) ?? undefined,
+    titleZh: (r.title_zh as string | null) ?? undefined,
     seniority: (r.seniority as Seniority | null) ?? undefined,
     decisionPower: (r.decision_power as DecisionPower | null) ?? undefined,
     verifiedStatus: r.verified_status as VerifiedStatus,
@@ -523,7 +525,8 @@ export class SqliteCompanyProductRepository implements CompanyProductRepository 
   async listPeople(orgId: string, productId: string): Promise<ProductPersonLink[]> {
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT pp.role AS pp_role, pp.title_on_product AS pp_title, pp.confidence AS pp_confidence,
-              c.id AS id, c.company_id AS company_id, c.full_name AS full_name, c.title AS title,
+              c.id AS id, c.company_id AS company_id, c.full_name AS full_name, c.full_name_zh AS full_name_zh,
+              c.title AS title, c.title_zh AS title_zh,
               c.seniority AS seniority, c.decision_power AS decision_power,
               c.verified_status AS verified_status, c.photo_url AS photo_url
        FROM company_product_people pp
