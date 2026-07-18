@@ -796,6 +796,30 @@ img {
 .mc-productpeople__name { font-weight: 600; }
 .mc-productpeople__title { font-size: 12px; color: var(--mc-text-muted); }
 
+/* ── product detail: one-liner / external links / specs / key-features ── */
+.mc-product-detail__oneliner { margin: 0 0 12px; font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--mc-text); }
+.mc-product-detail__links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.mc-extlink {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 12px; border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.3); background: var(--mc-card);
+  color: #7dd3fc; font-size: 12px; font-weight: 600; text-decoration: none;
+}
+.mc-extlink:hover { background: var(--mc-card-hover); text-decoration: underline; }
+/* 產品規格 key-value 表：窄欄名＋值，寬內容橫向可捲。 */
+.mc-spectable__wrap { overflow-x: auto; }
+.mc-spectable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mc-spectable th, .mc-spectable td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid rgba(38, 50, 82, 0.5); line-height: 1.5; }
+.mc-spectable th { width: 38%; color: var(--mc-text-muted); font-weight: 600; white-space: nowrap; }
+.mc-spectable td { color: var(--mc-text); }
+.mc-spectable tr:last-child th, .mc-spectable tr:last-child td { border-bottom: none; }
+/* 關鍵功能結構清單：名稱主行＋ detail/benefit 副行（benefit 以 ✓ 綠字標價值點）。 */
+.mc-featurelist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.mc-featurelist__item { padding: 9px 12px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); display: flex; flex-direction: column; gap: 3px; }
+.mc-featurelist__name { font-weight: 600; font-size: 13px; color: var(--mc-text); }
+.mc-featurelist__detail { font-size: 12px; line-height: 1.5; color: var(--mc-text-muted); }
+.mc-featurelist__benefit { font-size: 12px; line-height: 1.5; color: var(--mc-ok); }
+
 /* ── news / tech / dept / deals ─────────────────────────────── */
 .mc-newsitem, .mc-deptitem, .mc-dealitem { padding: 12px 14px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); }
 .mc-newsitem__top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }

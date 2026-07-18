@@ -84,6 +84,33 @@
   "notesTab": {
     "aiNarrative": "AI 敘事"
   },
+  "productsTab": {
+    "title": "對方產品深檔",
+    "emptyTitle": "尚無產品資料",
+    "emptyHint": "用研究引擎爬對方產品頁補齊深檔。",
+    "loadError": "載入失敗",
+    "uncategorized": "未分類",
+    "category": "類別",
+    "model": "型號",
+    "status": "狀態",
+    "pricingModel": "定價模式",
+    "priceFrom": "起始價",
+    "pricingNotes": "定價備註",
+    "targetMarket": "目標市場",
+    "productLink": "產品頁",
+    "docsLink": "技術文件",
+    "zhSummary": "🌐 中文簡介",
+    "keyFeatures": "關鍵功能",
+    "specs": "規格",
+    "techStack": "技術棧",
+    "integrations": "整合",
+    "targetPersonas": "目標客群",
+    "differentiators": "差異化",
+    "competitors": "競品",
+    "knownIssues": "已知問題",
+    "peopleTitle": "產品 ↔ 人（developer / PM / owner…）",
+    "peopleEmpty": "尚未建立關聯"
+  },
   "train": {
     "title": "模擬訓練",
     "desc": "選擇主管 persona、語音對練、課後評分。"

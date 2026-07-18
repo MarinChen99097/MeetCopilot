@@ -84,6 +84,33 @@
   "notesTab": {
     "aiNarrative": "AI narrative"
   },
+  "productsTab": {
+    "title": "Product deep profile",
+    "emptyTitle": "No product data yet",
+    "emptyHint": "Use the research engine to crawl the prospect's product pages.",
+    "loadError": "Failed to load",
+    "uncategorized": "Uncategorized",
+    "category": "Category",
+    "model": "Model",
+    "status": "Status",
+    "pricingModel": "Pricing model",
+    "priceFrom": "Starting price",
+    "pricingNotes": "Pricing notes",
+    "targetMarket": "Target market",
+    "productLink": "Product page",
+    "docsLink": "Documentation",
+    "zhSummary": "🌐 Summary",
+    "keyFeatures": "Key features",
+    "specs": "Specs",
+    "techStack": "Tech stack",
+    "integrations": "Integrations",
+    "targetPersonas": "Target personas",
+    "differentiators": "Differentiators",
+    "competitors": "Competitors",
+    "knownIssues": "Known issues",
+    "peopleTitle": "Product ↔ people (developer / PM / owner…)",
+    "peopleEmpty": "No links yet"
+  },
   "train": {
     "title": "Simulation Training",
     "desc": "Pick a contact persona, run a voice roleplay, get a post-session score."
