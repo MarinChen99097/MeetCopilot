@@ -34,6 +34,62 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-19 23:58 | E2E 三尾巴（Threads 登入牆／finalHandles 二次社群抓取／FB·IG 摘要放寬）＋照片 v3（DOM 鄰近＋Google CSE）
+- **工作區**: apps/server
+- **類型**: fix＋feat
+- **檔案**: `apps/server/src/research/social/threads.ts`, `apps/server/src/research/social/threads-login-wall.test.ts`(新), `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/photo-hunt.ts`, `apps/server/src/research/photo-hunt.test.ts`, `apps/server/src/research/photo-cse.ts`(新), `apps/server/src/research/photo-cse.test.ts`(新), `apps/server/src/config.ts`, `apps/server/src/research/routes.ts`, `.env.example`
+- **改了什麼**:
+  - **[1] Threads 登入牆偵測**（threads.ts）: 新純函式 `export isLoginWallContent(finalUrl, posts)`——finalUrl 轉去 `/login` 或 `/accounts/login`→直接判死；否則掃抽出「貼文」合併文字命中 ≥2 條 `LOGIN_WALL_MARKERS`（scan to get the app／log in with／forgot password／continue with instagram／terms of use…共 9 條）→判死。fetcher 於 slice 後、落庫前呼叫，命中即整平台 skip＋log「threads login wall — skipping」。加 6 測（含 E2E 實錄 9 條 UI 字串 fixture）。
+  - **[2] 本地髒資料清理**（scratchpad 一次性腳本，不進 repo）: 刪 `apps/server/data/meetcopilot.db` 的 `company_social_posts` 中 platform=threads 且 url LIKE `%/login%` 的列。刪 1 列（Connact：url=`https://www.threads.com/login/?next=…@connact.tw…`，title「Connact AI — Threads」）；threads posts 1→0、表總數 1→0。
+  - **[3] finalHandles 回饋二次社群抓取**（orchestrator runDeep，社群落庫段 ~:1042 後）: 第一輪 social fetch 只用「種子」handle；官網爬蟲/deep grounding 才發現的 youtube/threads handle（finalHandles 有、socialHandles 種子沒有）在第一輪未被抓。新增有界二次 fetch——只跑新增平台（其餘平台傳空 handle 自然 skip）、共用「距軟 deadline 剩餘時間 ∩ 一次 social 預算」（<30s 則跳過）、try/catch best-effort，`second.posts` push 進 `socialPosts` 一起 bulkUpsert。log「social second pass: <platforms>」／「none discovered」／「skipped (deadline)」。這樣 grounding 發現的 YT 頻道才會觸發無金鑰 fallback、Threads 公開頁才會被抓。
+  - **[4] FB/IG 摘要 0 筆放寬**（deep-extractor SYSTEM）: **根因判定＝非 wiring bug**——`buildSocialQueries`（angle='social'）的 grounded 答案確有進 `bundle.groundedFindings`，`buildPrompt` 的 `=== GROUNDED FINDINGS ===` 段把**全部** findings（含 [social]）映入 prompt，且在 docs 之前不受 180k 截斷影響。0 筆之因是 SYSTEM/schema 的門檻過嚴（原文要求「SUBSTANTIVE recent activity from the company's OWN account」，gemini 幾乎無法從 grounding 片段確證→整平台 OMIT）。改：只要 findings 含該平台**任一具體事實**（粉專/帳號存在、追蹤/按讚數、近期貼文/公告/活動、徵才貼文、評價口碑）就產 3-5 句繁中摘要、照來源說；完全無資料才 OMIT；仍嚴禁捏造（寧缺勿假）。socialSummaries 映射純函式與落庫路徑不動。
+  - **[5] 照片 v3a 官網 DOM 鄰近匹配**（photo-hunt.ts findPersonPhotoInHtml）: alt 命中（pass1）之外，新增 pass2「鄰近 DOM 文字」——對每個 <img> 取前後 ~300 字元窗口（`proximityText`：先移除 title/script/style **內文**再去標籤，避免 `<title>Jane Doe</title>` 讓 body 無關圖誤中→修回歸），沿用 `textHasName`（CJK 子字串／拉丁詞界）命中即候選；佔位圖黑名單/追蹤像素/scheme 守衛全沿用（`toUsablePhoto`）；alt 命中優先於鄰近命中；og:image（title-gated）維持 pass3。新 export `isUsablePhotoUrl(url)`（絕對圖 URL 套同組守衛，供 v3b 共用）。加 6 測（無 alt 團隊頁 `<h4>程峻宏</h4><img>`、拉丁 figcaption、alt 優先、佔位圖守衛、距離守衛、isUsablePhotoUrl）。
+  - **[6] 照片 v3b Google 圖片 CSE**（photo-cse.ts 新）: env `GOOGLE_CSE_API_KEY`＋`GOOGLE_CSE_CX` 皆存在才啟用（缺任一優雅 skip＋config 一次性 warning，比照 YOUTUBE_API_KEY）。`config.ts` 加讀取＋AppConfig 兩欄、`.env.example` 加註解；`routes.ts` 兩者皆設才傳 `googleCse` 給 orchestrator。`searchPersonPhotoCse(cfg,name,company)`：`undici` 直打 `www.googleapis.com/customsearch/v1`（固定 API 網域、非 SSRF 面）searchType=image、num=4、safe=active；純函式 `pickCseImage` 取前 4 結果過既有守衛的第一張原圖 link＋contextLink。enrichKeyPeople 於官網/citation（v1 alt/鄰近＋v2 專屬查詢）落空後→查「<中文名 ?? name> <公司名>」寫 photoUrl confidence 0.5＋provenance（sourceUrl=contextLink ?? link）；每人 1 次、每 job ≤5 次（`PHOTO_CSE_MAX_PER_JOB`＋`cseQueriesUsed`）。加 7 測（回應解析＋守衛＋只掃前 4＋未設定憑證不打 API）。
+- **為什麼**: E2E 走查揪出三尾巴（Threads 把登入頁當貼文落庫、grounding 發現的社群 handle 未回饋抓取、FB/IG 摘要恆為 0）＋主管照片命中率補強（無 alt 團隊頁 DOM 鄰近、官網/citation 落空後的 Google 圖片備援）。純研究/落庫路徑，不動 deck patch/approval/HUD，不違反 I1/I2/I3；沿用 provenance「值與來源同一 tx」與雙語不變量；CSE 為固定公開 API 網域、憑證只進 env 絕不落碼/落庫/落 log。
+- **驗證**: `apps/server npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 43 檔 **241 測全綠**（基準 222＋新增 19：threads-login-wall 6／photo-cse 7／photo-hunt +6）。v3a proximity 一度回歸 og:image 既有測（窗口誤收 `<title>` 文字），以 `proximityText` 移除 title/script/style 內文修正。Item 2 一次性腳本實跑：刪 Connact 1 列（1→0）。未 commit（硬規則 10，等使用者核准）。
+
+### 2026-07-19 23:50 | S4 修復：FB/IG「動態摘要（AI 整理）」落庫冪等——落庫前刪同平台既有摘要列
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/research/orchestrator.ts`
+- **改了什麼**（S4 社群摘要落庫段 ~:1047–1075，`runDeep` 內）:
+  - 摘要建構迴圈額外累積 `summaryKeys: {platform, title}[]`（與 `summaryPosts` 同步、每筆帶固定 title 常數）。
+  - 落庫前對 `summaryKeys` 逐筆 `core.db.run("DELETE FROM company_social_posts WHERE org_id=? AND company_id=? AND platform=? AND title=?")` 刪同平台既有 AI 摘要列，再 `companySocial.bulkUpsert(allSocialPosts)`。delete 全在既有 best-effort `try/catch` 內。
+  - Before: 直接 `bulkUpsert`，倚賴自然鍵 `[platform,url]` 冪等。After: 先刪同平台固定-title 摘要列再 upsert，保證每平台至多一筆。
+- **為什麼**（code-review confirmed，medium）: AI 摘要貼文的自然鍵 `[platform,url]` 在 **url 為 null**（`finalHandles[platform]` 無帳號連結、`sourceUrl` 亦無/deep-extractor RESPONSE_SCHEMA 未強制 sourceIndex）時，`child-upsert.ts matchRow`（:45–47 遇 null 鍵欄回 undefined）強制 INSERT；且跨輪 url 變動（run1=citation → run2=帳號連結）也產生第二列。→ 每次 deep-research 都新增「Facebook/Instagram 動態摘要（AI 整理）」列、永不去重也永不刪除，累積重複。此 no-url 情境正是 SocialTab W2（無 url→heading 純文字）刻意支援者，故不能改用 synthetic url 冒充連結誤導 UI；改以「platform+固定 title」刪除鍵達成冪等，保留 url=null 的顯示語意。真實 fetcher 貼文（youtube/threads…）title 不同、不受刪除影響。
+- **不變量**: 純研究資料層社群子表落庫，不動 deck patch/approval/HUD；沿用 provenance 慣例。不違反 I1/I2/I3。
+- **驗證**: `apps/server npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 41 檔 **222 測全綠**（無新增測；orchestrator 落庫路徑非既有測覆蓋，社群摘要映射純函式測 `social-upgrade.test.ts` 不受影響仍綠）。未 commit（硬規則 10，等使用者核准）。
+
+### 2026-07-19 20:07 | 社群升級 server 包 S1–S6：筆記 redirect 降級＋YouTube 無金鑰爬取＋Threads 推導＋FB/IG 摘要＋照片 v2
+- **工作區**: apps/server
+- **類型**: feat
+- **檔案**: `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/social/youtube.ts`, `apps/server/src/research/social/discover.ts`, `apps/server/src/research/social/index.ts`, `apps/server/src/research/social-upgrade.test.ts`(新), `apps/server/src/research/note-source-suffix.test.ts`(新)
+- **改了什麼**:
+  - **S1 筆記來源洩漏雙修**（orchestrator）: 新增純函式 `export noteSourceSuffix(url)`——真實出處→`（[來源](url)）` markdown 連結；`isGroundingRedirect` 命中（vertexaisearch/googleusercontent/grounding-api-redirect 中介 302）→降級純文字「（來源待解析）」不掛連結。`writeSingletonNotes`（未歸類情報＋研究商機線索兩段）與 `writeCompetitorsNote`（Before: `（來源：${url}）` 純文字 → After: `noteSourceSuffix`）皆改用之。`resolveMerged` 內 `resolveRedirects` 補 `max: 48`（Before 預設 16；併入 uncategorized/opportunities/社群來源後待解析 redirect 變多、16 會截斷）。
+  - **S2 YouTube 無金鑰 fallback**（youtube.ts）: `createYoutubeFetcher(apiKey, crawler?)`——apiKey 空且有 youtube handle→改用 `crawler.fetchRaw`（Playwright）抓頻道 `/videos` 頁、解析 `ytInitialData`。新純函式（皆 export 供測）：`youtubeVideosUrl`（handle/URL→/videos）、`extractYtInitialData`（平衡括號忽略字串內轉義擷取 JSON）、`parseYtInitialData`（遞迴收集新 `lockupViewModel`＋舊 `videoRenderer`，去重、≤15）、`parseViewCount`（千分位＋K/M/B＋中文萬/億，抽不到 undefined）、`parseRelativeDate`（zh 分鐘/小時/天/週/個月/年前＋en ago→now-offset epoch，解析不了 null）。整段 try/catch 失敗回空、不害 job。index.ts `createSocialFetchers` 傳 crawler 給 youtube fetcher。
+  - **S3 Threads handle 推導**（discover.ts）: `discoverHandles` 收尾——threads 缺且 instagram 存在→`threads=https://www.threads.net/@<igUsername>`（新 export `instagramUsername`：取 path 首段、去 @、擋保留路徑 p/reel/reels/explore/…）；下游 threads.ts 解析不到內容照舊優雅 skip。
+  - **S4 FB/IG 動態摘要**（deep-extractor＋orchestrator）: `DeepExtraction` 加 `socialSummaries?:{platform:facebook|instagram, summaryZh, sourceUrl?}[]`＋RESPONSE_SCHEMA（platform enum、summaryZh、sourceIndex）＋SYSTEM 指示（僅實質動態才產、繁中 3-5 句、嚴禁捏造、sourceUrl 取真實 citation）；新 helper `toDeepSocialSummaries`（platform 白名單、每平台至多一筆、sourceIndex→真實 URL 不 fallback primary）。orchestrator 社群落庫段把 `deep.socialSummaries`→`NewSocialPost`（title=「Facebook/Instagram 動態摘要（AI 整理）」、content=summaryZh、url=`finalHandles[platform] ?? cleanUrl(sourceUrl)`、publishedAt 留空），併入 socialPosts 一起 `bulkUpsert`（自然鍵 platform+url 冪等）；`finalHandles` hoist 出 try 供引用。
+  - **S5 照片 v2**（orchestrator enrichKeyPeople）: 背景 citation 仍無 photoUrl 者→加一條專屬照片 grounded 查詢（cjk 名→「<中文名> <公司> 專訪 OR 照片」否則 en「<name> <company> interview photo」），取 citations 前 2 URL `fetchRaw` 跑既有 `findPersonPhotoInHtml`（詞界/佔位圖黑名單守衛沿用；≤2 fetch；命中寫 photoUrl confidence 0.5＋provenance）；逐項前檢查 deadline。
+  - **S6 測試**: `social-upgrade.test.ts`（20 測：ytInitialData 新舊結構解析＋上限＋容錯、parseViewCount zh/en、parseRelativeDate zh/en、youtubeVideosUrl、threads 推導、socialSummaries 映射）；`note-source-suffix.test.ts`（3 測：真實連結／redirect 降級／空字串）。
+- **為什麼**: RESEARCH_UPGRADE 社群升級——AI 敘事/競品/觀察筆記的 grounding-redirect 來源改由 react-markdown 渲染後會變成可點假連結，須降級；YouTube 無官方金鑰時仍能靠 Playwright 補齊近期影片；IG↔Threads 同名帳號補推導；FB/IG 只走 grounding 的實質動態轉結構化貼文落庫；主管頭像補一條專屬查詢提高命中。
+- **不變量**: 純研究資料層＋筆記顯示層，不動 deck patch/approval/HUD；照片/社群摘要皆嚴禁捏造（守衛/白名單沿用），redirect 降級強化 provenance 誠實。不違反 I1/I2/I3。
+- **驗證**: `apps/server npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 41 檔 **222 測全綠**（基準 199＋新 23）。未 commit（硬規則 10，等使用者核准）。
+
+### 2026-07-19 23:15 | 筆記 body 以 react-markdown 渲染（AI 敘事筆記富文字＋連結 scheme 白名單）
+- **工作區**: apps/web
+- **類型**: feat
+- **檔案**: `apps/web/components/crm/NotesTab.tsx`, `apps/web/app/globals.css`, `apps/web/package.json`（+react-markdown ^9.1.0）, `package-lock.json`（依賴解析，預期變更）
+- **改了什麼**:
+  - **NotesTab.tsx**: 筆記 body（原 `<div className="mc-noteitem__body">{n.body}</div>`）改以 `<ReactMarkdown>` 渲染，容器加掛 `.mc-md` 範疇 class。
+    - `urlTransform`＝新純函式 `mdUrlTransform`：只放行絕對 `http`/`https` 與 `mailto`，其餘（`javascript:`/`data:`/相對路徑/fragment/空字串）回 `undefined` → react-markdown 不掛 href、連結失效（XSS 縱深客戶端第二道，與 SocialTab `httpUrl` 同慣例）。
+    - `components.a` 覆寫（`MC_MD_COMPONENTS`）：一律 `target="_blank" rel="noopener noreferrer"`，並把 react-markdown 注入的 `node` prop 解構丟棄不外洩到 DOM。
+    - **未裝 rehype-raw**：body 內原始 HTML 天然被跳脫、不會執行（預設安全）。
+  - **globals.css**: notes 區塊後新增 `.mc-md` 範疇樣式（h2/h3/h4 字級與上下間距、p/ul/ol/li、a 色＝`--mc-accent`＋hover、strong/em、code/pre、blockquote、hr；`:first-child`/`:last-child` 去頭尾邊距）。`.mc-md { white-space: normal }` 覆寫 `.mc-noteitem__body` 的 `pre-wrap`（本規則定義在後故同 specificity 勝出），把區塊排版交還 markdown、避免 block 間殘留換行造成空隙。全部沿用既有 `--mc-*` token。
+  - **SocialTab.tsx（W2）**: 確認即可、**未改**——`SocialPostRow` 在 `httpUrl(post.url)` 為 null（AI 摘要無帳號連結情境）時 heading 已渲染純文字（不掛 href），既有行為即符合契約。未新增可見字串，故 messages 兩檔無需新鍵。
+- **為什麼**: server 端 AI 敘事筆記（note_type='narrative'）body 以 markdown 產出（標題/清單/粗體/citation 連結），先前直接當純文字塞進 `<div>`，`##`/`**`/`[]()` 原樣顯示、citation 不可點。改用 react-markdown 正確渲染富文字並統一連結安全策略。
+- **不變量**: 純前端顯示層，不動 deck patch/approval/HUD；連結白名單強化 XSS 縱深。不違反 I1/I2/I3。
+- **驗證**: `apps/web npx tsc --noEmit` 綠；`NEXT_PUBLIC_API_BASE=http://localhost:8080 npx next build` 綠（4/4 靜態頁生成、`/[locale]/crm/[id]` 因 react-markdown 由 ~44→47.9 kB，預期）。未 commit（硬規則 10，等使用者核准）。
+
 ### 2026-07-19 22:10 | DynamicSlide 匯入徹底重構——保留原簡報＋尾端 append（獨立 worktree 分支）
 - **工作區**: packages/shared, packages/crm, apps/server, apps/web, tools(Dockerfile.server)
 - **類型**: feat

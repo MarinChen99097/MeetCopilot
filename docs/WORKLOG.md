@@ -181,6 +181,13 @@
 - **與平行 session 交疊**：會中導覽收斂輪（上一節）同倉未 commit，globals.css/messages×2/api.ts 四檔兩輪交錯——commit 切分方案見終報。
 - **記債**：同公司同中文名不同人會被合併（契約既知風險，需人工鍵時再議）；meeting_signals.entity_ref_json 軟參照未 re-point（display-only）；圖片代理/落地儲存（hotlink 依賴 no-referrer）；FB/IG 無官方抓取管道（僅帳號卡）；photo 真實命中率仍受來源限制。
 - **simplify＋/code-review 收尾（使用者指令）**：simplify 3 處真收斂（import 併行×2＋SOCIAL_PLATFORMS 單一真源）；5 鏡頭審查（掃兩輪合流 40 檔＋16 新檔）raw 6→過門檻 1——SocialTab 社群連結無 scheme 驗證（儲存型 XSS 面，兩輪驗證兵對 React 19 是否中和 javascript: href 結論相反→不賭，server buildSocialLinks/sanitizeSocialPosts 走 cleanUrl＋client httpUrl 純文字降級雙層白名單）；順收三筆低分（photo-hunt \b 詞界誤中 data-alt→(?:^|[\s"'])、CJK 抽取加 2-4 字＋地名/公司 stoplist 防「(台北)」誤組、dedupe 尾段補軟 deadline 守衛）；meeting-session wsToken 入 /present URL（47 分）屬導覽輪檔案記錄供該輪參考。終驗：crm 64＋server 188＋web tsc 全綠。
+- **三指令輪（同日續，使用者本地試用後：筆記 md 渲染／社群要內容非連結／照片仍缺；補充指定照片來源＝官網＋Google 圖片）**：
+  1. **調查含外部實測**：YT 無金鑰抓頻道頁 ytInitialData 實測可解 30 支；FB/IG 公開頁實測被牆（400/consent 殼）直抓不可行；cake.me 公司頁無人名 alt（對人物照無料但不誤配）；筆記裸 redirect 根因＝resolveRedirects 預設 max 16 溢出。
+  2. **實作**：web 加 react-markdown v9（無 raw HTML、urlTransform http(s)/mailto 白名單、外開）＋NotesTab 渲染＋mc-md 樣式；筆記來源雙修（isGroundingRedirect 降級純文字＋resolve max 48）；YT 無金鑰 Playwright fallback（lockupViewModel＋舊 videoRenderer 雙結構、觀看數 zh/en 解析、相對日期 best-effort）；Threads handle 由 IG username 推導＋**登入牆偵測**（E2E 抓到把登入頁 UI 當 9 則貼文的髒資料→isLoginWallContent 兩條命中判死＋本地清理）；FB/IG 走 deep socialSummaries「動態摘要（AI 整理）」（明標非原文、每平台至多一筆冪等——審查抓到 url=null 不冪等→固定 title DELETE+upsert 修）；finalHandles 回饋二次社群抓取（治「grounding 才發現的頻道永遠餵不進 fetcher」架構缺口）。
+  3. **照片 v2+v3**：per-person 專屬照片查詢；**官網 DOM 鄰近匹配**（img 前後 ~300 字窗口含人名即候選、alt 優先、守衛全沿用）；Google 圖片 CSE 整合（GOOGLE_CSE_API_KEY+GOOGLE_CSE_CX 雙鑰、缺鑰優雅 skip、每人 1 查/job ≤5）。
+  4. **E2E 三連跑**：第二跑誠實 FAIL 揪出 threads 登入牆/YT 架構缺口/FB·IG 摘要 0；修復後終驗 **PASS**——threads 正確 skip＋零垃圾列、notes 零裸 redirect（來源全解析成真實 URL）、YT second pass log 正常、**照片 0/5→2/5**（程峻宏 niea.org.tw、李光斌 aif.tw，HTTP 200 實圖驗證）、FB/IG 摘要 0 但有多源證據＝本輪 grounding 無可斷言粉專事實（寧缺勿假，接線已驗通）。
+  5. **驗證數字**：server 43 檔 241 測＋crm 65 測＋web tsc/next build 全綠。**未 commit（硬規則 10）**。
+  6. **待使用者**：YOUTUBE_API_KEY（YT 官方 API 路徑）＋GOOGLE_CSE_API_KEY/GOOGLE_CSE_CX（Google 圖片）兩組可選金鑰；commit 方案 A/B 裁決。
 
 ## 2026-07-19 session（DynamicSlide 匯入徹底重構——保留原簡報＋尾端 append，獨立 worktree 分支）
 

@@ -36,6 +36,34 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-19 | 照片來源指定：官網＋Google 圖片（使用者補充指示）
+- **誰決定**: 使用者
+- **決策**: 照片「可以從官網或是 Google 圖片找到」——照片獵取要吃這兩個來源。
+- **Fable 執行層規劃（照片 v3，接在三指令輪後的增量）**:
+  1. **官網 DOM 鄰近匹配**：現行只認 img alt 含人名——alt 空白的團隊頁照片（常態）全漏。升級為「人名出現在 img 的鄰近 DOM 文字（父層/兄弟節點標題）也算命中」，只掃已爬官網頁面、守衛沿用（佔位圖黑名單/尺寸過濾），零新依賴零金鑰。
+  2. **Google 圖片＝官方 Custom Search JSON API（searchType=image）**：唯一合規路徑（直接爬 images.google.com 會撞 bot 牆＋ToS）。env 雙鑰 GOOGLE_CSE_API_KEY＋GOOGLE_CSE_CX，缺鑰優雅 skip（比照 YOUTUBE_API_KEY 模式）；查詢「中文名 公司名」取前數張、過既有黑名單與尺寸守衛、confidence 0.5 標 provenance。**需使用者行動**：到 Google Cloud 開 Custom Search API＋建 Programmable Search Engine（開啟圖片搜尋、搜尋整個網路）取得兩鑰。
+- **考慮過的替代**: Playwright 直爬 Google 圖片（否——bot 牆/ToS/脆弱）；第三方 SerpAPI（否——新增付費依賴）。
+- **影響**: photo-hunt.ts＋enrichKeyPeople＋.env.example；官網鄰近匹配立即可用，Google 圖片待使用者提供雙鑰後生效。
+
+### 2026-07-19 | 三項新指令的修法拍板（調查含外部實測後 Fable 凍結契約）
+- **誰決定**: Fable（依 Opus 調查＋實測證據）
+- **決策**:
+  1. **筆記 markdown**：web 加 react-markdown v9（**不加 rehype-raw**——預設不渲染 raw HTML；urlTransform 只放行 http(s)/mailto；連結 target=_blank+noopener）；NotesTab 改渲染、樣式 mc-md-* 進 globals.css。**來源洩漏雙修**：writeSingletonNotes 對 isGroundingRedirect 的 sourceUrl 不掛連結（純文字降級）＋resolveMerged 的 resolveRedirects max 預設 16→48（30s 預算不變，best-effort 上限放寬）。
+  2. **社群內容三路**：(a) YouTube 無金鑰 fallback——fetchRaw 頻道 /videos 解 ytInitialData（lockupViewModel 路徑，實測 30 支可解），產 NewSocialPost ≤15 支（在地化觀看數抽數字、相對日期 zh/en 常見單位 best-effort 轉 epoch 否則 null）；(b) Threads handle 由 IG username 推導（threads.net/@<ig>，登入牆擋到就優雅 skip——實測 Connact 案例很可能空手，誠實）；(c) FB/IG 直抓實測不可行（400/consent 殼）→ deep-extractor 加 socialSummaries[]{platform,summaryZh,sourceUrl?}，orchestrator 對 facebook/instagram 各落一筆「動態摘要（AI 整理）」型 post（title 明標 AI 整理、url=帳號連結或 citation）——**摘要明確標記非原文**。SocialTab 零改（欄位鏈已通）。
+  3. **照片 v2**：enrichKeyPeople 加專屬 per-person 照片查詢（「姓名 公司 專訪/照片」雙語擇一）餵現有 findPersonPhotoInHtml（詞界/黑名單守衛全沿用）；公司頁/頻道/FB 的 og:image 視為 logo-only 不當人物照來源（cake 公司頁實測無人名 alt、安全不誤配）。命中率仍受公開來源限制——誠實預期。
+- **考慮過的替代**: 自寫迷你 md parser（否——react-markdown 無 raw HTML 已安全且省維護）；FB/IG 用非官方 API/登入爬（否——ToS 與封鎖風險）；YT 摘要也走 AI 整理（否——實測可拿真實影片清單，真資料優先）。
+- **影響**: apps/web 加依賴（package.json/lock）＋NotesTab＋globals.css；apps/server social/youtube.ts、discover.ts、deep-extractor.ts、orchestrator.ts、photo-hunt 呼叫端；E2E 對 Connact 重跑 more 驗 YT posts 落庫。
+
+### 2026-07-19 | 三項新指令：筆記 markdown 渲染＋社群要內容不是連結＋照片仍缺（使用者本地試用五指令輪後下令）
+- **誰決定**: 使用者（本地試用未 commit 版本，筆記區/社群 tab/人物區三張截圖）
+- **決策**:
+  1. **筆記區沒有 markdown render**：NotesTab 顯示原始 markdown（`##`、`- `、`[來源](url)` 全裸奔），要正式渲染；截圖同時暴露一筆 vertexaisearch grounding-redirect URL 漏進筆記來源（resolve pass 漏網）。
+  2. **社群 tab 要的是「爬社群的消息列在這邊」**，不是三顆超連結 pill——要平台實際內容（貼文/影片/動態）。
+  3. **人物區還是沒有圖片**：photo-hunt 對 Connact 命中 0（佔位圖被黑名單擋掉後歸零）。
+- **脈絡**: 五指令輪已完成未 commit；使用者本地實測後的第二波品質要求。dedup/頭銜累加已被截圖證實生效（李芳葦「監察人 · 董事」）。
+- **考慮過的替代**: 無（使用者直接指示）。
+- **影響**: 待一路 Opus 調查（web 有無 md 渲染依賴、YT 無金鑰抓取路徑、Threads handle 發現為何落空、FB/IG 公開頁可抓性、cake.me 頭像結構）後凍契約。commit 方案 A/B 裁決順延到本輪完成一併問。
+
 ### 2026-07-19 | DynamicSlide 重構實作完成＋migration 018 決策＋審查/E2E 結果
 - **誰決定**: Fable（實作裁決）＋ 對抗式審查證據
 - **實作**: 依前述契約在獨立 worktree 分支 `worktree-dynamicslide-preserve-original`（從 HEAD 585a077 分）完成——Phase 2 foundation（migration/型別/資料層/簽章/asset 端點/路由骨架）＋平行 build（IMPORT/EXPORT/WEB/DOCKER）＋整合，typecheck 5ws 全綠、crm 50/server 163 測綠。
