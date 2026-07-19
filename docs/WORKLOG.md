@@ -188,6 +188,7 @@
   4. **E2E 三連跑**：第二跑誠實 FAIL 揪出 threads 登入牆/YT 架構缺口/FB·IG 摘要 0；修復後終驗 **PASS**——threads 正確 skip＋零垃圾列、notes 零裸 redirect（來源全解析成真實 URL）、YT second pass log 正常、**照片 0/5→2/5**（程峻宏 niea.org.tw、李光斌 aif.tw，HTTP 200 實圖驗證）、FB/IG 摘要 0 但有多源證據＝本輪 grounding 無可斷言粉專事實（寧缺勿假，接線已驗通）。
   5. **驗證數字**：server 43 檔 241 測＋crm 65 測＋web tsc/next build 全綠。**未 commit（硬規則 10）**。
   6. **待使用者**：YOUTUBE_API_KEY（YT 官方 API 路徑）＋GOOGLE_CSE_API_KEY/GOOGLE_CSE_CX（Google 圖片）兩組可選金鑰；commit 方案 A/B 裁決。
+  7. **上線（2026-07-19，使用者核准方案 A）**：複驗全綠（server tsc＋vitest 43 檔 241 測／web tsc＋next build，疊在剛 merge 的 DynamicSlide main 之上）。commit×3 push origin main `4d8d78d`→`0dcef09`：`ab7f3ed` feat(research)＋`822923f` feat(web)＋`0dcef09` docs（+本部署紀錄另立第 4 commit）。雙 image 重建：build server `f15ce324-99f5-4895-91b7-fbb9d9a72fbb`／web `0f1c0d68-6b8b-463a-8398-796a41f1d66a` 皆 SUCCESS。部署：server `meetcopilot-server-00016-dtp`（`services update --image` 保 env＋`--no-cpu-throttling`）＋web `meetcopilot-web-00013-w8v`（run deploy 照 SOP）。**本輪無新 migration**（016/017/018 前次已套，開機 log 無 migration 動作）。冒煙全綠：server `/api/health` `{"ok":true}` 200＋`/api/ready` `{"ready":true}` 200＋web `/` 307＋`/zh-TW` 200；新 revision 開機 log 無 error（GOOGLE_CSE/YOUTUBE 缺鑰＝預期 skip warning、無 ERROR/WARNING 級）。
 
 ## 2026-07-19 session（DynamicSlide 匯入徹底重構——保留原簡報＋尾端 append，獨立 worktree 分支）
 
