@@ -84,3 +84,17 @@ export function sanitize<T>(body: unknown, extraStrip: string[] = []): Partial<T
 export function isOneOf<T extends string>(v: unknown, allowed: readonly T[]): v is T {
   return typeof v === "string" && (allowed as readonly string[]).includes(v);
 }
+
+/**
+ * Content-Disposition (RFC5987): ASCII fallback + filename* (UTF-8 percent-encoded); `ext` e.g. "pptx"/"pdf".
+ * Shared by the deck export routes (both the source-preserving export and the legacy export.pptx).
+ */
+export function contentDisposition(title: string, ext: string): string {
+  const clean = title.replace(/[\r\n"\\]/g, "").trim() || "deck";
+  const ascii = clean.replace(/[^\x20-\x7E]/g, "_").replace(/_+/g, "_").trim() || "deck";
+  const encoded = encodeURIComponent(`${clean}.${ext}`).replace(
+    /[!*'()]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}.${ext}"; filename*=UTF-8''${encoded}`;
+}

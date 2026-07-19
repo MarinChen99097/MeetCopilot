@@ -483,11 +483,15 @@ export function listDecks(): Promise<Paged<DeckSummary>> {
 export function generateDeck(input: GenerateDeckInput): Promise<Deck> {
   return request<Deck>("/api/decks/generate", { method: "POST", body: input });
 }
-/** Import a .pptx/.pdf → Deck (multipart). */
-export function importDeck(file: File): Promise<Deck> {
+/**
+ * Import a .pptx/.pdf (multipart). Conversion (rasterize original pages) runs as a background job,
+ * so this returns 202 `{ deckId, jobId }` immediately — the deck starts `importStatus:'processing'`
+ * with 0 slides; the editor routes to /studio/:deckId and polls getDeck until 'ready' (or 'failed').
+ */
+export function importDeck(file: File): Promise<{ deckId: string; jobId: string }> {
   const form = new FormData();
   form.append("file", file);
-  return requestForm<Deck>("/api/decks/import", form);
+  return requestForm<{ deckId: string; jobId: string }>("/api/decks/import", form);
 }
 export function getDeck(id: string): Promise<DeckView> {
   return request<DeckView>(`/api/decks/${id}`);
@@ -510,9 +514,14 @@ export function enqueueImageJob(
 export function getImageJob(jobId: string): Promise<ImageJobView> {
   return request<ImageJobView>(`/api/image-jobs/${jobId}`);
 }
-/** Download the deck as .pptx (RFC5987 filename). Returns a Blob (Bearer auth precludes <a href>). */
-export function exportDeckPptx(id: string): Promise<Blob> {
-  return requestBlob(`/api/decks/${id}/export.pptx`);
+/**
+ * Download the deck in its native format via the dual-path export endpoint: pptx/native decks → .pptx,
+ * pdf decks → .pdf (server picks by deck.sourceKind; the caller sets the download filename extension).
+ * Original imported pages are preserved byte-for-byte; only supplement pages are appended. Returns a Blob
+ * (Bearer auth precludes <a href>).
+ */
+export function exportDeck(id: string): Promise<Blob> {
+  return requestBlob(`/api/decks/${id}/export`);
 }
 /** Wizard grounding: fetch readable text from a URL (SSRF-guarded server-side). */
 export function extractUrl(url: string): Promise<{ title?: string; text: string }> {

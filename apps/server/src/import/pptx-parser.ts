@@ -662,3 +662,86 @@ export async function parsePptx(buffer: Buffer): Promise<SlideSpec[]> {
 
   return slides;
 }
+
+// ─────────────────────────────────────────────────────────────
+// 匯入重構（契約 §4/§5）：pptx 輕量中繼資料讀取（真標題 + 基底主題）。
+// 匯入改「原封點陣圖」路徑（soffice→pdftoppm），不再用 parsePptx/extractSlideBlocks 拆文字建 deck。
+// 上方 parsePptx 及其 helper 一律保留（parse-worker 的 "pptx" 動態 import 仍指向此匯出；現行匯入不再呼叫它）。
+// ─────────────────────────────────────────────────────────────
+
+/** docProps/core.xml 的 <dc:title> 純文字；空白/缺省回 undefined。 */
+function readCoreTitle(parsed: unknown): string | undefined {
+  const root = parsed as Record<string, any> | undefined;
+  const cp = root?.["cp:coreProperties"] ?? root?.["coreProperties"];
+  const dcTitle = cp?.["dc:title"];
+  const text =
+    typeof dcTitle === "string"
+      ? dcTitle
+      : dcTitle && typeof dcTitle === "object" && "#text" in (dcTitle as Record<string, unknown>)
+        ? String((dcTitle as Record<string, unknown>)["#text"])
+        : undefined;
+  const trimmed = text?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** 第一張 slide 的 title placeholder 文字（core.xml 無標題時的 fallback）。 */
+function readFirstSlideTitle(parsedSlide: unknown): string | undefined {
+  const root = parsedSlide as Record<string, any> | undefined;
+  const spTree = root?.["p:sld"]?.["p:cSld"]?.["p:spTree"];
+  const { shapes } = collectShapesAndPics(spTree);
+  for (const shape of shapes) {
+    const phType = findPlaceholderType(shape);
+    if (phType !== undefined && TITLE_TYPES.has(phType)) {
+      const joined = paragraphTexts(shape).join(" ").trim();
+      if (joined.length > 0) return joined;
+    }
+  }
+  return undefined;
+}
+
+/** 匯入用 pptx 中繼資料。 */
+export interface PptxMeta {
+  /** 是否確為 PowerPoint 簡報（存在 ppt/presentation.xml）——擋 docx/xlsx 誤判成 pptx。 */
+  isPresentation: boolean;
+  /** 真標題（core.xml dc:title → 第一張 title placeholder）；皆無回 undefined（呼叫端用檔名 fallback）。 */
+  title?: string;
+  /** 補充頁配色用的基底主題（clrScheme/fontScheme）；缺省回 {}。 */
+  theme: SlideTheme;
+}
+
+/**
+ * 匯入用的 pptx 輕量中繼資料讀取（只開一次 zip）：確認是否為簡報、讀真標題、抽基底主題。
+ * 不做 block/文字擷取（匯入改原封點陣圖路徑）。zip-bomb 位元組上限沿用 parsePptx 的守護（readEntryText + budget）。
+ */
+export async function readPptxMeta(buffer: Buffer): Promise<PptxMeta> {
+  const zip = await JSZip.loadAsync(buffer);
+  const parser = createParser();
+  const budget: SizeBudget = { total: 0 };
+
+  const isPresentation = zip.file("ppt/presentation.xml") !== null;
+  if (!isPresentation) return { isPresentation: false, theme: {} };
+
+  // 真標題：docProps/core.xml <dc:title> → 第一張 title placeholder。
+  let title: string | undefined;
+  const coreFile = zip.file("docProps/core.xml");
+  if (coreFile) {
+    try {
+      title = readCoreTitle(parser.parse(await readEntryText(coreFile, MAX_XML_BYTES, budget)));
+    } catch {
+      title = undefined;
+    }
+  }
+  if (!title) {
+    const slide1 = zip.file("ppt/slides/slide1.xml");
+    if (slide1) {
+      try {
+        title = readFirstSlideTitle(parser.parse(await readEntryText(slide1, MAX_XML_BYTES, budget)));
+      } catch {
+        title = undefined;
+      }
+    }
+  }
+
+  const theme = await loadBaseTheme(zip, parser, budget);
+  return { isPresentation: true, title, theme };
+}

@@ -51,7 +51,17 @@
     "launchStaticPreview": "Static preview",
     "launchLivePlay": "Live meeting playback",
     "launchOpening": "Opening…",
-    "launchError": "Couldn't start meeting playback. Please try again."
+    "launchError": "Couldn't start meeting playback. Please try again.",
+    "export": "Export",
+    "importProcessingTitle": "Converting your slides…",
+    "importProcessingDesc": "We're rendering your original presentation into playable pages. This can take a moment — you can leave and come back.",
+    "importFailedTitle": "Import failed",
+    "importFailedDesc": "We couldn't convert this file. Please go back and try importing again.",
+    "importTimeoutDesc": "This import is taking longer than expected and may have stalled. Please go back and import the file again.",
+    "importRetry": "Re-import",
+    "importBackToStudio": "Back to Studio to re-import",
+    "originalReadOnly": "Original slide (read-only)",
+    "originalLockNotice": "Original presentation slide — kept exactly as imported to preserve the source visuals, so it can't be edited."
   },
   "present": {
     "title": "Slide Stage",

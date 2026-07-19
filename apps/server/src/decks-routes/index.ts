@@ -21,14 +21,13 @@ import { Router } from "express";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
 import type { CrmCore } from "@meetcopilot/crm";
-import { I1ViolationError, DeckNotFoundError } from "@meetcopilot/crm";
-import type { DeckLanguage, GenerateDeckInput, SlideSpec, ImageKind, NewDeck } from "@meetcopilot/shared";
+import { I1ViolationError, DeckNotFoundError, OriginalSlideLockedError } from "@meetcopilot/crm";
+import type { GenerateDeckInput, SlideSpec, SlideBlock, ImageKind, NewDeck } from "@meetcopilot/shared";
 import {
   IMAGE_KINDS,
   MAX_DECK_PAGES,
   MIN_DECK_PAGES,
   SLIDE_TEMPLATES,
-  extractSlideText,
   type SlideTemplate,
 } from "@meetcopilot/shared";
 import type { AppConfig } from "../config.js";
@@ -39,16 +38,53 @@ import { createPptxExporter } from "../generation/pptx-exporter.js";
 import { createImageService } from "../decks/image-service.js";
 import { extractFromUrl } from "../import/extract.js";
 import { runInWorker } from "../import/run-in-worker.js";
-import { detectLanguage } from "../import/detect-language.js";
-import { asyncHandler, orgId, userId, param, str, badRequest, notFound, isOneOf } from "../crm-routes/helpers.js";
+import {
+  asyncHandler,
+  orgId,
+  userId,
+  param,
+  str,
+  badRequest,
+  notFound,
+  isOneOf,
+  contentDisposition,
+} from "../crm-routes/helpers.js";
 import type { Meter } from "../ops/meter.js";
+import { signAssetUrl } from "../lib/signed-url.js";
+import { createImportDeckHandler } from "./import-handler.js";
+import { createExportDeckHandler } from "./export-handler.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-/** 匯入解析（pptx/pdf → SlideSpec[]）在 worker thread 的逾時上限（契約 C2）；到期強制 terminate → 408。 */
-const IMPORT_PARSE_TIMEOUT_MS = 30_000;
 /** /extract-pdf 純文字抽取（供 grounding）的 worker 逾時；輸入較單純，用較短上限。 */
 const PDF_EXTRACT_TIMEOUT_MS = 15_000;
+
+/** 原始頁 SlideSpec 內部參照前綴：落庫存 `asset:<assetId>`，getDeck 讀出時換成當下簽章 URL（不存死 URL）。 */
+const ASSET_REF_PREFIX = "asset:";
+
+/**
+ * 遞迴把 SlideBlock 內的 `asset:<assetId>` 圖片參照換成短效簽章 URL（僅 image block；two-col 遞迴進子區塊）。
+ * 匯入原始頁的 spec 存內部參照，讀取時動態簽——避免落庫過期 URL（契約 §3 注入點＝route 層）。
+ */
+function resolveBlockAssetRefs(block: SlideBlock, deckId: string): SlideBlock {
+  if (block.type === "image" && block.dataUri.startsWith(ASSET_REF_PREFIX)) {
+    const assetId = block.dataUri.slice(ASSET_REF_PREFIX.length);
+    return { ...block, dataUri: signAssetUrl(deckId, assetId) };
+  }
+  if (block.type === "two-col") {
+    return {
+      ...block,
+      left: block.left.map((b) => resolveBlockAssetRefs(b, deckId)),
+      right: block.right.map((b) => resolveBlockAssetRefs(b, deckId)),
+    };
+  }
+  return block;
+}
+
+/** 對整張 SlideSpec 做 asset-ref → 簽章 URL 置換（回新物件，不 mutate）。 */
+function resolveSpecAssetRefs(spec: SlideSpec, deckId: string): SlideSpec {
+  return { ...spec, blocks: spec.blocks.map((b) => resolveBlockAssetRefs(b, deckId)) };
+}
 
 const DECK_LANGUAGES = ["zh-TW", "en"] as const;
 const OBJECTIVES = ["pitch", "introduce", "fundraise", "report", "training"] as const;
@@ -100,17 +136,6 @@ function coerceSlideSpec(raw: unknown): SlideSpec | null {
     template: obj.template as SlideTemplate,
     source,
   };
-}
-
-/** Content-Disposition（RFC5987）：ASCII fallback + filename*（UTF-8 百分比編碼）。 */
-function contentDisposition(title: string): string {
-  const clean = title.replace(/[\r\n"\\]/g, "").trim() || "deck";
-  const ascii = clean.replace(/[^\x20-\x7E]/g, "_").replace(/_+/g, "_").trim() || "deck";
-  const encoded = encodeURIComponent(`${clean}.pptx`).replace(
-    /[!*'()]/g,
-    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  return `attachment; filename="${ascii}.pptx"; filename*=UTF-8''${encoded}`;
 }
 
 /**
@@ -240,66 +265,10 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
     }),
   );
 
-  // ── POST /decks/import（multipart pptx/pdf → Deck） ──
-  router.post(
-    "/decks/import",
-    upload.single("file"),
-    asyncHandler(async (req, res) => {
-      const file = req.file;
-      if (!file) {
-        badRequest(res, "missing file (multipart field name: file)");
-        return;
-      }
-      const name = file.originalname ?? "";
-      const isPptx =
-        /\.pptx$/i.test(name) ||
-        file.mimetype === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-      const isPdf = /\.pdf$/i.test(name) || file.mimetype === "application/pdf";
-      if (!isPptx && !isPdf) {
-        badRequest(res, "unsupported file type (only .pptx or .pdf)");
-        return;
-      }
-
-      // 解析在可終止 worker thread 執行（契約 C2）：CPU 密集又可能被惡意輸入拖住，逾時強制 terminate，
-      // 不卡死 express 請求執行緒。逾時 reject "匯入解析逾時" → 下方 catch 映射成 408。
-      let slides: SlideSpec[];
-      try {
-        slides = await runInWorker<SlideSpec[]>(
-          isPptx ? "pptx" : "pdf",
-          file.buffer,
-          IMPORT_PARSE_TIMEOUT_MS,
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (/逾時|timeout|timed out/i.test(msg)) {
-          res.status(408).json({ error: "匯入解析逾時，請改用較小或較簡單的檔案" });
-          return;
-        }
-        // 不外洩 worker/解析器內部訊息。
-        res.status(502).json({ error: "檔案解析失敗，請確認檔案未毀損後再試" });
-        return;
-      }
-
-      // 全空守門：解析成功但每一頁都掃不出任何文字（掃描/圖片型檔案）→ 422，不建立空殼 deck。
-      if (slides.length === 0 || slides.every((s) => extractSlideText(s).trim() === "")) {
-        res.status(422).json({ error: "檔案未擷取到可用內容（可能是掃描或純圖片型檔案）" });
-        return;
-      }
-
-      const texts = slides.flatMap((s) => extractSlideText(s).split("\n")).filter(Boolean);
-      const detected = detectLanguage(texts);
-      const language: DeckLanguage = detected === "unknown" ? "zh-TW" : detected;
-      const title = name.replace(/\.(pptx|pdf)$/i, "").trim() || "Imported deck";
-
-      const deck = await core.decks.create(orgId(req), {
-        title,
-        language,
-        source: isPptx ? "pptx" : "pdf",
-        slides,
-      });
-      res.status(201).json(deck);
-    }),
-  );
+  // ── POST /decks/import（multipart pptx/pdf → 202 {deckId, jobId}；轉檔背景 job） ──
+  // 匯入重構（契約 §4）：實作在 ./import-handler（WP-IMPORT）。此處只負責掛法：memoryStorage multer（50MB）
+  // + 免解析的 handler 工廠。舊「解析文字建 deck」路徑已廢除（保存原檔 bytes、原封顯示/匯出）。
+  router.post("/decks/import", upload.single("file"), createImportDeckHandler(core, config, meter));
 
   // ── GET /decks/:id ──
   router.get(
@@ -311,9 +280,20 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         return;
       }
       const { deck, slides } = found;
+      // 018：deck 頭帶新欄（sourceKind/originalCount/importStatus/importError）；前端據 originalCount 判 isOriginal。
+      // 原始頁 spec 內的 `asset:<assetId>` 圖片參照在此換成當下短效簽章 URL（deck JSON 保持輕、不含 base64）。
       res.json({
-        deck: { id: deck.id, title: deck.title, language: deck.language, committedIndex: deck.committedIndex },
-        slides: slides.map((s) => s.spec),
+        deck: {
+          id: deck.id,
+          title: deck.title,
+          language: deck.language,
+          committedIndex: deck.committedIndex,
+          sourceKind: deck.sourceKind,
+          originalCount: deck.originalCount,
+          importStatus: deck.importStatus,
+          ...(deck.importError ? { importError: deck.importError } : {}),
+        },
+        slides: slides.map((s) => resolveSpecAssetRefs(s.spec, deck.id)),
       });
     }),
   );
@@ -338,6 +318,11 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         const saved = await core.decks.updateSlide(oid, deckId, index, spec);
         res.json({ slide: saved.spec });
       } catch (err) {
+        // 018：原始簡報頁鎖定唯讀 → 409（人話）。與 I1（已播頁）並存，兩者皆 409。
+        if (err instanceof OriginalSlideLockedError) {
+          res.status(409).json({ error: "原始簡報頁不可編輯" });
+          return;
+        }
         if (err instanceof I1ViolationError) {
           res.status(409).json({ error: err.message });
           return;
@@ -410,7 +395,11 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
     }),
   );
 
-  // ── GET /decks/:id/export.pptx ──
+  // ── GET /decks/:id/export（雙路匯出：副檔名依 source_kind；契約 §7） ──
+  // 匯入重構：實作在 ./export-handler（WP-EXPORT）。既有 GET /decks/:id/export.pptx 保留不動（下方；既有前端不破）。
+  router.get("/decks/:id/export", createExportDeckHandler(core, config, meter));
+
+  // ── GET /decks/:id/export.pptx（既有；native/全 pptxgenjs 路徑，保留相容） ──
   router.get(
     "/decks/:id/export.pptx",
     asyncHandler(async (req, res) => {
@@ -435,7 +424,7 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       );
-      res.setHeader("Content-Disposition", contentDisposition(deck.title));
+      res.setHeader("Content-Disposition", contentDisposition(deck.title, "pptx"));
       res.send(buffer);
     }),
   );

@@ -29,7 +29,15 @@ export {
   SqliteProfileCardRepository,
 } from "./repos-retrieval.js";
 export { SqliteTrainingRepository } from "./repos-training.js";
-export { SqliteDeckRepository, I1ViolationError, DeckNotFoundError } from "./repos-decks.js";
+export {
+  SqliteDeckRepository,
+  I1ViolationError,
+  DeckNotFoundError,
+  OriginalSlideLockedError,
+  DECK_IMPORT_INTERRUPTED_ERROR,
+} from "./repos-decks.js";
+export { SqliteDeckAssetRepository } from "./repos-deck-assets.js";
+export { SqliteImportJobRepository, IMPORT_REAPER_INTERRUPTED_ERROR } from "./repos-import-jobs.js";
 export {
   SqliteInviteRepository,
   SqliteMemberRepository,

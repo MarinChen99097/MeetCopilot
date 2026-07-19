@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { makeTestCore } from "../src/test-helpers.js";
-import { I1ViolationError } from "../src/repos-decks.js";
+import { I1ViolationError, DECK_IMPORT_INTERRUPTED_ERROR } from "../src/repos-decks.js";
 import type { CrmCore } from "../src/ports.js";
 import type { SlideSpec } from "@meetcopilot/shared";
 
@@ -92,6 +92,37 @@ describe("DeckRepository", () => {
     });
     expect(done.status).toBe("refused");
     expect(done.error).toBe("moderation");
+  });
+
+  it("boot reconcile: failInterruptedImports marks processing decks failed, leaves others intact", async () => {
+    // 模擬 Cloud Run 回收/部署：轉檔中的 deck 卡在 processing（in-process job 隨舊進程消失）。
+    const stuck = await core.decks.create(ORG, {
+      title: "Importing",
+      language: "zh-TW",
+      source: "pptx",
+      sourceKind: "pptx",
+      importStatus: "processing",
+    });
+    const readyDeck = await core.decks.create(ORG, {
+      title: "Ready",
+      language: "zh-TW",
+      source: "ai",
+    }); // importStatus 預設 'ready'
+
+    const n = await core.decks.failInterruptedImports();
+    expect(n).toBe(1); // 只有 processing 的那一支被對帳
+
+    const reconciled = await core.decks.findById(ORG, stuck.id);
+    expect(reconciled?.importStatus).toBe("failed");
+    expect(reconciled?.importError).toBe(DECK_IMPORT_INTERRUPTED_ERROR); // 前端逃生口據此顯示
+
+    const untouched = await core.decks.findById(ORG, readyDeck.id);
+    expect(untouched?.importStatus).toBe("ready");
+    expect(untouched?.importError).toBeUndefined();
+
+    // 冪等：再跑一次，已無 processing → 0 筆、狀態不變。
+    expect(await core.decks.failInterruptedImports()).toBe(0);
+    expect((await core.decks.findById(ORG, stuck.id))?.importStatus).toBe("failed");
   });
 
   it("delete removes deck, its slides and image jobs", async () => {

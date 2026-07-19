@@ -51,7 +51,17 @@
     "launchStaticPreview": "靜態預覽",
     "launchLivePlay": "連線會議播放",
     "launchOpening": "開啟中…",
-    "launchError": "無法開始會議播放，請稍後再試。"
+    "launchError": "無法開始會議播放，請稍後再試。",
+    "export": "匯出",
+    "importProcessingTitle": "轉檔中…",
+    "importProcessingDesc": "正在把你的原始簡報轉為可播放的頁面，可能需要一點時間——可以先離開，稍後再回來。",
+    "importFailedTitle": "匯入失敗",
+    "importFailedDesc": "無法轉換這個檔案，請返回工作室重新匯入。",
+    "importTimeoutDesc": "轉檔時間超出預期、可能已停滯，請返回工作室重新匯入這個檔案。",
+    "importRetry": "重新匯入",
+    "importBackToStudio": "返回工作室重新匯入",
+    "originalReadOnly": "原始簡報頁（唯讀）",
+    "originalLockNotice": "原始簡報頁：完整保留匯入時的原貌以維持原簡報視覺，此頁不可編輯。"
   },
   "present": {
     "title": "簡報舞台",

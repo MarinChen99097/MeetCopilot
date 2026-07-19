@@ -22,6 +22,7 @@ import { attachRealtimeWs } from "./realtime/ws-server.js";
 import { createMeetingsRouter } from "./realtime/meetings-routes.js";
 import { startTranscriptRetention } from "./realtime/transcript-retention.js";
 import { createDecksRouter } from "./decks-routes/index.js";
+import { createDeckAssetsRouter } from "./decks-routes/assets-route.js";
 import { createOrgRouter } from "./org-routes/index.js";
 import { requestLogger, securityHeaders } from "./ops/http-middleware.js";
 import { TokenBucketRateLimiter, rateLimit } from "./ops/token-bucket.js";
@@ -48,6 +49,29 @@ async function main(): Promise<void> {
     }
   } catch (e) {
     console.error("[research] reaper failed on boot (non-fatal):", e);
+  }
+
+  // import_jobs reaper（DynamicSlide 匯入重構，契約 §5；比照上方 research reaper）：server 重啟後把殘留在
+  // queued/running 的簡報轉檔 job 一律標 failed（其背景轉檔已隨舊進程消失）。migrate() 後、接流量前跑一次。
+  try {
+    const interruptedImports = await core.importJobs.failInterruptedJobs();
+    if (interruptedImports > 0) {
+      console.log(`[decks] reaper: marked ${interruptedImports} interrupted import job(s) as failed on boot`);
+    }
+  } catch (e) {
+    console.error("[decks] import reaper failed on boot (non-fatal):", e);
+  }
+
+  // deck import_status reconcile（契約 §5，緊接 import_jobs reaper）：轉檔為同進程 in-process job，server 重啟後
+  // 所有 import_status='processing' 的 deck 都是被中斷的、永不會再收尾 → 標 failed＋人話 import_error。
+  // 前端只看 deck.importStatus，若不對帳（只標 job）deck 會永久卡「轉檔中」。跨 org。
+  try {
+    const interruptedDecks = await core.decks.failInterruptedImports();
+    if (interruptedDecks > 0) {
+      console.log(`[decks] reaper: reconciled ${interruptedDecks} interrupted deck import(s) to failed on boot`);
+    }
+  } catch (e) {
+    console.error("[decks] deck import reconcile failed on boot (non-fatal):", e);
   }
 
   // Pricing env overrides (ADMIN_CONTRACT §3.4): fold PRICING__<MODEL>__* into the central PRICING constants
@@ -171,6 +195,11 @@ async function main(): Promise<void> {
   // (session registry, ASR/analysis/orchestrator wiring, I1/I2/I3 enforcement); shared by the HTTP router and WS.
   const realtimeHub = new RealtimeHub(core, config, createGeminiClient(config.gemini), meter);
   app.use("/api/meetings", jwtGuard, activeGuard, createMeetingsRouter(realtimeHub, core, config.jwtSecret, config.port));
+
+  // Asset streaming (DynamicSlide 匯入原始頁圖，契約 §3): GET /api/decks/:id/assets/:assetId?exp=&sig=
+  // **純簽章授權、NO Bearer**（<img> 帶不了 Authorization header）——必須掛在 jwtGuard 之前，否則 401。
+  // 只註冊該單一 GET；其餘 /api 路徑一律 next() 落到下方 authRequired 區段（含 GET /decks/:id 本身）。
+  app.use("/api", createDeckAssetsRouter(core));
 
   // Decks / DynamicSlide (API_CONTRACT §4): /decks/*, /image-jobs/:id, /extract-url, /extract-pdf.
   // Bearer auth here; tenant scope from req.auth.orgId. Disjoint paths from the routers above.

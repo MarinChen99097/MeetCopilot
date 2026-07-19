@@ -48,9 +48,10 @@ export function StudioView() {
   async function onImportFile(file: File) {
     setImporting(true);
     try {
-      const deck = await importDeck(file);
-      toast.push({ kind: "success", message: "已匯入簡報" });
-      router.push(`/studio/${deck.id}`);
+      // 匯入改非同步：回 202 { deckId, jobId }，deck 先為 processing；轉檔進度由編輯器輪詢顯示。
+      const { deckId } = await importDeck(file);
+      toast.push({ kind: "success", message: "已開始匯入，轉檔中…" });
+      router.push(`/studio/${deckId}`);
     } catch (err) {
       toast.push({ kind: "error", message: err instanceof ApiError ? err.message : "匯入失敗" });
       setImporting(false);
