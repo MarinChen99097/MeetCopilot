@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
+import ReactMarkdown, { type Components } from "react-markdown";
 import type { Note } from "@meetcopilot/shared";
 import { ApiError, createNote, deleteNote, listNotes, updateNote } from "@/lib/api";
 import { fmtRelative } from "@/lib/format";
@@ -16,6 +17,30 @@ import { Spinner } from "@/components/ui/Spinner";
 function isNarrative(n: Note): boolean {
   return n.noteType === "narrative";
 }
+
+/**
+ * markdown 連結 scheme 白名單（XSS 縱深，客戶端第二道）：只放行絕對 http/https 與 mailto，
+ * 其餘（javascript:/data:/相對路徑/fragment）回 undefined → react-markdown 不掛 href，連結失效。
+ * 不裝 rehype-raw，故 body 內原始 HTML 天然被跳脫，不會執行。
+ */
+function mdUrlTransform(url: string): string | undefined {
+  const u = (url ?? "").trim();
+  if (u.length === 0) return undefined;
+  if (/^https?:\/\//i.test(u)) return u;
+  if (/^mailto:/i.test(u)) return u;
+  return undefined;
+}
+
+/** 覆寫 <a>：一律新分頁開啟並帶 noopener/noreferrer（去掉 node prop，勿外洩到 DOM）。 */
+const MC_MD_COMPONENTS: Components = {
+  a({ href, children, node: _node, ...rest }) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+        {children}
+      </a>
+    );
+  },
+};
 
 /** 筆記 tab：可新增/釘選/刪除的筆記流（entityType='company'）；AI 敘事筆記置頂。 */
 export function NotesTab({ companyId }: { companyId: string }) {
@@ -115,7 +140,11 @@ export function NotesTab({ companyId }: { companyId: string }) {
               className={`mc-noteitem ${n.pinned ? "is-pinned" : ""} ${isNarrative(n) ? "is-narrative" : ""}`}
             >
               {isNarrative(n) ? <span className="mc-noteitem__tag">{t("aiNarrative")}</span> : null}
-              <div className="mc-noteitem__body">{n.body}</div>
+              <div className="mc-noteitem__body mc-md">
+                <ReactMarkdown urlTransform={mdUrlTransform} components={MC_MD_COMPONENTS}>
+                  {n.body}
+                </ReactMarkdown>
+              </div>
               <div className="mc-noteitem__foot">
                 <span className="mc-noteitem__time">{fmtRelative(n.createdAt)}</span>
                 <button type="button" className="mc-noteitem__act" onClick={() => togglePin(n)}>

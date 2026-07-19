@@ -870,6 +870,28 @@ img {
 .mc-noteitem__act:hover { color: var(--mc-text); }
 .mc-noteitem__act--danger:hover { color: var(--mc-danger); }
 
+/* ── markdown 範疇（.mc-md）：AI 敘事筆記 body 用 react-markdown 渲染 ── */
+/* white-space 覆寫 .mc-noteitem__body 的 pre-wrap，讓區塊排版交給 markdown（本規則在後定義故勝出）。 */
+.mc-md { white-space: normal; font-size: 14px; line-height: 1.6; color: var(--mc-text); }
+.mc-md > :first-child { margin-top: 0; }
+.mc-md > :last-child { margin-bottom: 0; }
+.mc-md p { margin: 0 0 10px; }
+.mc-md h2 { margin: 16px 0 8px; font-size: 16px; font-weight: 700; line-height: 1.35; color: var(--mc-text); }
+.mc-md h3 { margin: 14px 0 6px; font-size: 14px; font-weight: 700; line-height: 1.35; color: var(--mc-text-2); }
+.mc-md h4 { margin: 12px 0 6px; font-size: 13px; font-weight: 700; color: var(--mc-text-2); }
+.mc-md ul, .mc-md ol { margin: 0 0 10px; padding-left: 20px; }
+.mc-md li { margin: 2px 0; }
+.mc-md li > ul, .mc-md li > ol { margin: 2px 0; }
+.mc-md a { color: var(--mc-accent); text-decoration: underline; text-underline-offset: 2px; }
+.mc-md a:hover { color: #cdbcff; }
+.mc-md strong { font-weight: 700; color: var(--mc-text); }
+.mc-md em { font-style: italic; }
+.mc-md code { font-family: var(--mc-font-mono); font-size: 0.9em; padding: 1px 5px; border-radius: var(--mc-r-sm); background: var(--mc-surface-2); }
+.mc-md pre { margin: 0 0 10px; padding: 10px 12px; overflow-x: auto; border-radius: var(--mc-r-sm); background: var(--mc-field); border: 1px solid var(--mc-border); }
+.mc-md pre code { padding: 0; background: none; }
+.mc-md blockquote { margin: 0 0 10px; padding: 2px 12px; border-left: 3px solid var(--mc-border-strong); color: var(--mc-text-2); }
+.mc-md hr { margin: 12px 0; border: 0; border-top: 1px solid var(--mc-border); }
+
 /* ── enrich ─────────────────────────────────────────────────── */
 .mc-enrich { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; width: 100%; }
 .mc-enrich__buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
