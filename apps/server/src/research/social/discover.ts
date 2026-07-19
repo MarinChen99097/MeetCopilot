@@ -36,9 +36,26 @@ function normalizeUrl(rawUrl: string): string | undefined {
   }
 }
 
+/** Instagram profile URL → 使用者名稱（去 @，僅接受合法 IG 字元，排除保留路徑）。無法解析回 undefined。 */
+const IG_RESERVED = new Set(["p", "reel", "reels", "explore", "stories", "tv", "accounts", "about"]);
+export function instagramUsername(rawUrl: string): string | undefined {
+  try {
+    const seg = new URL(rawUrl).pathname.split("/").filter(Boolean)[0];
+    if (!seg) return undefined;
+    const name = seg.replace(/^@/, "");
+    if (!/^[A-Za-z0-9._]{1,30}$/.test(name)) return undefined;
+    if (IG_RESERVED.has(name.toLowerCase())) return undefined;
+    return name;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * 從多個候選 URL 清單合出 SocialHandles（每平台取第一個命中的正規化 URL；先出現者勝）。
  * 候選來源依序傳入（愈可信愈前，如：既有 social_links → 公司欄位 → 官網 hrefs）。
+ * 推導（WP2 S3）：threads 缺且 instagram 存在 → threads = https://www.threads.net/@<igUsername>
+ * （Meta 生態 IG↔Threads 帳號多同名；下游 threads.ts 解析不到內容照舊優雅 skip，不誤植内容）。
  */
 export function discoverHandles(...sources: (string[] | undefined)[]): SocialHandles {
   const handles: SocialHandles = {};
@@ -50,6 +67,10 @@ export function discoverHandles(...sources: (string[] | undefined)[]): SocialHan
       const norm = normalizeUrl(raw);
       if (norm) handles[platform] = norm;
     }
+  }
+  if (!handles.threads && handles.instagram) {
+    const ig = instagramUsername(handles.instagram);
+    if (ig) handles.threads = `https://www.threads.net/@${ig}`;
   }
   return handles;
 }

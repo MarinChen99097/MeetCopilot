@@ -11,7 +11,7 @@ import { createThreadsFetcher } from "./threads.js";
 import type { SocialFetcher, SocialFetchInput, SocialFetchResult } from "./types.js";
 
 export type { SocialFetcher, SocialFetchInput, SocialFetchResult, SocialHandles, SocialFetchCtx } from "./types.js";
-export { discoverHandles, socialLinksJson, parseSocialLinksColumn, classifySocialUrl } from "./discover.js";
+export { discoverHandles, socialLinksJson, parseSocialLinksColumn, classifySocialUrl, instagramUsername } from "./discover.js";
 
 const DEFAULT_SOCIAL_BUDGET_MS = 600_000; // 四平台合計預算（env SOCIAL_FETCH_BUDGET_MS，clamp 30s–1800s）
 
@@ -22,9 +22,12 @@ export function socialFetchBudgetMs(): number {
   return Math.min(Math.max(Math.trunc(raw), 30_000), 1_800_000);
 }
 
-/** 建 youtube + threads fetcher（FB/IG 走 grounding，不在此）。youtubeApiKey 空 → youtube fetcher 內部優雅 skip。 */
+/**
+ * 建 youtube + threads fetcher（FB/IG 走 grounding，不在此）。youtubeApiKey 空但有 youtube handle →
+ * youtube fetcher 走無金鑰 Playwright /videos 抓取 fallback（用同一 crawler）；無 handle → 優雅 skip。
+ */
 export function createSocialFetchers(deps: { youtubeApiKey: string; crawler: CrawlProvider }): SocialFetcher[] {
-  return [createYoutubeFetcher(deps.youtubeApiKey), createThreadsFetcher(deps.crawler)];
+  return [createYoutubeFetcher(deps.youtubeApiKey, deps.crawler), createThreadsFetcher(deps.crawler)];
 }
 
 /**

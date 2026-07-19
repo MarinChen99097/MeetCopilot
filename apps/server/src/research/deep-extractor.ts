@@ -105,6 +105,8 @@ interface ExtractedDeep {
     notableCustomers?: string[];
     sourceIndex?: number;
   }[];
+  /** S4：FB/IG 實質動態的繁中摘要（每平台至多一筆；僅當社群查詢結果含該平台實質動態才產）。 */
+  socialSummaries?: { platform?: string; summaryZh?: string; sourceIndex?: number }[];
   narrativeZh?: string;
   uncategorized?: { text?: string; sourceIndex?: number }[];
 }
@@ -114,6 +116,15 @@ export interface DeepOpportunity {
   title: string;
   detail?: string;
   signalType: OpportunitySignalType;
+  sourceUrl?: string;
+}
+
+/** S4：一則 FB/IG 動態摘要（orchestrator 轉一則 company_social_posts 結構化貼文；platform+url 冪等）。 */
+export interface DeepSocialSummary {
+  platform: "facebook" | "instagram";
+  /** 繁中 3-5 句摘要（嚴禁捏造；僅來源含該平台實質動態才產）。 */
+  summaryZh: string;
+  /** 真實 citation URL（沿用 [S#] provenance）。 */
   sourceUrl?: string;
 }
 
@@ -153,6 +164,8 @@ export interface DeepExtraction {
   opportunities?: DeepOpportunity[];
   /** S1-A8：外部視角產品觀點（每則帶真實來源 URL）→ orchestrator 對齊官網既有產品 fill-empty/union。可能為 []。 */
   products?: DeepProduct[];
+  /** S4：FB/IG 動態摘要（每平台至多一筆）→ orchestrator 轉 company_social_posts。可能為 []。 */
+  socialSummaries?: DeepSocialSummary[];
   /** zh-TW 平鋪直敘敘事（8–20 句）→ 筆記區 narrative 單例（WP2 §2）。 */
   narrativeZh?: string;
   /** 未歸類情報（≤25，每條帶來源 URL）→ 筆記區 observations 單例（WP2 §2）。 */
@@ -342,6 +355,19 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
         required: ["name"],
       },
     },
+    // S4：FB/IG 動態摘要（platform 限 facebook/instagram；summaryZh 繁中 3-5 句；只在有實質動態時產）。
+    socialSummaries: {
+      type: S.ARRAY,
+      items: {
+        type: S.OBJECT,
+        properties: {
+          platform: { type: S.STRING, enum: ["facebook", "instagram"] },
+          summaryZh: { type: S.STRING },
+          sourceIndex: { type: S.INTEGER },
+        },
+        required: ["platform", "summaryZh"],
+      },
+    },
     // WP2 §2：narrativeZh + uncategorized（共用片段，見 extract-shared.NARRATIVE_UNCAT_SCHEMA）。
     ...NARRATIVE_UNCAT_SCHEMA,
   },
@@ -361,6 +387,7 @@ const SYSTEM = [
   "company.techStack[] (only when stated): technologies/vendors/products the company uses or is built on ({category, vendor, product, detectedFrom, noteZh = ONE Traditional-Chinese sentence on what it is AND how this company uses it — OMIT when the sources do not support it, never invent}); company.departments[] (only when stated): internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns original (e.g. AWS, React, Kubernetes). Cap: at most 12 techStack items and at most 10 departments.",
   "opportunities[] (only when the sources state a concrete buying/sales signal): each {title (a short zh-TW label), detail (one zh-TW sentence), signalType, sourceIndex}. signalType is ONE of: hiring (they are hiring / expanding a team), expansion (new office/market/product-line expansion), funding (raised or seeking capital), project (a named initiative/RFP/deployment), partnership (a new alliance/channel), procurement (a purchase/tender/vendor-selection), other. Only real signals present in the sources — do NOT invent. At most 15.",
   "products[] (external view; only products the sources actually attribute to THIS company): each {name (the product's own name, verbatim), differentiators[] (zh-TW), competitors[] (competing products/companies named), notableCustomers[] (named customers/logos), sourceIndex}. This is the OUTSIDE-IN view of the company's products from news/reviews/case-studies — used to enrich the official-site product list; do NOT fabricate names. At most 20.",
+  "socialSummaries[] (produce whenever the findings — especially the [social] search results — contain ANY concrete fact about the company's OWN Facebook or Instagram presence): each {platform (either 'facebook' or 'instagram'), summaryZh (a 3-5 sentence Traditional-Chinese zh-TW summary), sourceIndex ([S#] of the real citation)}. A 'concrete fact' includes ANY of: the page/account EXISTS, a follower/like count, a recent post/announcement/campaign, a hiring/recruiting post, an event, or reviews/ratings/word-of-mouth. If you have even ONE such fact for a platform, WRITE the summary and state EXACTLY what the sources say (e.g. '<公司> 設有官方 Facebook 粉絲專頁，粉絲數約 X，近期貼文多為產品公告與活動訊息，整體評價正面。'). OMIT a platform ONLY when the sources contain NOTHING at all about it. At most ONE entry per platform. NEVER fabricate posts, numbers, dates, or activity the sources do not state (寧缺勿假：有一分證據說一分話). This is distinct from YouTube/Threads which are fetched separately.",
   "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the language of the sources (Traditional Chinese for zh sources; do NOT translate the primary fields; keep values concise; never repeat text). IN ADDITION, emit a concise Traditional-Chinese (zh-TW, Taiwan usage) gloss in each `*Zh` field: company.descriptionZh (of description), company.industryZh (the Traditional-Chinese TRANSLATION of the industry label), company.businessModelZh (of businessModel), company.taglineZh (a concise Traditional-Chinese positioning line for the company), news[].titleZh/summaryZh (of that item's title/summary), and people[].titleZh (of that person's title) — each at most 2 sentences; if the source is already zh-TW you may condense it. (fullNameZh is NOT a gloss — only fill it from a Chinese name actually present in the sources.)",
   "narrativeZh: write a Traditional-Chinese (zh-TW), plain-language narrative of 8-20 sentences that synthesizes the company's type, business model, current situation/recent developments, and its social-media presence & sentiment (from the social findings). Keep proper nouns (brand/product/person names) in their original form. This is a readable briefing, NOT a bullet list.",
   "uncategorized: CRITICAL — EVERY important fact you found in the sources that does NOT fit any structured field above (company/news/funding/people/competitors/techStack/departments) MUST be captured here as {text, sourceIndex} — DO NOT discard it. Examples: partnerships, awards, controversies, market share, notable customers, hiring drives, event/campaign activity, community sentiment. At most 25 items; each `text` one concise sentence with its supporting [S#] as sourceIndex.",
@@ -610,6 +637,35 @@ function toDeepProducts(v: unknown, resolveUrl: (idx: unknown) => string | undef
     if (src) row.sourceUrl = src;
     out.push(row);
     if (out.length >= MAX_DEEP_PRODUCTS) break;
+  }
+  return out;
+}
+
+/**
+ * S4：模型 socialSummaries（unknown）→ DeepSocialSummary[]。platform 限 facebook/instagram、summaryZh 非空、
+ * sourceUrl 由 resolveUrl 決定；**每平台至多一筆**（保序取首筆，orchestrator bulkUpsert 自然鍵 platform+url 再冪等）。
+ */
+function toDeepSocialSummaries(
+  v: unknown,
+  resolveUrl: (idx: unknown) => string | undefined,
+): DeepSocialSummary[] {
+  if (!Array.isArray(v)) return [];
+  const out: DeepSocialSummary[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const s = raw as Record<string, unknown>;
+    const platform = cleanStr(s.platform)?.toLowerCase();
+    if (platform !== "facebook" && platform !== "instagram") continue;
+    if (seen.has(platform)) continue; // 每平台至多一筆
+    const summaryZh = cleanStr(s.summaryZh);
+    if (!summaryZh) continue;
+    seen.add(platform);
+    const row: DeepSocialSummary = { platform, summaryZh };
+    const src = resolveUrl(s.sourceIndex);
+    if (src) row.sourceUrl = src;
+    out.push(row);
+    if (out.length >= 2) break; // 至多 fb + ig 兩筆
   }
   return out;
 }
@@ -893,6 +949,8 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
       const srcOf = (idx: unknown): string | undefined => (resolve(idx) ?? primary)?.url;
       const opportunities = toDeepOpportunities(ex.opportunities, srcOf);
       const products = toDeepProducts(ex.products, srcOf);
+      // S4：FB/IG 動態摘要（sourceUrl 取真實 citation；未給 index 不 fallback primary，避免摘要錯掛無關來源）。
+      const socialSummaries = toDeepSocialSummaries(ex.socialSummaries, (idx) => resolve(idx)?.url);
 
       // ── WP2：zh-TW 敘事 + 未歸類情報（每條錨定其 [S#] 的真實 URL；共用 dedupUncat）──
       const narrativeZh = cleanStr(ex.narrativeZh);
@@ -910,6 +968,7 @@ export function createDeepExtractor(gemini: GeminiClient, extractModel?: string)
         socialLinks,
         opportunities,
         products,
+        socialSummaries,
         narrativeZh,
         uncategorized,
       };

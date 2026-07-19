@@ -2,7 +2,7 @@
  * photo-hunt.findPersonPhotoInHtml：alt/og:image 含人名 token 的照片解析（絕對 http(s)＋副檔名/追蹤像素過濾）。
  */
 import { describe, it, expect } from "vitest";
-import { findPersonPhotoInHtml } from "./photo-hunt.js";
+import { findPersonPhotoInHtml, isUsablePhotoUrl } from "./photo-hunt.js";
 
 describe("findPersonPhotoInHtml", () => {
   it("取 alt 含人名 token 的 <img> src（跳過不相關圖）", () => {
@@ -107,6 +107,54 @@ describe("findPersonPhotoInHtml", () => {
     expect(findPersonPhotoInHtml(html, { fullName: "Jane Doe", pageUrl: "https://example.com/team" })).toBe(
       "https://cdn.example.com/people/jane.jpg",
     );
+  });
+
+  it("v3a 鄰近 DOM 文字命中人名（無 alt 團隊頁：<h4>程峻宏</h4><img>）", () => {
+    const html =
+      '<div class="member"><h4>程峻宏</h4><img src="https://acme.com/team/cheng.jpg"></div>';
+    expect(findPersonPhotoInHtml(html, { fullNameZh: "程峻宏", pageUrl: "https://acme.com/team" })).toBe(
+      "https://acme.com/team/cheng.jpg",
+    );
+  });
+
+  it("v3a 拉丁鄰近命中走詞界（Li Wei 標題 + 無 alt 照片）", () => {
+    const html =
+      '<figure><figcaption>Li Wei, VP</figcaption>' +
+      '<img src="https://cdn.example.com/people/liwei.jpg"></figure>';
+    expect(findPersonPhotoInHtml(html, { fullName: "Li Wei", pageUrl: "https://example.com/team" })).toBe(
+      "https://cdn.example.com/people/liwei.jpg",
+    );
+  });
+
+  it("v3a alt 命中優先於鄰近命中（跨 img）", () => {
+    // 第一個 img 僅靠鄰近人名文字；第二個 img alt 直接命中 → 取 alt 命中者。
+    const html =
+      "<h4>Jane Doe</h4>" +
+      '<img src="https://x.com/near.jpg">' +
+      '<img src="https://x.com/alt.jpg" alt="Jane Doe, CEO">';
+    expect(findPersonPhotoInHtml(html, { fullName: "Jane Doe", pageUrl: "https://x.com" })).toBe(
+      "https://x.com/alt.jpg",
+    );
+  });
+
+  it("v3a 鄰近命中但 src 為佔位圖 → 不採用（守衛沿用）", () => {
+    const html = '<h4>Jane Doe</h4><img src="https://x.com/img/placeholder.png">';
+    expect(findPersonPhotoInHtml(html, { fullName: "Jane Doe", pageUrl: "https://x.com" })).toBeUndefined();
+  });
+
+  it("v3a 人名不在窗口內 → 不誤配（鄰近距離守衛）", () => {
+    // 姓名距離 img 遠超 ~300 字元窗口（中間填 400 個 x），不應命中。
+    const html = "<h4>程峻宏</h4>" + "x".repeat(400) + '<img src="https://acme.com/team/cheng.jpg">';
+    expect(findPersonPhotoInHtml(html, { fullNameZh: "程峻宏", pageUrl: "https://acme.com/team" })).toBeUndefined();
+  });
+
+  it("isUsablePhotoUrl：絕對 http(s) 圖過守衛；svg/追蹤/佔位/非 http(s) 皆擋", () => {
+    expect(isUsablePhotoUrl("https://cdn.example.com/people/chen.jpg")).toBe(true);
+    expect(isUsablePhotoUrl("https://x.com/logo.svg")).toBe(false);
+    expect(isUsablePhotoUrl("https://x.com/1x1.gif")).toBe(false);
+    expect(isUsablePhotoUrl("https://x.com/img/placeholder.png")).toBe(false);
+    expect(isUsablePhotoUrl("data:image/png;base64,AAAA")).toBe(false);
+    expect(isUsablePhotoUrl("/relative/photo.jpg")).toBe(false);
   });
 
   it("佔位/預設圖黑名單：placeholder/no-image/avatar-default/blank/dummy/spacer 皆擋", () => {

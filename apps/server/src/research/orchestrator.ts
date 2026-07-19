@@ -28,7 +28,7 @@ import type {
 } from "@meetcopilot/shared";
 import type { CrawlProvider, RawCrawl } from "./crawler.js";
 import { createCrawlExtractor, enrichProductDetails, type CrawlExtractor, type CompanyExtraction } from "./extractor.js";
-import { cleanStr, type UncategorizedIntel } from "./extract-shared.js";
+import { cleanStr, cleanUrl, type UncategorizedIntel } from "./extract-shared.js";
 import {
   createDeepExtractor,
   productNameMatches,
@@ -54,6 +54,7 @@ import {
 import { runDeepRounds, buildFollowUpQueries } from "./deep-rounds.js";
 import { buildMoreGapQueries, decideEvidenceBoost, isEmptyValue, SOCIAL_PLATFORMS } from "./more-mode.js";
 import { findPersonPhotoInHtml } from "./photo-hunt.js";
+import { searchPersonPhotoCse, type CseConfig } from "./photo-cse.js";
 import {
   runSocialFetch,
   socialFetchBudgetMs,
@@ -61,6 +62,7 @@ import {
   socialLinksJson,
   parseSocialLinksColumn,
   type SocialFetcher,
+  type SocialHandles,
 } from "./social/index.js";
 import { buildCompanyIndex } from "./indexer.js";
 import type { GroundingProvider } from "./grounding.js";
@@ -76,6 +78,9 @@ const DEEP_CONFIDENCE = 0.55;
 /** S1-A6：per-contact 背景補查的主管上限（背景欄空缺者，取前 N）。 */
 const PERSON_ENRICH_MAX = 5;
 
+/** 照片 v3b：每個 job 的 Google CSE 圖片查詢上限（每人至多 1 次；總量再設硬上限保護配額）。 */
+const PHOTO_CSE_MAX_PER_JOB = 5;
+
 /** S1-A7：商機訊號類型 → zh-TW 標籤（筆記顯示用）。 */
 const OPPORTUNITY_SIGNAL_LABEL: Record<string, string> = {
   hiring: "徵才擴編",
@@ -86,6 +91,18 @@ const OPPORTUNITY_SIGNAL_LABEL: Record<string, string> = {
   procurement: "採購",
   other: "其他",
 };
+
+/**
+ * S1：筆記來源後綴（provenance）——真實出處掛 markdown 連結 `（[來源](url)）`；grounding-redirect（vertexaisearch
+ * 等中介 302，非真實出處）**不掛連結、降級為純文字**「（來源待解析）」，避免把中介 redirect URL 洩漏進筆記
+ * （react-markdown 渲染時更會變成可點的假來源連結）。無 URL → 空字串。純函式，供 orchestrator 與單測。
+ */
+export function noteSourceSuffix(sourceUrl: string | undefined): string {
+  const u = cleanStr(sourceUrl);
+  if (!u) return "";
+  if (isGroundingRedirect(u)) return "（來源待解析）";
+  return `（[來源](${u})）`;
+}
 
 /** 陣列聯集去重（case-insensitive key，保留首見原文；供 S1-A8 產品 fill-empty/union）。 */
 function unionArr(a: string[] | undefined, b: string[] | undefined): string[] {
@@ -186,6 +203,8 @@ export interface ResearchDeps {
   embedModel?: string;
   /** 社群來源 fetcher（youtube/threads；WP1）。缺→deep 不跑社群 fetch（FB/IG 仍走 grounding）。 */
   socialFetchers?: SocialFetcher[];
+  /** Google CSE 圖片搜尋憑證（照片獵取 v3b 備援）；缺（或 apiKey/cx 任一空）→ CSE 途徑優雅 skip。 */
+  googleCse?: CseConfig;
   // ── deep（全網研究）相依 ──
   /** Google-Search grounding provider（DeepResearcher 扇出用）。缺 → deep 無法跑（route 已於 gemini 未設時擋）。 */
   grounding?: GroundingProvider;
@@ -442,7 +461,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     const sections: string[] = [];
     if (uncat.length > 0) {
       const bullets = uncat
-        .map((u) => (u.sourceUrl ? `- ${u.text}（[來源](${u.sourceUrl})）` : `- ${u.text}`))
+        .map((u) => `- ${u.text}${noteSourceSuffix(u.sourceUrl)}`)
         .join("\n");
       sections.push(`## 未歸類情報\n\n${bullets}`);
     }
@@ -451,8 +470,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
         .map((o) => {
           const sig = OPPORTUNITY_SIGNAL_LABEL[o.signalType] ?? o.signalType;
           const detail = o.detail ? `：${o.detail}` : "";
-          const src = o.sourceUrl ? `（[來源](${o.sourceUrl})）` : "";
-          return `- **${o.title}**${detail}（訊號：${sig}）${src}`;
+          return `- **${o.title}**${detail}（訊號：${sig}）${noteSourceSuffix(o.sourceUrl)}`;
         })
         .join("\n");
       sections.push(`## 研究商機線索\n\n${bullets}`);
@@ -998,11 +1016,11 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     }
 
     // WP1 §1.2：社群帳號落庫（種子 + 官網 hrefs）→ companies.social_links（JSON）+ field_provenance（filledBy='crawler'）。
+    // 優先序（discoverHandles＝先出現者勝、逐一過 classifySocialUrl 正規化）：既有 social_links/公司欄 →
+    // 官網爬到的（所有已爬頁面 hrefs）→ **擷取器補缺**（deep.socialLinks，已過 https＋四平台機械保險）。
+    // 即「官網爬到的優先、擷取器只補缺」（WP 缺口 1b）。hoist 出 try：S4 社群摘要落庫的 url 需引用此帳號連結。
+    const finalHandles: SocialHandles = discoverHandles(seedSocialUrls, siteRaw?.socialLinks, deep?.socialLinks);
     try {
-      // 優先序（discoverHandles＝先出現者勝、逐一過 classifySocialUrl 正規化）：既有 social_links/公司欄 →
-      // 官網爬到的（所有已爬頁面 hrefs）→ **擷取器補缺**（deep.socialLinks，已過 https＋四平台機械保險）。
-      // 即「官網爬到的優先、擷取器只補缺」（WP 缺口 1b）。
-      const finalHandles = discoverHandles(seedSocialUrls, siteRaw?.socialLinks, deep?.socialLinks);
       const linksJson = socialLinksJson(finalHandles);
       if (linksJson) {
         await core.db.run("UPDATE companies SET social_links = ?, updated_at = ? WHERE org_id = ? AND id = ?", [
@@ -1029,11 +1047,71 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       console.error("[research:deep] social_links persist failed:", e);
     }
 
+    // Task 3：finalHandles 回饋二次社群抓取——第一輪社群 fetch 只用「種子」handle（socialHandles）；官網爬蟲/deep
+    // grounding 才發現的 youtube/threads handle（finalHandles 有、種子沒有）在第一輪並未被抓。對這些「新增平台」做
+    // 一次有界二次 social fetch（只跑新增平台、共用剩餘 social 預算、best-effort），結果併入 socialPosts 一起 bulkUpsert。
+    // 這樣 grounding 發現的 YT 頻道才會觸發無金鑰 fallback、Threads 公開頁才會被抓。
+    if (deps.socialFetchers && deps.socialFetchers.length > 0) {
+      const secondPassHandles: SocialHandles = {};
+      for (const p of ["youtube", "threads"] as const) {
+        if (finalHandles[p] && !socialHandles[p]) secondPassHandles[p] = finalHandles[p];
+      }
+      const newPlatforms = Object.keys(secondPassHandles);
+      if (newPlatforms.length === 0) {
+        console.log("[research:deep] social second pass: none discovered");
+      } else {
+        // 剩餘社群預算：距軟 deadline 的剩餘時間，鉗在單次 social 預算內；不足 30s 即跳過（避免立刻 abort）。
+        const remainingMs = Math.min(socialFetchBudgetMs(), Math.max(0, runDeadlineAt - Date.now()));
+        if (remainingMs < 30_000) {
+          console.log("[research:deep] social second pass: skipped (deadline)");
+        } else {
+          try {
+            const second = await runSocialFetch(
+              deps.socialFetchers,
+              { companyName, domain: dom, handles: secondPassHandles },
+              { budgetMs: remainingMs, log: (m) => console.log(m) },
+            );
+            if (second.posts.length > 0) socialPosts.push(...second.posts);
+            console.log(`[research:deep] social second pass: ${newPlatforms.join(", ")}`);
+          } catch (e) {
+            console.error("[research:deep] social second pass failed:", e);
+          }
+        }
+      }
+    }
+
+    // S4：FB/IG 動態摘要（deep.socialSummaries）→ NewSocialPost。url 優先取該平台帳號連結（finalHandles 有），
+    // 否則取真實 citation（cleanUrl）；publishedAt 留空。每平台至多一筆（extractor 已去重；bulkUpsert 自然鍵
+    // platform+url 再冪等）。併入 socialPosts 一起 bulkUpsert。
+    const summaryPosts: NewSocialPost[] = [];
+    const summaryKeys: { platform: "facebook" | "instagram"; title: string }[] = [];
+    for (const s of deep?.socialSummaries ?? []) {
+      const content = cleanStr(s.summaryZh);
+      if (!content) continue;
+      const title = s.platform === "facebook" ? "Facebook 動態摘要（AI 整理）" : "Instagram 動態摘要（AI 整理）";
+      const linkUrl = finalHandles[s.platform] ?? cleanUrl(s.sourceUrl);
+      const post: NewSocialPost = { platform: s.platform, title, content };
+      if (linkUrl) post.url = linkUrl;
+      summaryPosts.push(post);
+      summaryKeys.push({ platform: s.platform, title });
+    }
+
     // 社群結構化貼文落庫（company_social_posts；自然鍵 [platform,url]，重抓更新不重複）。best-effort。
-    if (socialPosts.length > 0) {
+    const allSocialPosts = summaryPosts.length > 0 ? [...socialPosts, ...summaryPosts] : socialPosts;
+    if (allSocialPosts.length > 0) {
       try {
-        await core.companySocial.bulkUpsert(orgId, companyId, socialPosts);
-        fieldsFilled += socialPosts.length;
+        // S4 冪等補強：AI 摘要貼文的自然鍵 [platform,url] 在 url 為 null（無帳號連結亦無 citation）或跨輪
+        // 變動（citation ↔ 帳號連結）時無法去重 → 每輪都 INSERT 新列、累積重複「動態摘要（AI 整理）」列。
+        // 故落庫前先以「platform + 固定 title」刪同平台既有 AI 摘要列再 upsert，保證每平台至多一筆、重研究冪等。
+        // 真實 fetcher 貼文（youtube/threads…）title 不同，不受此刪除影響。
+        for (const k of summaryKeys) {
+          await core.db.run(
+            "DELETE FROM company_social_posts WHERE org_id = ? AND company_id = ? AND platform = ? AND title = ?",
+            [orgId, companyId, k.platform, k.title],
+          );
+        }
+        await core.companySocial.bulkUpsert(orgId, companyId, allSocialPosts);
+        fieldsFilled += allSocialPosts.length;
       } catch (e) {
         console.error("[research:deep] social posts persist failed:", e);
       }
@@ -1110,7 +1188,9 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     const known = new Map<string, string>();
     for (const st of bundle.sourceTexts) if (st.citationUrl) known.set(st.citationUrl, st.url);
 
-    const resolved = await resolveRedirects(fetcher, [...used], { known, budgetMs: 30_000 });
+    // max: 48——併入 uncategorized/opportunities/社群來源後，待解析的中介 redirect 變多；預設 16 會截斷，
+    // 留下部分 [來源] 停在 vertexaisearch（改由 noteSourceSuffix 降級為「來源待解析」）。放寬到 48。
+    const resolved = await resolveRedirects(fetcher, [...used], { known, budgetMs: 30_000, max: 48 });
     const remap = (u?: string): string | undefined => (u ? resolved.get(u) ?? u : undefined);
 
     for (const p of deep.companyProvenance) {
@@ -1174,6 +1254,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       .filter((p) => p.fullName && (!cleanStr(p.backgroundSummary) || !cleanStr(p.photoUrl)))
       .slice(0, PERSON_ENRICH_MAX);
     let filled = 0;
+    let cseQueriesUsed = 0; // 照片 v3b：每 job Google CSE 查詢計數（上限 PHOTO_CSE_MAX_PER_JOB）
     for (const c of targets) {
       // 記債：逐項前檢查 deadline——超時即停止剩餘主管（log 一次）。
       if (Date.now() > deadlineAt) {
@@ -1281,6 +1362,83 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
           }
         }
       }
+
+      // S5 照片 v2：背景 citation 仍找不到頭像 → 專屬照片 grounded 查詢（zh 名走「<中文名> <公司> 專訪 OR 照片」，
+      // 否則 en「<name> <company> interview photo」），取 citations 前 2 個 URL fetchRaw 跑同一 findPersonPhotoInHtml
+      // （詞界/佔位圖黑名單守衛沿用；每人此輪照片 fetch ≤2；命中寫 photoUrl confidence 0.5＋provenance）。查無即跳過。
+      if (!cleanStr(c.photoUrl) && !patch.photoUrl && Date.now() <= deadlineAt) {
+        const zhName = cleanStr((patch.fullNameZh as string | undefined) ?? c.fullNameZh);
+        const cjkName = zhName ?? (hasCjk(c.fullName) ? c.fullName : undefined);
+        const photoQuery = cjkName
+          ? `${cjkName} ${companyName} 專訪 OR 照片`
+          : `${c.fullName} ${companyName} interview photo`;
+        let photoGrounded;
+        try {
+          photoGrounded = await grounding.answer(photoQuery, { companyName, model: deps.extractModel });
+        } catch (e) {
+          console.error("[research:deep] photo grounding failed:", e);
+        }
+        if (photoGrounded) {
+          const photoUrls = photoGrounded.citations
+            .map((cc) => cc.url)
+            .filter((u): u is string => typeof u === "string" && u.length > 0)
+            .slice(0, 2);
+          for (const purl of photoUrls) {
+            if (Date.now() > deadlineAt) break; // 記債：逐項前檢查
+            let raw: Awaited<ReturnType<typeof crawler.fetchRaw>> = null;
+            try {
+              raw = await crawler.fetchRaw(purl);
+            } catch (e) {
+              console.error("[research:deep] photo fetchRaw failed:", e);
+            }
+            if (!raw) continue;
+            const page = raw.finalUrl || purl;
+            const photo = findPersonPhotoInHtml(raw.html, { fullName: c.fullName, fullNameZh: zhName, pageUrl: page });
+            if (photo) {
+              patch.photoUrl = photo;
+              prov.push({
+                fieldName: "photoUrl",
+                value: photo,
+                sourceUrl: page,
+                sourceType: classifySourceType(page),
+                confidence: 0.5,
+              });
+              break;
+            }
+          }
+        }
+      }
+      // 照片 v3b：官網/citation 途徑（v1 alt/鄰近＋v2 專屬照片查詢）仍落空 → Google 圖片 CSE 備援。
+      // 每人 1 次查詢、每 job ≤PHOTO_CSE_MAX_PER_JOB 次；憑證未設（deps.googleCse 為空）→ 直接 skip（searchPersonPhotoCse 內優雅回 undefined）。
+      // 查詢「<中文名 ?? name> <公司名>」，取第一張過守衛的原圖 link，confidence 0.5＋provenance（sourceUrl=contextLink ?? link）。
+      if (
+        deps.googleCse &&
+        !cleanStr(c.photoUrl) &&
+        !patch.photoUrl &&
+        cseQueriesUsed < PHOTO_CSE_MAX_PER_JOB &&
+        Date.now() <= deadlineAt
+      ) {
+        cseQueriesUsed++;
+        const zhName = cleanStr((patch.fullNameZh as string | undefined) ?? c.fullNameZh);
+        const cseName = zhName ?? c.fullName;
+        try {
+          const img = await searchPersonPhotoCse(deps.googleCse, cseName, companyName);
+          if (img) {
+            const src = img.contextLink ?? img.link;
+            patch.photoUrl = img.link;
+            prov.push({
+              fieldName: "photoUrl",
+              value: img.link,
+              sourceUrl: src,
+              sourceType: classifySourceType(src),
+              confidence: 0.5,
+            });
+          }
+        } catch (e) {
+          console.error("[research:deep] photo CSE failed:", e);
+        }
+      }
+
       if (prov.length === 0) continue; // 全部欄位皆已有值或查無 → 不寫
       try {
         await core.contacts.upsertFromCrawl(orgId, companyId, {
@@ -1306,7 +1464,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       header +
       "\n" +
       competitors
-        .map((c) => `- ${c.name}${c.sourceUrl ? `（來源：${c.sourceUrl}）` : ""}`)
+        .map((c) => `- ${c.name}${noteSourceSuffix(c.sourceUrl)}`)
         .join("\n");
     const existing = await core.notes.list(orgId, "company", companyId);
     const prior = existing.find((n) => n.body.startsWith(header));

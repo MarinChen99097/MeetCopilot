@@ -71,6 +71,11 @@ export function createResearchRouter(
       grounding, // deep（全網研究）的 grounding 扇出
       // WP1 社群來源層：youtube（Data API v3）＋ threads（無登入 Playwright，走 crawler.fetchRaw）。
       socialFetchers: createSocialFetchers({ youtubeApiKey: config.youtubeApiKey ?? "", crawler }),
+      // 照片 v3b：Google CSE 圖片搜尋憑證（key＋cx 皆存在才傳；缺任一 → orchestrator 內優雅 skip CSE 途徑）。
+      googleCse:
+        config.googleCseApiKey && config.googleCseCx
+          ? { apiKey: config.googleCseApiKey, cx: config.googleCseCx }
+          : undefined,
     });
   const quota = deps.quota ?? createMeetingResearchQuota(config.researchAutoLimitPerMeeting);
 

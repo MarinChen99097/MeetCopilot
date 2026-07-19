@@ -11,6 +11,51 @@ const MAX_POSTS = 30;
 const MIN_POST_CHARS = 8;
 const MAX_POST_CHARS = 800;
 
+/**
+ * Threads/Instagram「未登入攔截頁」UI 字串標記（小寫、子字串比對）。抽到的「貼文」命中 ≥2 條即判為登入牆內容。
+ * 取材：E2E 實錄的 Threads 未登入攔截頁文案（Connact 案例把整頁 UI 當貼文落庫）。真實貼文（caption/text JSON）
+ * 幾乎不會同時出現其中兩條，故 ≥2 命中對真實內容誤判率低。
+ */
+const LOGIN_WALL_MARKERS = [
+  "scan to get the app",
+  "log in with",
+  "forgot password",
+  "continue with instagram",
+  "sign up with instagram",
+  "log in to see",
+  "see what people are sharing on threads",
+  "terms of use",
+  "privacy policy",
+];
+
+/**
+ * 判定抓到的內容其實是 Threads 登入牆（非真實貼文）。純函式，供 fetcher 與單測。
+ *  - finalUrl 被導去 `/login` 或 `/accounts/login` → 直接判死（登入牆 redirect）。
+ *  - 否則掃「抽出的貼文」合併文字：命中 ≥2 條已知登入頁 UI 標記 → 判死。
+ * 兩者皆不符 → false（視為真實內容）。
+ */
+export function isLoginWallContent(finalUrl: string | undefined, posts: string[]): boolean {
+  if (finalUrl) {
+    let path = finalUrl;
+    try {
+      path = new URL(finalUrl).pathname;
+    } catch {
+      /* finalUrl 非合法 URL → 退回整串比對 */
+    }
+    if (/\/(accounts\/)?login(\/|\?|#|$)/i.test(path)) return true;
+  }
+  const hay = posts.join("\n").toLowerCase();
+  if (!hay) return false;
+  let hits = 0;
+  for (const marker of LOGIN_WALL_MARKERS) {
+    if (hay.includes(marker)) {
+      hits++;
+      if (hits >= 2) return true;
+    }
+  }
+  return false;
+}
+
 /** 從 handle/URL 推出 threads profile URL（無登入公開頁）。無法解析回 undefined。 */
 function threadsProfileUrl(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
@@ -105,11 +150,17 @@ export function createThreadsFetcher(crawler: CrawlProvider): SocialFetcher {
           posts = lines.map((l) => l.slice(0, MAX_POST_CHARS));
         }
         posts = posts.slice(0, MAX_POSTS);
+        const url = raw.finalUrl || profileUrl;
+        // 登入牆偵測：Threads/IG 未登入攔截頁——finalUrl 轉去 /login，或抽出的「貼文」其實是登入頁 UI 字串
+        // （命中 ≥2 條已知標記）。整平台 skip，避免把登入頁 UI 當成貼文落庫（實測 Connact 案例）。
+        if (isLoginWallContent(raw.finalUrl, posts)) {
+          ctx.log(`[social:threads] threads login wall — skipping (${url})`);
+          return empty;
+        }
         if (posts.length === 0) {
           ctx.log(`[social:threads] no public posts parsed for ${profileUrl} — skipping`);
           return empty;
         }
-        const url = raw.finalUrl || profileUrl;
         const title = `${input.companyName} — Threads`;
         const body = `Threads 公開檔案：${input.companyName}\n近期公開貼文（${posts.length} 則）：\n- ${posts.join("\n- ")}`;
         // Threads 個別貼文無穩定 URL → 以 profile URL 為自然鍵，落一則彙整貼文（結構化鏡像）；postCount 供顯示。

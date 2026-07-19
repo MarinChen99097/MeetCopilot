@@ -51,6 +51,14 @@ export interface AppConfig {
    */
   youtubeApiKey?: string;
   /**
+   * Google Programmable Search (Custom Search JSON API) credentials — key-person photo-hunt v3b fallback.
+   * BOTH the API key and the CX (search-engine id) must be set to enable it; missing either ⇒ the CSE image
+   * fallback is skipped (one config warning, NOT a failure — website/citation photo paths still run). Only ever
+   * read here into env; never logged, never persisted.
+   */
+  googleCseApiKey?: string;
+  googleCseCx?: string;
+  /**
    * Google OAuth client id used to verify the audience of Google ID tokens (same client id as EZpage, so the
    * two apps share one Google identity by verified email). Feature flag: when set, POST /api/auth/google is
    * active; when empty, that route returns 501 and only local email/password auth (register/login) is available.
@@ -143,12 +151,23 @@ export function loadConfig(): AppConfig {
     );
   }
 
+  const googleCseApiKey = (process.env.GOOGLE_CSE_API_KEY ?? "").trim();
+  const googleCseCx = (process.env.GOOGLE_CSE_CX ?? "").trim();
+  if (!googleCseApiKey || !googleCseCx) {
+    console.warn(
+      "[config] GOOGLE_CSE_API_KEY / GOOGLE_CSE_CX not both set — key-person photo hunting will SKIP the " +
+        "Google image-search (CSE) fallback (website/citation photo paths still run).",
+    );
+  }
+
   return {
     port: Number(process.env.PORT ?? 8787),
     jwtSecret,
     dbPath: resolvePath(process.env.DB_PATH ?? "./data/meetcopilot.db"),
     researchAutoLimitPerMeeting: Number(process.env.RESEARCH_AUTO_LIMIT_PER_MEETING ?? 10),
     youtubeApiKey,
+    googleCseApiKey,
+    googleCseCx,
     googleClientId,
     platformAdminEmails,
     adminOrigin,

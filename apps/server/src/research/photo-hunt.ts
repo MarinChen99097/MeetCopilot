@@ -102,6 +102,29 @@ function toUsablePhoto(src: string, pageUrl: string): string | undefined {
   return abs;
 }
 
+/**
+ * 對「已是絕對」的圖片 URL 套同一組守衛（絕對 http(s)＋非 svg/ico＋非追蹤像素＋非佔位/預設圖）。
+ * 供 photo-cse（Google 圖片搜尋回的原圖 link 已絕對）與單測共用。純函式。
+ */
+export function isUsablePhotoUrl(url: string): boolean {
+  return typeof url === "string" && toUsablePhoto(url, url) !== undefined;
+}
+
+/** 鄰近 DOM 文字比對窗口（<img> 前後各取此字元數）。 */
+const PROXIMITY_WINDOW = 300;
+
+/**
+ * 取鄰近純文字供人名比對：先移除 title/script/style 的**內文**（head/標題/腳本文字不算 DOM 鄰近，
+ * 否則 <title>Jane Doe…</title> 會讓 body 第一張無關圖誤命中），再去除其餘標籤（<...> → 空白）。純函式。
+ */
+function proximityText(windowHtml: string): string {
+  return windowHtml
+    .replace(/<title\b[^>]*>[\s\S]*?<\/title>/gi, " ")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]*>/g, " ");
+}
+
 const OG_IMAGE_KEYS = new Set([
   "og:image",
   "og:image:secure_url",
@@ -113,28 +136,43 @@ const OG_IMAGE_KEYS = new Set([
 /**
  * 從頁面 HTML 找符合人名的照片 URL：
  *  1) 掃 <img>：alt 含人名 token → 取其 src（絕對化＋過濾），第一個命中即回。
- *  2) 皆無命中且 <title> 含人名 → 回 og:image/twitter:image（絕對化＋過濾）。
- * 無姓名 token 或全數不符 → undefined（嚴禁捏造）。
+ *  2) v3a 鄰近 DOM 文字：<img> 前後 ~300 字元窗口去 tag 後的純文字含人名 token → 取其 src（無 alt 團隊頁常見）。
+ *  3) 皆無命中且 <title> 含人名 → 回 og:image/twitter:image（絕對化＋過濾）。
+ * alt 命中優先於鄰近命中。無姓名 token 或全數不符 → undefined（嚴禁捏造）。
  */
 export function findPersonPhotoInHtml(html: string, input: PhotoHuntInput): string | undefined {
   if (typeof html !== "string" || !html) return undefined;
   const tokens = nameTokens(input.fullName, input.fullNameZh);
   if (tokens.length === 0) return undefined;
 
-  // 1) <img alt 含人名> → src / data-src。
+  // 1) <img alt 含人名> → src / data-src。同時記錄各 <img> 的位置與 src，供第二段鄰近比對重用（免二次掃描）。
   const imgRe = /<img\b[^>]*>/gi;
   let m: RegExpExecArray | null;
+  const imgs: { index: number; endIndex: number; src: string | undefined }[] = [];
   while ((m = imgRe.exec(html)) !== null) {
     const tag = m[0];
+    const src = attr(tag, "src") ?? attr(tag, "data-src");
+    imgs.push({ index: m.index, endIndex: m.index + tag.length, src });
     const alt = attr(tag, "alt");
     if (!alt || !textHasName(alt, tokens)) continue;
-    const src = attr(tag, "src") ?? attr(tag, "data-src");
     if (!src) continue;
     const usable = toUsablePhoto(src, input.pageUrl);
-    if (usable) return usable;
+    if (usable) return usable; // alt 命中優先
   }
 
-  // 2) og:image / twitter:image——僅當 <title> 含人名。
+  // 2) v3a 鄰近 DOM 文字命中：對每個 <img>，取其前後窗口去 tag 後的文字，含人名 token（沿用 textHasName：
+  //    CJK 子字串、拉丁詞界）即候選；佔位圖黑名單/追蹤像素/scheme 守衛全沿用（toUsablePhoto）。第一個命中即回。
+  for (const img of imgs) {
+    if (!img.src) continue;
+    const usable = toUsablePhoto(img.src, input.pageUrl);
+    if (!usable) continue;
+    const before = html.slice(Math.max(0, img.index - PROXIMITY_WINDOW), img.index);
+    const after = html.slice(img.endIndex, img.endIndex + PROXIMITY_WINDOW);
+    const nearText = proximityText(`${before} ${after}`);
+    if (textHasName(nearText, tokens)) return usable;
+  }
+
+  // 3) og:image / twitter:image——僅當 <title> 含人名。
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "";
   if (title && textHasName(title, tokens)) {
     const metaRe = /<meta\b[^>]*>/gi;
