@@ -35,7 +35,9 @@
     "menu": "Open menu",
     "closeMenu": "Close menu",
     "newTab": "Opens in a new tab",
-    "language": "Language"
+    "language": "Language",
+    "present": "Present stage",
+    "copilot": "Copilot · HUD"
   },
   "crm": {
     "title": "CRM",
@@ -43,7 +45,13 @@
   },
   "studio": {
     "title": "DynamicSlide Studio",
-    "desc": "Three-step deck generation wizard, slide editing, pptx export, pre-meeting AI image generation."
+    "desc": "Three-step deck generation wizard, slide editing, pptx export, pre-meeting AI image generation.",
+    "launchTitle": "Start presenting",
+    "launchHint": "Static preview just flips slides locally; live meeting playback creates a session so HUD-approved pages append to the deck in real time.",
+    "launchStaticPreview": "Static preview",
+    "launchLivePlay": "Live meeting playback",
+    "launchOpening": "Opening…",
+    "launchError": "Couldn't start meeting playback. Please try again."
   },
   "present": {
     "title": "Slide Stage",
@@ -67,10 +75,24 @@
     "cockpitKicker": "LIVE COCKPIT",
     "cockpitLead": "Capture the meeting audio and read live suggestions — in one window.",
     "captureLabel": "Capture",
-    "hudLabel": "Live suggestions"
+    "hudLabel": "Live suggestions",
+    "cockpitAccountB": "This is your private copilot window (Account B) — shown only on your device and never shared; copilot and HUD are unified on one screen.",
+    "secondDeviceTitle": "View the HUD on another device",
+    "secondDeviceDesc": "Scan the QR with a phone or tablet, or copy the link, to open this meeting's HUD on a second device.",
+    "secondDeviceCopy": "Copy HUD link",
+    "secondDeviceCopied": "Copied",
+    "secondDeviceQrAlt": "HUD link QR code",
+    "secondDeviceEmpty": "The HUD link will appear here once you start a session.",
+    "consentInline": "I have participants' consent to record and transcribe this meeting to generate live suggestions.",
+    "consentInlineHint": "Until this is checked, captured audio is never sent for analysis.",
+    "tabAudioTitle": "Before sharing, be sure to tick “Share tab audio”",
+    "tabAudioStep1": "Choose “Chrome Tab” and pick the Meet tab (not a whole screen or window).",
+    "tabAudioStep2": "Be sure to tick “Share tab audio” at the bottom-left.",
+    "tabAudioStep3": "Click “Share” to start capturing the tab's audio.",
+    "zeroTrackRetry": "Retry — and remember to tick “Share tab audio”",
+    "startListening": "🎧 Start listening"
   },
   "hud": {
-    "title": "HUD",
     "desc": "Live suggestions, research cards, and transcript; accept/skip and deep research."
   },
   "enrichPanel": {
@@ -78,6 +100,8 @@
     "deepEntryDesc": "Full-web news / wiki / public records + the official site + social accounts, with per-field source attribution.",
     "timeHint": "May take 30–60 minutes. You can leave the page and come back for the results later.",
     "start": "Start deep research",
+    "moreLabel": "Research more",
+    "moreDesc": "Fill gaps and verify on top of existing data — faster.",
     "staleBadge": "Interrupted",
     "staleBody": "Research was interrupted (server restart or timeout). You can start it again."
   },

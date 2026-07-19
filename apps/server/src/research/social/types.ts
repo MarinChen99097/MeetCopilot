@@ -10,6 +10,7 @@
  *  - FB／IG：只用 Gemini grounding（不在此層；由 deep-research 的社群模板查詢承載）。
  */
 import type { SourceText } from "../deep-research.js";
+import type { NewSocialPost } from "@meetcopilot/shared";
 
 export type SocialHandles = {
   youtube?: string;
@@ -17,6 +18,17 @@ export type SocialHandles = {
   instagram?: string;
   threads?: string;
 };
+
+/**
+ * 社群 fetcher 回傳（RESEARCH_UPGRADE v2）：
+ *  - sources：注入 DeepResearchBundle.sourceTexts（自動繼承 [S#]→真實 URL provenance，§1.1）——語意不變。
+ *  - posts：**同一份內容的結構化鏡像**，orchestrator 落 company_social_posts（bulkUpsert 自然鍵 [platform,url]；
+ *    youtube metrics 存 views/subscribers 等）。posts 為附加輸出，不取代 sources。
+ */
+export interface SocialFetchResult {
+  sources: SourceText[];
+  posts: NewSocialPost[];
+}
 
 export interface SocialFetchInput {
   companyName: string;
@@ -32,5 +44,6 @@ export interface SocialFetchCtx {
 
 export interface SocialFetcher {
   platform: "youtube" | "threads";
-  fetch(input: SocialFetchInput, ctx: SocialFetchCtx): Promise<SourceText[]>;
+  /** 回 { sources（注入 bundle）, posts（落 company_social_posts）}。失敗/skip → { sources:[], posts:[] }。 */
+  fetch(input: SocialFetchInput, ctx: SocialFetchCtx): Promise<SocialFetchResult>;
 }

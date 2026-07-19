@@ -38,6 +38,8 @@ import type {
   NewCompanyTech,
   CompanyDepartment,
   NewCompanyDepartment,
+  SocialPost,
+  NewSocialPost,
   Deal,
   NewDeal,
   DealContact,
@@ -284,6 +286,14 @@ export interface CompanyChildRepository {
   bulkUpsertDepartments(orgId: string, companyId: string, rows: NewCompanyDepartment[]): Promise<void>;
 }
 
+/** company_social_posts 存取（016_social_tech.sql；社群 fetcher 落庫＋GET .../social 的 posts 段）。 */
+export interface CompanySocialRepository {
+  /** 某公司社群貼文（published_at DESC）。 */
+  listByCompany(orgId: string, companyId: string): Promise<SocialPost[]>;
+  /** 爬蟲寫入：自然鍵 (org_id, company_id, platform, url) dedupe（重抓更新不重複）。 */
+  bulkUpsert(orgId: string, companyId: string, rows: NewSocialPost[]): Promise<void>;
+}
+
 /** deals 存取（+ 採購委員會 join：listContacts/addContact）。 */
 export interface DealRepository {
   create(orgId: string, input: NewDeal): Promise<Deal>;
@@ -444,6 +454,7 @@ export interface CrmCore {
   contacts: ContactRepository;
   companyProducts: CompanyProductRepository;
   companyChildren: CompanyChildRepository;
+  companySocial: CompanySocialRepository;
   deals: DealRepository;
   notes: NoteRepository;
   provenance: ProvenanceRepository;

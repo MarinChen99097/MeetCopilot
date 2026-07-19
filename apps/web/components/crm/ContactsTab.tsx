@@ -94,7 +94,11 @@ export function ContactsTab({ companyId }: { companyId: string }) {
                 aria-expanded={selected === c.id}
               >
                 <span className="mc-contactrow__avatar" aria-hidden="true">
-                  {c.photoUrl ? <img src={c.photoUrl} alt="" /> : displayName.slice(0, 2).toUpperCase()}
+                  {c.photoUrl ? (
+                    <img src={c.photoUrl} alt="" referrerPolicy="no-referrer" />
+                  ) : (
+                    displayName.slice(0, 2).toUpperCase()
+                  )}
                 </span>
                 <span className="mc-contactrow__id">
                   <span className="mc-contactrow__name">{displayName}</span>

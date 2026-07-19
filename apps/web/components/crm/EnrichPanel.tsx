@@ -3,14 +3,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import type { CrawlMode, CrawlTargetType } from "@meetcopilot/shared";
-import { ApiError, enrich, getResearchJob, type ResearchJob } from "@/lib/api";
+import { ApiError, enrich, getResearchJob, type EnrichMode, type ResearchJob } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { JobProgressCard } from "@/components/ui/JobProgressCard";
 import { Spinner } from "@/components/ui/Spinner";
 
 const POLL_MS = 2500;
-/** 逃生口門檻（contract §6）：queued/running 超過 65 分鐘視為「已中斷」（伺服器重啟或逾時）。 */
-const STALE_MS = 65 * 60 * 1000;
+/**
+ * 逃生口門檻（contract §6）：queued/running 超過 95 分鐘視為「已中斷」（伺服器重啟或逾時）。
+ * 65→95 分：deep 全網研究上限拉長（RESEARCH_JOB_TIMEOUT 3.6M→5.4M ms），逃生口須大於伺服器逾時，
+ * 否則正常長跑 job 會被前端提前誤判中斷。
+ */
+const STALE_MS = 95 * 60 * 1000;
 const storageKey = (t: CrawlTargetType, id: string) => `mc_enrich_${t}_${id}`;
 
 /**
@@ -33,7 +37,7 @@ function toEpochMs(v: number | string | null | undefined): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-/** 逃生口判定：job 仍 queued/running 且距時間錨（startedAt ?? createdAt）已超過 65 分鐘。 */
+/** 逃生口判定：job 仍 queued/running 且距時間錨（startedAt ?? createdAt）已超過 95 分鐘。 */
 function isJobStale(job: ResearchJob | null, now: number): boolean {
   if (!job || (job.status !== "queued" && job.status !== "running")) return false;
   const anchor = toEpochMs(job.startedAt) ?? toEpochMs(job.createdAt);
@@ -48,6 +52,13 @@ function isJobStale(job: ResearchJob | null, now: number): boolean {
  * （DeckWizard.tsx:134,147），兩者互不影響。
  */
 const DEEP_MODE: CrawlMode = "deep";
+/**
+ * 第二動作「研究更多」（RESEARCH_UPGRADE_CONTRACT more 模式）：在既有資料上補缺＋佐證驗證，較快。
+ * 後端讀 DB 空欄為種子做定向雙語查詢、公司非受信任欄改 fill-empty（不覆寫既有）、佐證升信心。
+ * `more` 尚未進 shared CrawlMode（server/packages 工程師平行加入 routes MODES）；此處以 api.ts 的
+ * EnrichMode（CrawlMode | "more"）本地聯集送出，避免 tsc 因 shared 未就緒而紅。
+ */
+const MORE_MODE: EnrichMode = "more";
 
 /**
  * EnrichPanel — triggers POST /api/research/enrich then polls GET /api/research/jobs/:id
@@ -150,22 +161,22 @@ export function EnrichPanel({
     setOpen(true);
   }, [dismissJob]);
 
-  async function submit() {
+  async function submit(mode: EnrichMode) {
     setSubmitting(true);
     doneNotified.current = false;
     try {
       const { jobId } = await enrich({
         targetType,
         targetId,
-        mode: DEEP_MODE, // 單一深度模式；URL 為可選研究起點
+        mode, // deep＝全網深度研究（URL 可選起點）；more＝在既有資料上補缺＋驗證
         url: url.trim() ? url.trim() : undefined,
       });
       window.localStorage.setItem(storageKey(targetType, targetId), jobId);
       // createdAt 客端時戳：首個成功輪詢前的樂觀 job 沒有伺服器時間錨，若伺服器在接受 POST 後、第一個成功
       // tick 前即不可達，isJobStale 的 anchor（startedAt ?? createdAt）會全 null → 逃生口永不翻轉，使用者卡
-      // 死在 spinner。補上 client createdAt，讓此情境仍能於 65 分鐘後翻成「已中斷」（contract §6）；一旦有成功
+      // 死在 spinner。補上 client createdAt，讓此情境仍能於 95 分鐘後翻成「已中斷」（contract §6）；一旦有成功
       // 輪詢，setJob 會以伺服器 job（含伺服器 createdAt/startedAt）覆蓋此樂觀值。
-      setJob({ id: jobId, targetType, targetId, mode: DEEP_MODE, status: "queued", createdAt: new Date().toISOString() });
+      setJob({ id: jobId, targetType, targetId, mode, status: "queued", createdAt: new Date().toISOString() });
       setOpen(false);
       poll(jobId);
     } catch (err) {
@@ -181,9 +192,25 @@ export function EnrichPanel({
 
   return (
     <div className="mc-enrich">
-      <button type="button" className="mc-btn mc-btn--accent" onClick={() => setOpen((o) => !o)} disabled={busy}>
-        {busy ? <Spinner size={14} /> : "🔎"} 研究此{targetNoun}
-      </button>
+      <div className="mc-enrich__buttons">
+        <button
+          type="button"
+          className="mc-btn mc-btn--accent"
+          onClick={() => setOpen((o) => !o)}
+          disabled={busy || submitting}
+        >
+          {busy ? <Spinner size={14} /> : "🔎"} 研究此{targetNoun}
+        </button>
+        <button
+          type="button"
+          className="mc-btn mc-btn--ghost mc-btn--sm"
+          onClick={() => submit(MORE_MODE)}
+          disabled={busy || submitting}
+          title={t("moreDesc")}
+        >
+          {submitting ? <Spinner size={13} /> : "➕"} {t("moreLabel")}
+        </button>
+      </div>
 
       {open ? (
         <div className="mc-enrich__panel">
@@ -213,7 +240,12 @@ export function EnrichPanel({
             <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={() => setOpen(false)}>
               取消
             </button>
-            <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={submit} disabled={submitting}>
+            <button
+              type="button"
+              className="mc-btn mc-btn--primary mc-btn--sm"
+              onClick={() => submit(DEEP_MODE)}
+              disabled={submitting}
+            >
               {submitting ? <Spinner size={13} /> : t("start")}
             </button>
           </div>

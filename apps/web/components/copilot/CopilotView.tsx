@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useTranslations } from "next-intl";
 import type { ServerMessage } from "@meetcopilot/shared";
 import { API_BASE, ApiError, createMeeting } from "@/lib/api";
 import { startCapture, CaptureError, type CaptureController } from "@/lib/audio-capture";
@@ -48,6 +49,7 @@ export function CopilotInner({
   rootTag?: "main" | "section";
 } = {}) {
   const toast = useToast();
+  const t = useTranslations("copilot");
   const Root = rootTag;
   // Embedded in the cockpit the page h1 is CockpitView's「會中副駕」— demote this capture heading to h2 so the
   // cockpit page has exactly one h1. Standalone (/copilot wrapper) keeps its own h1.
@@ -234,9 +236,21 @@ export function CopilotInner({
         </section>
       ) : (
         <section className="mc-cap__start">
+          {/* (b) Tab-audio guidance rendered just-in-time, immediately before the getDisplayMedia picker fires. */}
           <TabShareTutorial />
+          {/* (a) Inline consent at the start card so「audio never reaches ASR」is a visible gate, not a hidden one.
+              NEVER default-checked; only gates whether PCM reaches the analyzer (onFrame), never the I2 approval gate. */}
+          <div className="mc-cap__consent">
+            <label className="mc-cap__consent-row">
+              <input type="checkbox" checked={consentGranted} onChange={toggleConsent} />
+              <span>{t("consentInline")}</span>
+            </label>
+          </div>
+          <p className="mc-cap__vuhint">{t("consentInlineHint")}</p>
+          {/* (d) One light step: session already exists (created upstream), so consent + guidance + start live
+              together here. getDisplayMedia fires in this button's own user gesture — no createMeeting awaited between. */}
           <button type="button" className="mc-btn mc-btn--primary mc-cap__startbtn" onClick={start}>
-            🎧 開始聆聽
+            {t("startListening")}
           </button>
         </section>
       )}
@@ -244,8 +258,10 @@ export function CopilotInner({
   );
 }
 
-/** Big red guard when the user forgot to tick "Share tab audio" — the most important error state. */
+/** Big red guard when the user forgot to tick "Share tab audio" — the most important error state.
+ *  (c) One-tap retry that re-calls start() (a fresh getDisplayMedia gesture), labelled to remind about tab audio. */
 function ZeroTrackGuard({ onRetry }: { onRetry: () => void }) {
+  const t = useTranslations("copilot");
   return (
     <section className="mc-cap__zero" role="alert">
       <div className="mc-cap__zero-icon" aria-hidden="true">
@@ -262,27 +278,23 @@ function ZeroTrackGuard({ onRetry }: { onRetry: () => void }) {
         </li>
       </ol>
       <button type="button" className="mc-btn mc-btn--primary" onClick={onRetry}>
-        重新分享
+        {t("zeroTrackRetry")}
       </button>
     </section>
   );
 }
 
-/** Illustrated tab-picker guidance (our UI; the system picker itself can't be styled). */
+/** Illustrated tab-picker guidance (our UI; the system picker itself can't be styled).
+ *  Rendered just-in-time at the start card, right before the getDisplayMedia picker fires. */
 function TabShareTutorial() {
+  const t = useTranslations("copilot");
   return (
     <div className="mc-cap__tutorial">
-      <p className="mc-cap__tutorial-lead">按下後瀏覽器會彈出來源選擇器，請依序：</p>
+      <p className="mc-cap__tutorial-lead">{t("tabAudioTitle")}</p>
       <ol className="mc-cap__steps">
-        <li>
-          選 <strong>「Chrome 分頁」</strong>（不是整個螢幕、不是視窗）
-        </li>
-        <li>
-          挑 <strong>那個 Meet 分頁</strong>
-        </li>
-        <li>
-          一定要勾 <strong>「分享分頁音訊 / Share tab audio」</strong>
-        </li>
+        <li>{t("tabAudioStep1")}</li>
+        <li>{t("tabAudioStep2")}</li>
+        <li>{t("tabAudioStep3")}</li>
       </ol>
     </div>
   );

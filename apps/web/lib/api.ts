@@ -238,12 +238,19 @@ export interface CompanyListParams {
   pageSize?: number;
 }
 
+/**
+ * 研究模式（含 v2「補充研究」more）。`more` 尚未進 shared 的 `CrawlMode`——由 server/packages 工程師
+ * 平行加入（routes MODES 加 more），web 端先以本地聯集鏡像，避免 tsc 因 shared 未就緒而紅；shared
+ * 補上後本聯集仍相容（"more" 為冗餘成員）。
+ */
+export type EnrichMode = CrawlMode | "more";
+
 /** GET /api/research/jobs/:id — job status (API_CONTRACT §3). */
 export interface ResearchJob {
   id: string;
   targetType: CrawlTargetType;
   targetId: string;
-  mode: CrawlMode;
+  mode: EnrichMode;
   status: CrawlJobStatus;
   fieldsFilled?: number;
   sources?: string[];
@@ -305,6 +312,60 @@ export function getCompanyTech(id: string): Promise<CompanyTech[]> {
 }
 export function getCompanyDepartments(id: string): Promise<CompanyDepartment[]> {
   return request<CompanyDepartment[]>(`/api/crm/companies/${id}/departments`);
+}
+
+// ── Company social (帳號連結 + 貼文/影片) (API_CONTRACT §2；WS-C) ─
+// NOTE: server 端點 GET /api/crm/companies/:id/social 由 server 工程師平行實作；下列型別為 web 端
+// 本地鏡像（SocialPost/CompanySocial 尚未進 shared——避免 tsc 因 shared 未就緒而紅）。
+
+/** 社群貼文/影片指標（company_social_posts.metrics_json 解析；youtube 存 views/subscribers 等）。 */
+export interface SocialPostMetrics {
+  views?: number;
+  subscribers?: number;
+  likes?: number;
+  comments?: number;
+  videoCount?: number;
+  [key: string]: number | string | undefined;
+}
+
+/** 社群貼文/影片一列（company_social_posts；migration 016）。 */
+export interface SocialPost {
+  id: string;
+  orgId?: string;
+  companyId?: string;
+  platform: string;
+  url?: string;
+  title?: string;
+  content?: string;
+  publishedAt?: number;
+  metrics?: SocialPostMetrics;
+  createdAt?: number;
+}
+
+/**
+ * 帳號連結整併（companies.social_links JSON ＋ 六個 social_* 單欄）。已知平台鍵為可選字串，
+ * 另留 index signature 收 JSON 欄可能帶入的其它平台（如 threads/instagram/tiktok）。
+ */
+export interface SocialLinks {
+  linkedin?: string;
+  twitter?: string;
+  facebook?: string;
+  youtube?: string;
+  crunchbase?: string;
+  github?: string;
+  threads?: string;
+  instagram?: string;
+  tiktok?: string;
+  [key: string]: string | undefined;
+}
+
+/** GET /api/crm/companies/:id/social → 帳號連結 ＋ 貼文清單。 */
+export interface CompanySocial {
+  links: SocialLinks;
+  posts: SocialPost[];
+}
+export function getSocial(id: string): Promise<CompanySocial> {
+  return request<CompanySocial>(`/api/crm/companies/${id}/social`);
 }
 
 // ── Contacts (API_CONTRACT §2) ──────────────────────────────────
@@ -398,7 +459,7 @@ export function confirmProvenance(input: {
 export function enrich(input: {
   targetType: CrawlTargetType;
   targetId: string;
-  mode: CrawlMode;
+  mode: EnrichMode;
   url?: string;
 }): Promise<{ jobId: string }> {
   return request<{ jobId: string }>("/api/research/enrich", { method: "POST", body: input });

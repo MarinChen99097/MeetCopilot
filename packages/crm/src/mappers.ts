@@ -146,6 +146,7 @@ export const COMPANY_DEFS: FieldDef[] = [
   { col: "social_youtube", key: "socialYoutube" },
   { col: "social_crunchbase", key: "socialCrunchbase" },
   { col: "social_github", key: "socialGithub" },
+  { col: "social_links", key: "socialLinks", kind: J },
   { col: "languages_json", key: "languages", kind: J },
   { col: "products_offered_json", key: "productsOffered", kind: J },
   { col: "key_customers_json", key: "keyCustomers", kind: J },
@@ -353,6 +354,21 @@ export const COMPANY_TECH_DEFS: FieldDef[] = [
   { col: "confidence", key: "confidence" },
   { col: "first_seen_at", key: "firstSeenAt" },
   { col: "last_seen_at", key: "lastSeenAt" },
+  { col: "note_zh", key: "noteZh" },
+  { col: "created_at", key: "createdAt", sys: true },
+];
+
+/** company_social_posts（016_social_tech.sql；子表，只有 created_at）。 */
+export const SOCIAL_POST_DEFS: FieldDef[] = [
+  { col: "id", key: "id", sys: true },
+  { col: "org_id", key: "orgId", sys: true },
+  { col: "company_id", key: "companyId", sys: true },
+  { col: "platform", key: "platform" },
+  { col: "url", key: "url" },
+  { col: "title", key: "title" },
+  { col: "content", key: "content" },
+  { col: "published_at", key: "publishedAt" },
+  { col: "metrics_json", key: "metrics", kind: J },
   { col: "created_at", key: "createdAt", sys: true },
 ];
 

@@ -148,3 +148,49 @@
   7. **記債**：極端多職者仍可能偶發循環（三層兜住、最壞留空）；saneTitle/isMaxTokensError 未匯出無單測；產品 specs/pricingModel/techStack 對純行銷官網先天有限（來源沒有就抽不到）；deep 單次成本/耗時 ~6 倍（env 可調降 DEEP_RESEARCH_MAX_QUERIES/MAX_SOURCES/GROUNDING_CONCURRENCY）。
 - **commit＋部署（2026-07-18 使用者核准，研究引擎擴編輪）**：三邏輯 commit → `6b6025f` feat(research)（server＋4 新測 13 檔：雙語查詢＋五新角度＋grounding 升模＋深讀 6→12/render fallback＋per-contact/商機/產品外部回填＋二段式深抽＋MAX_TOKENS/504 修復）＋`c38291d` feat(web)（ProductsTab 補 render specs 表格/功能細節/競品/定價備註＋i18n 收斂 4 檔）＋`0d9c95c` docs（WORKLOG/ROM/CHANGE_TRACKER），push origin main（`b59c4c4..0d9c95c`）。部署照 SOP A：兩 build 皆 SUCCESS——server build `fbec48f0-0345-44f3-8f84-c2e2d06fc52c`／web build `ac85d0d8-427f-4132-979a-e9dcf33f6f0b`；server rev **00013-8ms**（`services update --image`，env 與 `--no-cpu-throttling` 保留）＋web rev **00011-89t**（`run deploy` 帶 `--set-env-vars=NEXT_PUBLIC_API_BASE`）。本輪無 migration。冒煙：`/api/health` 200＋`/api/ready` 200＋web `/` 307＋`/zh-TW` 200；新 rev 開機 log 無 error（`[server] listening on :8080`＋STARTUP probe OK；`PLATFORM_ADMIN_EMAILS`/`YOUTUBE_API_KEY` 未設＝既有良性 config 警告；reaper 0 筆孤兒＝上輪卡死 job 已清完屬正常）。DEPLOY.md 版本節已更新。
 - **commit＋部署（2026-07-18 使用者核准）**：三邏輯 commit → `6826567` feat(research)（server/packages 13 檔：migration 015×2＋爬蟲抓圖＋型號/中文名/繁中 gloss＋防幻覺白名單＋boot reaper＋2 新測）＋`92020ed` feat(web)（10 檔：繁中優先 UI＋產品縮圖/型號＋人物中文名＋研究卡死逃生口）＋`95de538` docs（WORKLOG/ROM/CHANGE_TRACKER），push origin main（`0f4fac9..95de538`）。部署照 SOP A：兩 build 皆 SUCCESS——server build `0c17b36d-56f0-46ef-abc0-4fd8da6b0917`／web build `251593d8-5dfa-47c2-b8e2-28ca05819442`；server rev **00012-drd**（`services update --image`，env 與 `--no-cpu-throttling` 保留）＋ web rev **00010-lmf**（`run deploy` 帶 `--set-env-vars=NEXT_PUBLIC_API_BASE`）。冒煙：health 200／ready 200／web 307／zh-TW 200。**boot reaper 實證**（新 rev 開機 log）：`2026-07-18T06:54:01.091816Z [research] reaper: marked 1 interrupted crawl job(s) as failed on boot`＝prod 卡死的 CyberPower deep job 被收（筆數 1）。migration 015：pg runner 靜默成功（僅出錯才 throw＝crash boot），boot 正常 `listening on :8080`＋/api/ready 200＋reaper 行在 migrate() 之後印出＝三重佐證 015 已套、無 migration 錯誤。DEPLOY.md 版本節已更新。
+
+## 2026-07-19 session（會中進行收斂：三介面→帳號B 單一 cockpit＋帳號A 一鍵開簡報）
+
+- **緣起**: 使用者看「會中進行」三連結（簡報舞台／會中副駕／HUD）截圖，指過於複雜——應同頁同時打開、不需給連結；一人開 Google Meet 按允許即拿到聲音；副駕/HUD 要同介面。澄清：簡報仍分享給對方，但報告者開兩帳號（A 報告、B 看額外內容）。決策細節 ROM 2026-07-19 17:20。
+- **設計 pass（Workflow：3 讀檔→3 方案→3 視角評審→收斂）**: **關鍵發現＝使用者要的融合頁已存在於 /copilot**（CockpitView 左收音＋右完整 HUD＋I2 gate，同 <main>／雙 WS）。真正缺：(a) 導覽平列三 external 使人不知 cockpit 已含 HUD；(b) /hud 與 cockpit 右半重複；(c) 收音遠非一鍵（登入＋setup＋隱藏同意勾選第四關）。評審選 Design 1「一站式副駕」（贏 invariant-safety＋impl-risk 兩鏡頭）嫁接 Design 2 檔案清單＋帳號A launcher；棄 Design 3 /live hub（多 render-cockpit 容器＝近 I3 破面）與 Design 2 stepper（動 live-critical 邏輯）。
+- **使用者三拍板**（AskUserQuestion，皆採建議預設）：全套照建議做／／hud 保留但從導覽移除（留第二裝置）／收音中度精簡。
+- **實作（Workflow：Foundation 鎖契約→UI 平行四檔→Verify 三路對抗）**，七檔 apps/web：
+  1. **導覽**（AppShell＋HomeDashboard）：nav.live 收斂為兩入口（簡報舞台/present、會中副駕·HUD/copilot），移除頂層 hud；兩檔一致。
+  2. **cockpit 外殼**（CockpitView＋globals.css）：私人帳號B 說明＋可收折「在另一台裝置看 HUD」affordance（buildHudUrl 連結＋複製＋QR 佔位）；版面/雙 WS/pane 掛載未動。
+  3. **收音摩擦**（CopilotView）：同意內嵌起始卡（非預設勾）＋分頁音訊三步引導於 picker 前＋zero-track 一鍵重試；相位機/介面不變、getDisplayMedia 前不 await createMeeting。
+  4. **帳號A launcher**（SlideEditor）：「開始簡報」＝靜態預覽（deckId-only）＋連線會議播放（createMeeting→buildPresentUrl→開分頁，present-role token）；不動 present/PresentStage。
+  5. **helpers**（meeting-session）：buildPresentUrl/buildHudUrl（locale 前綴絕對 URL）；i18n 兩語系加 25 鍵、移除 hud.title。
+- **驗證**: apps/web `tsc --noEmit` exit 0 零診斷；fresh-context 走查全 PASS（兩入口無 hud、affordance/雙WS、consent 非預設＋一鍵重試＋無 await createMeeting、launcher present URL、25 鍵兩語系齊）；不變量＋authz 攻擊者視角 PASS（誤帶/跨 org token 仍漏不出 HUD、I1/I2/I3 未削弱、present/PresentStage/SuggestionQueue/deck-patch 皆未碰）。**未 commit（硬規則 10，等使用者核准）**。
+- **誠實邊界/記債**: 「一鍵允許拿聲音」技術不可能（getDisplayMedia 必跳系統選單，app 不能替選 Meet 分頁/勾分頁音訊）——只能壓站內點擊＋拔隱形陷阱。靜態預覽假設 PresentStage 無 meetingId/token 時走本機翻頁（未改該檔驗證，待實機或小追查確認）。QR 為 inline-SVG 佔位（無 QR 相依，複製連結為實際交接路徑）。帳號 A↔B 跨帳號 live-sync 免貼連結需 Design 3 join-as-present 端點（工作量 L），此輪不做。工作區另有未提交 CRM 變更，commit 時只 stage cockpit 相關檔。
+- **待使用者**: 核准 commit（見終報 message）；核准後部署只重建 web（純 apps/web）；實機兩帳號＋Meet 走查真收音。
+
+## 2026-07-19 session（CRM 五指令：人物去重＋照片＋社群專區＋研究更多＋技術棧UI）
+
+- **使用者五指令**（看 ConnactAI 擴編版結果截圖）：人物重複要合併且頭銜累加；還是沒照片；要社群媒體專區（FB/IG/Threads/YT 專門整理）；要「研究更多」（既有基礎上驗證＋補缺）；技術棧難讀要改版＋說明文字。另同輪打包六記債（semaphore settle/尾段 deadline/cleanUrl 白名單/預算預設對齊/逃生口 65→95 分）。
+- **兩路調查根因**：contacts 合併鍵只比 full_name 精確字串（威妥瑪/漢語拼音/英文名各算一人，fullNameZh 從不參與）；深度模式 payload.contacts=[] 把官網 contacts（拼音統一+帶照片）整批丟棄；deep prompt 明令不填照片；social_links 早在抓但沒映射給前端、YT/Threads 內容合成後即丟；company_tech 無說明欄；gap 分析純 citation 計數不看 DB 空欄。
+- **實作（Workflow 9 agents：WS-A 資料層→WS-B 引擎序跑＋WS-C web 平行）**：
+  1. migration 016（tech note_zh＋company_social_posts 表）＋017（crawl_jobs.mode CHECK 放寬加 more——E2E 逮到的漏網 migration，SQLite 走 010 重建 pattern）。
+  2. 人物去重四件套：fullNameZh fallback 合併鍵（兩條 upsert 路徑）＋mergeTitle「 · 」累加去重上限 4 段＋dedupeCompanyContacts 研究後自動合併 pass（10 引用欄 re-point、deal_contacts PK 撞刪重複、≥2 verified 跳過護欄、單群一交易）＋deep 不再丟官網 contacts；E2E 後契約擴充：CJK 內嵌抽取入群＋回填 fullNameZh、羅馬拼音正規化全等橋接（嚴禁模糊）。
+  3. 照片：crawler 補抓 CSS background-image；enrichKeyPeople 照片獵取（alt 含人名 詞界匹配、og:image 需 title 含人名、佔位圖檔名黑名單）；頭像 referrerPolicy=no-referrer。
+  4. 社群：SocialFetcher 回結構化 posts 落 company_social_posts；GET /companies/:id/social；web 新 SocialTab（四平台帳號卡＋貼文/影片清單）。
+  5. 研究更多：mode=more——DB 空欄種子定向查詢（cap 12）、基礎角度縮 overview+news、公司欄 fill-empty 不覆寫、同值異源佐證 confidence +0.15 cap 0.9（不動人工 verified）、跑完自動 dedupe＋獵照。
+  6. 技術棧：抽取器產 noteZh 一句說明；TechTab 改分類分組列表。
+- **審查修復**：confirmed 2 全修（photo-hunt 拉丁 2 字母段子字串誤中→詞界匹配；補查軟 deadline 與硬 timeout 同值形同虛設→hard−clamp(1/6,60s,600s)）；2 low 附證據不修（契約既定設計/範圍外）。
+- **E2E（本地 more 模式實跑 Connact AI，10.3 分）**：dedupe merged=4 removed=5 **零誤併**、四組人物三組完美收斂（程峻宏 5→3 揪出 zh=null 漏併→契約擴充後實資料驗收 3→1、7→5 列、中文名回填、頭銜累加 4 段）；tech note_zh 0→3（內容實質）；公司欄 fill-empty 實證（8 欄前後不變）；佐證升信心 0→5 筆 0.70；social 端點 200；migration 017 開機自動套；唯一垃圾照片（FB_default 佔位圖）→黑名單修＋DB 清掉。
+- **驗證數字**：crm 8 檔 61 測＋server 35 檔 181 測＋web tsc/next build 全綠。**未 commit（硬規則 10，等使用者核准）**。
+- **與平行 session 交疊**：會中導覽收斂輪（上一節）同倉未 commit，globals.css/messages×2/api.ts 四檔兩輪交錯——commit 切分方案見終報。
+- **記債**：同公司同中文名不同人會被合併（契約既知風險，需人工鍵時再議）；meeting_signals.entity_ref_json 軟參照未 re-point（display-only）；圖片代理/落地儲存（hotlink 依賴 no-referrer）；FB/IG 無官方抓取管道（僅帳號卡）；photo 真實命中率仍受來源限制。
+- **simplify＋/code-review 收尾（使用者指令）**：simplify 3 處真收斂（import 併行×2＋SOCIAL_PLATFORMS 單一真源）；5 鏡頭審查（掃兩輪合流 40 檔＋16 新檔）raw 6→過門檻 1——SocialTab 社群連結無 scheme 驗證（儲存型 XSS 面，兩輪驗證兵對 React 19 是否中和 javascript: href 結論相反→不賭，server buildSocialLinks/sanitizeSocialPosts 走 cleanUrl＋client httpUrl 純文字降級雙層白名單）；順收三筆低分（photo-hunt \b 詞界誤中 data-alt→(?:^|[\s"'])、CJK 抽取加 2-4 字＋地名/公司 stoplist 防「(台北)」誤組、dedupe 尾段補軟 deadline 守衛）；meeting-session wsToken 入 /present URL（47 分）屬導覽輪檔案記錄供該輪參考。終驗：crm 64＋server 188＋web tsc 全綠。
+
+## 2026-07-19 session（DynamicSlide 匯入徹底重構——保留原簡報＋尾端 append，獨立 worktree 分支）
+
+- **緣起**：使用者匯入設計精美的簡報（金融商品AI導入計畫，實為 `AI金融商品應用v1.pdf`），發現匯入後變成「另一份純文字簡報」（標題亂碼 AIé‡‘èž…、每頁 heading 全「Page」、bullets 夾 CONNACT logo/頁碼 13、原視覺全失）。要求：DynamicSlide 應在**原簡報基礎上、尾端依會議內容加頁**，並檢查整條有無類似錯誤、逐項確認目的。
+- **根因（Opus 調查，皆 檔案:行號）**：匯入管線設計本質＝pptx/pdf 拆純文字 SlideSpec→建**全新 deck**→平台深色模板重畫，原檔不落地。三疊加缺陷：multer 檔名 latin1 亂碼＋標題永遠取檔名；extractSlideBlocks 只認 title placeholder 當 heading 且未過濾頁尾/頁碼；資料模型只存 SlideSpec 無欄承載原始頁。append 本身正確（符合 I1）。
+- **使用者逐項拍板（AskUserQuestion）**：①保留原簡報、只尾端加頁；②以原始 .pptx 為準（匯出可編）；③顯示用 server 轉每頁圖片；④這輪完整重構；來源＝**pptx 主力/PDF 次要雙路徑**（PDF 原始頁無法忠實變可編 pptx，故 PDF→PDF）；⑤存 Postgres bytea（無新物件儲存）；⑥獨立 worktree 隔離（主樹 research WIP 不動）。決策全記 ROM。
+- **Phase 0 spike（真證據）**：A＝Debian 容器 libreoffice-impress+poppler+fonts-noto-cjk 轉檔（4頁 3.2s、峰值 152MiB、中文需 fonts-noto-cjk 硬需求、image +~1GB）；B＝jszip 嫁接補充頁到既有 pptx，**使用者實機 PowerPoint 開 merged.pptx 零修復、18 頁正確**。
+- **實作（worktree 分支 `worktree-dynamicslide-preserve-original`，從 585a077 分）**：Phase 2 foundation（migration 018/型別/repos-deck-assets/import-jobs/signed-url/assets-route/路由骨架）→平行 build（IMPORT 匯入+rasterize job／EXPORT 雙路 merge／WEB 鎖定+進度+續簽／DOCKER apt）→整合。詳見 CHANGE_TRACKER 2026-07-19 22:10。
+- **驗證**：typecheck 5ws 綠、crm 50/server 163 測綠；Phase 3 五維對抗式審查 4 confirmed 全修（migration 撞號 018/匯入卡 processing 開機對帳/補充頁尺寸讀原檔 sldSz/簽章 TTL 8h+續簽）；/code-review ≥80 confirmed 0；/simplify 套 6；**Docker 真檔 E2E 3 案例全綠**（PDF 19→21頁、真 pptx 16→18 slide、寬螢幕補充頁滿版，中文像素忠實）。E2E 產物 `Desktop\meetcopilot-spike\e2e\`。
+- **待使用者**：(1) 開 E2E 產物（merged.pdf/merged.pptx/merged-widescreen.pptx）確認；(2) 核准 commit-to-branch / merge-to-main / 部署（部署動 apps/server→重建 server image 含新 apt 層 +~1GB；動 apps/web→重建 web）。
+- **merge 注意**：本支 migration **018**（主樹 research WIP 已佔 016_social_tech/017_more_mode）；crm-core 冪等測試已改 gap-tolerant。merge 前確認 018 不撞屆時主樹最高號。
+- **隔離狀態**：code 全在 worktree 分支；docs（本檔/ROM/CHANGE_TRACKER）在主樹補（與 research session 平行編輯交疊，Edit 精確插入未覆蓋）。**本檔已超 150 上限（研究 session 內容為主），歸檔待兩線 session 收斂後處理。**
+- **記債**：真 pptx 恰為 10×5.625（寬螢幕修正只用合成檔驗）；補充頁生成走真 Gemini 管線未在本輪 E2E 驗；export HTTP 層/錯誤逾時路徑/加密 PDF 未驗；conversion job max-instances>1 時開機對帳理論上可能誤殺他實例進行中轉檔（現部署 max-instances=1 故無虞）。

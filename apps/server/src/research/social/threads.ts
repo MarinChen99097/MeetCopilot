@@ -4,8 +4,8 @@
  * ≤30 則貼文 → SourceText。解析失敗 → skip＋log，**不得讓整個 job 失敗**（回 []）。禁登入態爬取。
  */
 import type { CrawlProvider } from "../crawler.js";
-import type { SourceText } from "../deep-research.js";
-import type { SocialFetcher, SocialFetchInput, SocialFetchCtx } from "./types.js";
+import type { NewSocialPost } from "@meetcopilot/shared";
+import type { SocialFetcher, SocialFetchInput, SocialFetchCtx, SocialFetchResult } from "./types.js";
 
 const MAX_POSTS = 30;
 const MIN_POST_CHARS = 8;
@@ -81,17 +81,18 @@ function extractPostsFromHtml(html: string): string[] {
 export function createThreadsFetcher(crawler: CrawlProvider): SocialFetcher {
   return {
     platform: "threads",
-    async fetch(input: SocialFetchInput, ctx: SocialFetchCtx): Promise<SourceText[]> {
+    async fetch(input: SocialFetchInput, ctx: SocialFetchCtx): Promise<SocialFetchResult> {
+      const empty: SocialFetchResult = { sources: [], posts: [] };
       const profileUrl = threadsProfileUrl(input.handles.threads);
       if (!profileUrl) {
         ctx.log(`[social:threads] no threads handle for "${input.companyName}" — skipping`);
-        return [];
+        return empty;
       }
       try {
         const raw = await crawler.fetchRaw(profileUrl);
         if (!raw) {
           ctx.log(`[social:threads] fetch returned nothing for ${profileUrl} — skipping`);
-          return [];
+          return empty;
         }
         // 貼文優先取 <script> JSON；抽不到則退回 innerText（登入/consent 牆時多半空 → skip）。
         let posts = extractPostsFromHtml(raw.html);
@@ -106,18 +107,18 @@ export function createThreadsFetcher(crawler: CrawlProvider): SocialFetcher {
         posts = posts.slice(0, MAX_POSTS);
         if (posts.length === 0) {
           ctx.log(`[social:threads] no public posts parsed for ${profileUrl} — skipping`);
-          return [];
+          return empty;
         }
-        const overview: SourceText = {
-          url: raw.finalUrl || profileUrl,
-          title: `${input.companyName} — Threads`,
-          text: `Threads 公開檔案：${input.companyName}\n近期公開貼文（${posts.length} 則）：\n- ${posts.join("\n- ")}`,
-        };
+        const url = raw.finalUrl || profileUrl;
+        const title = `${input.companyName} — Threads`;
+        const body = `Threads 公開檔案：${input.companyName}\n近期公開貼文（${posts.length} 則）：\n- ${posts.join("\n- ")}`;
+        // Threads 個別貼文無穩定 URL → 以 profile URL 為自然鍵，落一則彙整貼文（結構化鏡像）；postCount 供顯示。
+        const post: NewSocialPost = { platform: "threads", url, title, content: body, metrics: { postCount: posts.length } };
         ctx.log(`[social:threads] collected ${posts.length} post(s) from ${profileUrl}`);
-        return [overview];
+        return { sources: [{ url, title, text: body }], posts: [post] };
       } catch (e) {
         ctx.log(`[social:threads] skipped (${(e as Error).message})`);
-        return [];
+        return empty;
       }
     },
   };

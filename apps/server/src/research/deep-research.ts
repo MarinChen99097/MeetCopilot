@@ -18,8 +18,10 @@ import type { SafeFetcher } from "../import/extract.js";
 
 // ── 有界參數（呼叫時讀 env，clamp；.env 於 bootstrap 已載入）──
 // WP3「深與廣（30–60 分鐘級）」：整場軟 deadline 大幅放寬（多輪研究＋社群模板需更多時間）。
-const DEFAULT_BUDGET_MS = 1_200_000; // 整場軟 deadline（env DEEP_RESEARCH_BUDGET_MS，clamp 30s–1800s）
-const BUDGET_CEIL_MS = 1_800_000; // clamp 上界（30 分鐘）
+// 記債：預設 20→60 分（1_200_000→3_600_000），與 prod env 已設同值對齊；clamp 上界同步升到 60 分，
+// 否則 prod 的 DEEP_RESEARCH_BUDGET_MS=3_600_000 會被舊上界 1_800_000 夾掉、且預設值也會超過上界。
+const DEFAULT_BUDGET_MS = 3_600_000; // 整場軟 deadline（env DEEP_RESEARCH_BUDGET_MS，clamp 30s–3600s）
+const BUDGET_CEIL_MS = 3_600_000; // clamp 上界（60 分鐘）
 // S1-A1/A2「基礎查詢一律雙語 × 全部角度（11 角度）」：11×2=22 條基礎查詢須容得下，故扇出上限上調到 22（env
 // DEEP_RESEARCH_MAX_QUERIES，clamp 3–24）。round 1 = 22 基礎 + 7 社群 = 29 ≤ ROUND_QUERY_CEIL(32)。
 const DEFAULT_MAX_QUERIES = 22; // grounding 扇出上限（env DEEP_RESEARCH_MAX_QUERIES，clamp 3–24）
@@ -58,6 +60,11 @@ export interface DeepResearchInput {
   includeBaseQueries?: boolean;
   /** 多輪研究：本輪額外的 follow-up 查詢（缺口分析產生）。 */
   extraQueries?: { angle: string; query: string }[];
+  /**
+   * more 模式：**只**跑指定 angle key 的基礎查詢（縮小基礎角度，如 ["overview","news"]）。
+   * 缺→全部角度（11）。仍雙語、仍受 maxQueries 上限。未知 key 忽略。
+   */
+  baseAngleKeys?: string[];
 }
 
 export interface GroundedFinding {
@@ -172,7 +179,12 @@ export function buildQueries(input: DeepResearchInput, maxQueries: number): { an
   const n = input.companyName;
   const bilingual = isBilingual(input); // 只用於排序（決定 zh/en 誰先），不用於排除
   const out: { angle: string; query: string }[] = [];
-  for (const a of ANGLES) {
+  // more 模式縮小基礎角度：只保留 baseAngleKeys 指定者（如 overview+news），保序；缺→全部角度。
+  const angles =
+    input.baseAngleKeys && input.baseAngleKeys.length > 0
+      ? ANGLES.filter((a) => input.baseAngleKeys!.includes(a.key))
+      : ANGLES;
+  for (const a of angles) {
     if (bilingual) {
       out.push({ angle: a.key, query: a.zh(n) });
       out.push({ angle: a.key, query: a.en(n) });
@@ -353,8 +365,14 @@ export function assembleSources(input: {
   return out.slice(0, cap);
 }
 
-/** 極簡計數旗號（限制並行）：acquire 逾額則排隊，release 放行下一個。供 A5 渲染 fallback 限並行用。 */
-function createSemaphore(max: number): { acquire: () => Promise<void>; release: () => void } {
+/** 計數旗號介面（限制並行）。 */
+export interface Semaphore {
+  acquire: () => Promise<void>;
+  release: () => void;
+}
+
+/** 極簡計數旗號（限制並行）：acquire 逾額則排隊，release 放行下一個。供 A5 渲染 fallback 限並行用。匯出供單測。 */
+export function createSemaphore(max: number): Semaphore {
   let active = 0;
   const queue: (() => void)[] = [];
   return {
@@ -389,6 +407,36 @@ function withRenderTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   }) as Promise<T | null>;
 }
 
+/**
+ * 記債：semaphore 名額佔用到「底層 work 真正 settle」才釋放——即使 timeoutMs 逾時先回 null，
+ * 名額仍佔位到 work（fetchRaw）收尾，避免逾時提前釋放名額導致實際併發超過上限。
+ * release 掛在底層 promise 的 settle（成功/失敗都釋放且只一次，掛 then 兩臂），故不會死鎖。匯出供單測。
+ */
+export async function runWithSemaphoreTimeout<T>(
+  sem: Semaphore,
+  work: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T | null> {
+  await sem.acquire();
+  let underlying: Promise<T>;
+  try {
+    underlying = Promise.resolve(work()); // work() 若同步 throw → 下方 catch 釋放名額
+  } catch {
+    sem.release();
+    return null;
+  }
+  // 只在底層 settle 時釋放（不在 timeout 時）；then 兩臂涵蓋成功/失敗，確保恰好釋放一次、且吞掉 rejection 不成 unhandled。
+  void underlying.then(
+    () => sem.release(),
+    () => sem.release(),
+  );
+  try {
+    return await withRenderTimeout(underlying, timeoutMs);
+  } catch {
+    return null; // 底層在 timeout 前 reject → 回 null（名額已由上面的 then 釋放）
+  }
+}
+
 export interface DeepResearcherOptions {
   budgetMs?: number;
   maxQueries?: number;
@@ -420,14 +468,8 @@ export function createDeepResearcher(
     rendersUsed++; // 記「嘗試次數」（含失敗）以硬性有界成本
     // 觀測性（不改行為）：E2E log 中零提及此路徑 → 觸發時印一行，方便確認 JS 渲染 fallback 有在跑。
     console.log(`[research:deep] render fallback: ${url}`);
-    await renderSem.acquire();
-    try {
-      return await withRenderTimeout(fn(url), RENDER_FALLBACK_TIMEOUT_MS);
-    } catch {
-      return null;
-    } finally {
-      renderSem.release();
-    }
+    // 記債：名額佔位到底層 fetchRaw 真正 settle 才釋放（逾時仍回 null，但不提前放行下一個），見 runWithSemaphoreTimeout。
+    return runWithSemaphoreTimeout(renderSem, () => fn(url), RENDER_FALLBACK_TIMEOUT_MS);
   };
   return {
     async research(input: DeepResearchInput): Promise<DeepResearchBundle> {

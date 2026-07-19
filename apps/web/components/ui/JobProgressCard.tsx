@@ -5,6 +5,7 @@ import { Spinner } from "./Spinner";
 /** 研究模式顯示名（與 EnrichPanel 三選一致）。 */
 const MODE_LABEL: Record<string, string> = {
   deep: "全網深度研究",
+  more: "補充研究（補缺＋驗證）",
   detailed: "官網深掃",
   quick: "快速掃描",
 };
@@ -48,7 +49,9 @@ export function JobProgressCard({
             ? "已排入佇列，稍候開始…"
             : job.mode === "deep"
               ? "正在全網研究（新聞／維基／公開檔＋官網產品）、逐欄標示來源…可離開再回來。"
-              : "正在爬取官網與子頁、抽取欄位…可離開再回來。"}
+              : job.mode === "more"
+                ? "正在補缺＋佐證驗證既有資料（定向雙語查詢）…可離開再回來。"
+                : "正在爬取官網與子頁、抽取欄位…可離開再回來。"}
         </p>
       ) : null}
 

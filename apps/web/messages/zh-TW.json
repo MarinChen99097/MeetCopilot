@@ -35,7 +35,9 @@
     "menu": "開啟選單",
     "closeMenu": "關閉選單",
     "newTab": "於新分頁開啟",
-    "language": "語言"
+    "language": "語言",
+    "present": "簡報舞台",
+    "copilot": "會中副駕 · HUD"
   },
   "crm": {
     "title": "CRM 管理",
@@ -43,7 +45,13 @@
   },
   "studio": {
     "title": "DynamicSlide 編輯",
-    "desc": "三段式簡報生成精靈、投影片編輯、pptx 匯出、會前 AI 生圖。"
+    "desc": "三段式簡報生成精靈、投影片編輯、pptx 匯出、會前 AI 生圖。",
+    "launchTitle": "開始簡報",
+    "launchHint": "靜態預覽只在本機翻頁；連線會議播放會建立會議 session，讓 HUD 批准的補充頁即時接到簡報尾端。",
+    "launchStaticPreview": "靜態預覽",
+    "launchLivePlay": "連線會議播放",
+    "launchOpening": "開啟中…",
+    "launchError": "無法開始會議播放，請稍後再試。"
   },
   "present": {
     "title": "簡報舞台",
@@ -67,10 +75,24 @@
     "cockpitKicker": "會中 · 現場",
     "cockpitLead": "一邊擷取會議聲音，一邊看即時建議與補充資料——同一個視窗。",
     "captureLabel": "擷取控制",
-    "hudLabel": "即時建議"
+    "hudLabel": "即時建議",
+    "cockpitAccountB": "這是你私人的副駕視窗（帳號 B），只在你的裝置上顯示、絕不分享；副駕與 HUD 已合併在同一畫面。",
+    "secondDeviceTitle": "在另一台裝置看 HUD",
+    "secondDeviceDesc": "用手機或平板掃描 QR，或複製連結開啟——即可在第二裝置上看同一場會議的 HUD。",
+    "secondDeviceCopy": "複製 HUD 連結",
+    "secondDeviceCopied": "已複製",
+    "secondDeviceQrAlt": "HUD 連結 QR code",
+    "secondDeviceEmpty": "開始 session 後，這裡會出現 HUD 連結。",
+    "consentInline": "我已取得與會者同意錄音與轉錄，用於產生即時建議。",
+    "consentInlineHint": "未勾選前，擷取到的聲音不會送出分析。",
+    "tabAudioTitle": "分享前，務必勾選「分享分頁音訊」",
+    "tabAudioStep1": "選「Chrome 分頁」，挑那個 Meet 分頁（不是整個螢幕或視窗）。",
+    "tabAudioStep2": "務必勾選左下角「分享分頁音訊 / Share tab audio」。",
+    "tabAudioStep3": "按「分享」開始擷取這個分頁的聲音。",
+    "zeroTrackRetry": "重試，並記得勾「分享分頁音訊」",
+    "startListening": "🎧 開始聆聽"
   },
   "hud": {
-    "title": "HUD",
     "desc": "即時建議、研究卡與逐字稿；接受/略過與深查。"
   },
   "enrichPanel": {
@@ -78,6 +100,8 @@
     "deepEntryDesc": "全網新聞／維基／公開檔＋官網＋社群帳號，逐欄標示外部來源。",
     "timeHint": "可能需要 30–60 分鐘，可離開頁面稍後回來看結果。",
     "start": "開始深度研究",
+    "moreLabel": "研究更多",
+    "moreDesc": "在既有資料上補缺＋驗證，較快。",
     "staleBadge": "已中斷",
     "staleBody": "研究已中斷（伺服器重啟或逾時），可重新發起。"
   },

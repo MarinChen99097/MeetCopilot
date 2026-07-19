@@ -125,9 +125,8 @@ const NAV_GROUPS: NavGroup[] = [
     kickerKey: "nav.live",
     live: true,
     items: [
-      { key: "present", href: "/present", labelKey: "present.title", icon: "stage", external: true },
-      { key: "copilot", href: "/copilot", labelKey: "copilot.title", icon: "headset", external: true },
-      { key: "hud", href: "/hud", labelKey: "hud.title", icon: "gauge", external: true },
+      { key: "present", href: "/present", labelKey: "nav.present", icon: "stage", external: true },
+      { key: "copilot", href: "/copilot", labelKey: "nav.copilot", icon: "headset", external: true },
     ],
   },
   { kickerKey: "nav.practice", items: [{ key: "train", href: "/train", labelKey: "train.title", icon: "mic" }] },

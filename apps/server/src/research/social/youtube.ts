@@ -8,7 +8,8 @@
  */
 import { fetchJsonSafe } from "./http.js";
 import type { SourceText } from "../deep-research.js";
-import type { SocialFetcher, SocialFetchInput, SocialFetchCtx } from "./types.js";
+import type { NewSocialPost } from "@meetcopilot/shared";
+import type { SocialFetcher, SocialFetchInput, SocialFetchCtx, SocialFetchResult } from "./types.js";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 const MAX_VIDEOS = 30;
@@ -111,7 +112,26 @@ async function resolveChannel(
   return r.items?.[0];
 }
 
-function channelSourceText(ch: YtChannel): SourceText {
+/** 統計字串（YouTube 回傳皆字串）→ 有限正整數；缺/非法→省略。 */
+function numOr(v: string | undefined): number | undefined {
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+/** ISO 時間字串 → epoch ms；缺/非法→undefined。 */
+function epochMs(iso: string | undefined): number | undefined {
+  if (!iso) return undefined;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : undefined;
+}
+/** 只保留有值的 metrics 鍵（避免落庫空鍵）。 */
+function pruneMetrics(m: Record<string, number | undefined>): Record<string, number> | undefined {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(m)) if (v !== undefined) out[k] = v;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function channelItem(ch: YtChannel): { source: SourceText; post: NewSocialPost } {
   const title = ch.snippet?.title ?? "YouTube channel";
   const url = ch.id ? `https://www.youtube.com/channel/${ch.id}` : "https://www.youtube.com";
   const st = ch.statistics ?? {};
@@ -122,10 +142,18 @@ function channelSourceText(ch: YtChannel): SourceText {
     st.viewCount ? `總觀看數：${st.viewCount}` : "",
     ch.snippet?.description ? `頻道簡介：${ch.snippet.description}` : "",
   ].filter(Boolean);
-  return { url, title: `${title} — YouTube 頻道`, text: lines.join("\n") };
+  const metrics = pruneMetrics({
+    subscribers: numOr(st.subscriberCount),
+    videoCount: numOr(st.videoCount),
+    views: numOr(st.viewCount),
+  });
+  return {
+    source: { url, title: `${title} — YouTube 頻道`, text: lines.join("\n") },
+    post: { platform: "youtube", url, title: `${title} — YouTube 頻道`, content: ch.snippet?.description, metrics },
+  };
 }
 
-function videoSourceText(v: YtVideo): SourceText | undefined {
+function videoItem(v: YtVideo): { source: SourceText; post: NewSocialPost } | undefined {
   const id = v.id;
   if (!id) return undefined;
   const title = v.snippet?.title ?? "YouTube video";
@@ -137,7 +165,22 @@ function videoSourceText(v: YtVideo): SourceText | undefined {
     st.viewCount ? `觀看數：${st.viewCount}` : "",
     v.snippet?.description ? `描述：${v.snippet.description}` : "",
   ].filter(Boolean);
-  return { url, title, text: lines.join("\n") };
+  const metrics = pruneMetrics({
+    views: numOr(st.viewCount),
+    likes: numOr(st.likeCount),
+    comments: numOr(st.commentCount),
+  });
+  return {
+    source: { url, title, text: lines.join("\n") },
+    post: {
+      platform: "youtube",
+      url,
+      title,
+      content: v.snippet?.description,
+      publishedAt: epochMs(v.snippet?.publishedAt),
+      metrics,
+    },
+  };
 }
 
 /**
@@ -146,15 +189,18 @@ function videoSourceText(v: YtVideo): SourceText | undefined {
 export function createYoutubeFetcher(apiKey: string): SocialFetcher {
   return {
     platform: "youtube",
-    async fetch(input: SocialFetchInput, ctx: SocialFetchCtx): Promise<SourceText[]> {
+    async fetch(input: SocialFetchInput, ctx: SocialFetchCtx): Promise<SocialFetchResult> {
+      const empty: SocialFetchResult = { sources: [], posts: [] };
       if (!apiKey) {
         ctx.log("[social:youtube] YOUTUBE_API_KEY not set — skipping YouTube platform");
-        return [];
+        return empty;
       }
       try {
         const ch = await resolveChannel(apiKey, input, ctx.signal, ctx.log);
-        if (!ch) return [];
-        const out: SourceText[] = [channelSourceText(ch)];
+        if (!ch) return empty;
+        const chItem = channelItem(ch);
+        const sources: SourceText[] = [chItem.source];
+        const posts: NewSocialPost[] = [chItem.post];
 
         const uploads = ch.contentDetails?.relatedPlaylists?.uploads;
         if (uploads) {
@@ -173,20 +219,23 @@ export function createYoutubeFetcher(apiKey: string): SocialFetcher {
                 ctx.signal,
               );
               for (const v of vids.items ?? []) {
-                const stx = videoSourceText(v);
-                if (stx) out.push(stx);
+                const item = videoItem(v);
+                if (item) {
+                  sources.push(item.source);
+                  posts.push(item.post);
+                }
               }
             }
           } catch (e) {
             ctx.log(`[social:youtube] uploads fetch failed (partial): ${(e as Error).message}`);
           }
         }
-        ctx.log(`[social:youtube] collected ${out.length} source(s) for "${input.companyName}"`);
-        return out;
+        ctx.log(`[social:youtube] collected ${sources.length} source(s) for "${input.companyName}"`);
+        return { sources, posts };
       } catch (e) {
         // 解析失敗 → skip＋log，不得害整個 job 失敗（orchestrator 亦 allSettled 兜底）。
         ctx.log(`[social:youtube] skipped (${(e as Error).message})`);
-        return [];
+        return empty;
       }
     },
   };

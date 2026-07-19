@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocale } from "next-intl";
 import type { CompanyNews, CompanyTech, CompanyDepartment, Deal, DealStage } from "@meetcopilot/shared";
 import {
@@ -92,8 +92,28 @@ export function NewsTab({ companyId }: { companyId: string }) {
   );
 }
 
+/**
+ * 技術棧一列（本地鏡像）：CompanyTech ＋ noteZh 一句繁中說明（migration 016 `company_tech.note_zh`）。
+ * shared 的 CompanyTech 由 server/packages 工程師平行加 noteZh；此本地聯集避免 tsc 因 shared 未就緒而紅
+ * （shared 補上後仍相容）。
+ */
+type TechRow = CompanyTech & { noteZh?: string };
+
 export function TechTab({ companyId }: { companyId: string }) {
-  const { items, loading, error, load } = useChild<CompanyTech>(() => getCompanyTech(companyId), [companyId]);
+  const { items, loading, error, load } = useChild<TechRow>(() => getCompanyTech(companyId), [companyId]);
+
+  // 分類分組：category（trim 後空 → 「其他」）→ 該分類的技術列；分類名按字母序。
+  const groups = useMemo(() => {
+    const map = new Map<string, TechRow[]>();
+    for (const t of items) {
+      const cat = t.category?.trim() || "其他";
+      const arr = map.get(cat);
+      if (arr) arr.push(t);
+      else map.set(cat, [t]);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [items]);
+
   return (
     <div className="mc-tabpane">
       <h3 className="mc-tabpane__title">技術棧</h3>
@@ -105,15 +125,28 @@ export function TechTab({ companyId }: { companyId: string }) {
         emptyTitle="尚無技術棧資料"
         emptyHint="用研究引擎偵測（BuiltWith 風）。"
       >
-        <ul className="mc-techgrid">
-          {items.map((t) => (
-            <li key={t.id} className="mc-techitem">
-              <span className="mc-techitem__cat">{t.category ?? "其他"}</span>
-              <span className="mc-techitem__name">{t.product ?? t.vendor ?? "未知"}</span>
-              <ConfidenceBadge value={t.confidence} />
-            </li>
+        <div className="mc-techstack">
+          {groups.map(([cat, rows]) => (
+            <section key={cat} className="mc-techstack__group">
+              <div className="mc-techstack__cat">{cat}</div>
+              <ul className="mc-techstack__list">
+                {rows.map((t) => (
+                  <li
+                    key={t.id}
+                    className="mc-techstack__item"
+                    title={t.detectedFrom ? `偵測來源：${t.detectedFrom}` : undefined}
+                  >
+                    <div className="mc-techstack__main">
+                      <span className="mc-techstack__name">{t.product ?? t.vendor ?? "未知"}</span>
+                      {t.noteZh ? <span className="mc-techstack__note">{t.noteZh}</span> : null}
+                    </div>
+                    <ConfidenceBadge value={t.confidence} />
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       </StateBoundary>
     </div>
   );

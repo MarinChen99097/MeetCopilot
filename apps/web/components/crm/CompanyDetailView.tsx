@@ -15,15 +15,26 @@ import { useEntityProvenance } from "./useProvenance";
 import { ContactsTab } from "./ContactsTab";
 import { ProductsTab } from "./ProductsTab";
 import { NewsTab, TechTab, DepartmentsTab, DealsTab } from "./ChildTabs";
+import { SocialTab } from "./SocialTab";
 import { NotesTab } from "./NotesTab";
 
-type TabKey = "overview" | "contacts" | "products" | "news" | "tech" | "departments" | "deals" | "notes";
+type TabKey =
+  | "overview"
+  | "contacts"
+  | "products"
+  | "news"
+  | "tech"
+  | "social"
+  | "departments"
+  | "deals"
+  | "notes";
 const TABS: { key: TabKey; label: string }[] = [
   { key: "overview", label: "總覽" },
   { key: "contacts", label: "人物" },
   { key: "products", label: "產品深檔" },
   { key: "news", label: "新聞" },
   { key: "tech", label: "技術棧" },
+  { key: "social", label: "社群" },
   { key: "departments", label: "部門" },
   { key: "deals", label: "商機" },
   { key: "notes", label: "筆記" },
@@ -95,6 +106,7 @@ export function CompanyDetailView({ companyId }: { companyId: string }) {
               {tab === "products" ? <ProductsTab companyId={companyId} /> : null}
               {tab === "news" ? <NewsTab companyId={companyId} /> : null}
               {tab === "tech" ? <TechTab companyId={companyId} /> : null}
+              {tab === "social" ? <SocialTab companyId={companyId} /> : null}
               {tab === "departments" ? <DepartmentsTab companyId={companyId} /> : null}
               {tab === "deals" ? <DealsTab companyId={companyId} /> : null}
               {tab === "notes" ? <NotesTab companyId={companyId} /> : null}

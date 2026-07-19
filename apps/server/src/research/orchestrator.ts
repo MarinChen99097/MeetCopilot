@@ -11,7 +11,7 @@
  * ⚠️ 語意註記（seam 提醒）：upsertFromCrawl 以 **domain** 為 dedupe key，而 enrich 以 **targetId** 指名既有列。
  *   故背景流程用「既有列的 domain（缺則從 URL host 推）」呼叫 upsert，讓它命中同一列。
  */
-import type { CrmCore } from "@meetcopilot/crm";
+import { dedupeCompanyContacts, type CrmCore } from "@meetcopilot/crm";
 import type {
   CrawlMode,
   CrawlTargetType,
@@ -22,6 +22,8 @@ import type {
   Contact,
   NewCompanyNews,
   NewCompanyFunding,
+  NewSocialPost,
+  NewProvenance,
   ProvenanceInput,
 } from "@meetcopilot/shared";
 import type { CrawlProvider, RawCrawl } from "./crawler.js";
@@ -50,6 +52,8 @@ import {
   type SourceText,
 } from "./deep-research.js";
 import { runDeepRounds, buildFollowUpQueries } from "./deep-rounds.js";
+import { buildMoreGapQueries, decideEvidenceBoost, isEmptyValue, SOCIAL_PLATFORMS } from "./more-mode.js";
+import { findPersonPhotoInHtml } from "./photo-hunt.js";
 import {
   runSocialFetch,
   socialFetchBudgetMs,
@@ -203,9 +207,9 @@ function domainFromUrl(url: string | undefined): string | undefined {
   }
 }
 
-/** deep→crawler：crawler 只認 quick/detailed；deep 走 detailed 爬官網取產品。 */
+/** deep/more→crawler：crawler 只認 quick/detailed；deep/more 走 detailed 爬官網取產品。 */
 function toCrawlMode(mode: CrawlMode): "quick" | "detailed" {
-  return mode === "deep" ? "detailed" : mode;
+  return mode === "deep" || mode === "more" ? "detailed" : mode;
 }
 
 /**
@@ -239,13 +243,27 @@ export function guardHumanCompanyName(
 }
 
 /**
- * 整體 job 逾時（ms）：env RESEARCH_JOB_TIMEOUT_MS，預設 3600000（60 分）。防背景流程掛死→永遠「研究中」。
- * WP3「深與廣（30–60 分鐘級）」：官網爬 ≤30min 硬上限 ∥ 多輪 grounding ≤20min ∥ 社群 fetch ≤10min（並行）
- * → 再序列多輪 Gemini 抽取＋redirect 解析。預設須寬鬆於此最壞路徑。
+ * 整體 job 逾時（ms）：env RESEARCH_JOB_TIMEOUT_MS，預設 5400000（90 分）。防背景流程掛死→永遠「研究中」。
+ * WP3「深與廣（30–60 分鐘級）」：官網爬 ≤30min 硬上限 ∥ 多輪 grounding ≤60min ∥ 社群 fetch ≤10min（並行）
+ * → 再序列多輪 Gemini 抽取＋redirect 解析＋主管背景/照片補查。記債：預設 60→90 分，與 prod env 已設同值對齊、
+ * 且須寬鬆於「grounding 整場 60 分＋序列後處理」最壞路徑。
  */
 function jobTimeoutMs(): number {
   const raw = Number.parseInt(process.env.RESEARCH_JOB_TIMEOUT_MS ?? "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 3_600_000;
+  return Number.isFinite(raw) && raw > 0 ? raw : 5_400_000;
+}
+
+/**
+ * 逐項補查用的「軟 deadline」預算（ms）：比硬 job 逾時（jobTimeoutMs）提早一段緩衝。
+ * 補查（enrichProductDetails / enrichKeyPeople / 照片獵取）逐項前檢查此 deadline——
+ * 若逕以 jobTimeoutMs 當軟 deadline，因外層 withTimeout(work, jobTimeoutMs()) 幾乎同時（甚至更早）啟動計時，
+ * 軟 deadline 永遠追不上硬 kill → graceful 收斂形同虛設、job 直接 markFailed，已增量落庫的資料也不會被 reindex。
+ * 故緩衝＝job 逾時的 1/6，鉗在 [60s, 600s]；讓補查在硬 kill 前先停止剩餘項，留時間落庫＋markDone＋reindex。
+ */
+function softDeadlineMs(): number {
+  const hard = jobTimeoutMs();
+  const buffer = Math.min(600_000, Math.max(60_000, Math.floor(hard / 6)));
+  return Math.max(1, hard - buffer);
 }
 
 /** 以 Promise.race 對一項工作施加硬逾時；逾時→reject（呼叫端既有 catch 會 markFailed 記「研究逾時」）。 */
@@ -529,10 +547,10 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       const { orgId, jobId, targetType, mode } = args;
       try {
         await jobs.markRunning(orgId, jobId);
-        // 分派：company 只要「無可爬 url」或「mode==='deep'」→ 一律走 name-based / grounding 全網深度研究（runDeep）；
-        // 其餘（company quick/detailed 有 url、或 contact）→ runStandard（需 url）。
+        // 分派：company 只要「無可爬 url」或「mode∈{deep,more}」→ 一律走 name-based / grounding 全網深度研究（runDeep）；
+        // 其餘（company quick/detailed 有 url、或 contact）→ runStandard（需 url）。more＝runDeep 補缺變體（見 runDeep）。
         const nameBased = targetType === "company" && !args.url; // 純以公司名稱研究（無官網）
-        const useDeep = targetType === "company" && (mode === "deep" || nameBased);
+        const useDeep = targetType === "company" && (mode === "deep" || mode === "more" || nameBased);
         // name-based（無 url）必須有 grounding + LLM 合成才能以公司名稱研究；正式環境已設，故實際會跑。
         if (nameBased) {
           const hasResearcher = Boolean(deps.deepResearcher || deps.grounding);
@@ -570,6 +588,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     const { orgId, jobId, targetType, mode, url, domain } = args;
     // standard 路徑必須有可爬的 url（分派已保證：只有 company 有 url 或 contact 才會進來；此為型別收斂＋防呆）。
     if (!url) throw new Error("no URL to crawl");
+    const runDeadlineAt = Date.now() + softDeadlineMs(); // 記債：產品補抽逐項前檢查用（軟 deadline，早於硬 withTimeout）
     const jobExtractor = extractorFor(orgId, jobId, args.requestedBy);
     const raw = await crawler.crawl({ url, mode: toCrawlMode(mode), screenshots: false });
 
@@ -596,7 +615,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       const gm = geminiFor(orgId, jobId, args.requestedBy);
       if (gm && payload.products && payload.products.length > 0) {
         try {
-          payload.products = await enrichProductDetails(gm, deps.extractModel, payload.products, raw);
+          payload.products = await enrichProductDetails(gm, deps.extractModel, payload.products, raw, runDeadlineAt);
         } catch (e) {
           console.error("[research] product-detail enrich (standard) failed:", e);
         }
@@ -646,22 +665,67 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
   }
 
   /**
+   * more：讀「目前 DB 值」找空欄（公司欄/產品/主管/社群平台）→ buildMoreGapQueries 產定向雙語 gap 種子（cap 12）。
+   * 純函式 buildMoreGapQueries 的 IO 薄封裝（讀 products/contacts/social）。失敗容忍（回已取得的）。
+   */
+  async function buildMoreGapSeeds(
+    orgId: string,
+    companyId: string,
+    company: Company,
+    seedSocialUrls: string[],
+  ): Promise<{ angle: string; query: string }[]> {
+    const products = await core.companyProducts.list(orgId, companyId).catch(() => [] as CompanyProduct[]);
+    const contactRows = await core.db
+      .all<{ full_name: string | null; full_name_zh: string | null }>(
+        `SELECT full_name, full_name_zh FROM contacts
+           WHERE org_id = ? AND company_id = ?
+             AND ((background_summary IS NULL OR background_summary = '') OR (photo_url IS NULL OR photo_url = ''))`,
+        [orgId, companyId],
+      )
+      .catch(() => [] as { full_name: string | null; full_name_zh: string | null }[]);
+    const contactsNeedingDetail = contactRows
+      .map((r) => (r.full_name_zh?.trim() || r.full_name?.trim() || ""))
+      .filter((s) => s.length > 0);
+    const handles = discoverHandles(seedSocialUrls);
+    const socialPlatformsPresent = SOCIAL_PLATFORMS.filter((p) => handles[p]);
+    return buildMoreGapQueries({
+      companyName: company.name,
+      bilingual: hasCjk(company.name) || (company.domain ?? "").toLowerCase().endsWith(".tw"),
+      company: company as unknown as Record<string, unknown>,
+      products: products.map((p) => ({
+        name: p.name,
+        pricing: p.pricingModel ?? p.pricingNotes,
+        specs: p.specs,
+        model: p.model,
+      })),
+      contactsNeedingDetail,
+      socialPlatformsPresent,
+    });
+  }
+
+  /**
    * deep（全網研究）路徑：DeepResearcher（web）並行官網 detailed 爬蟲（產品）→ 合成 → 寫 CRM。
    * 兩者失敗容忍（partial 可接受）。company 側欄位的 provenance 帶真實外部 source_url（不鎖官網）。
+   * mode='more' 為補缺變體（gap 種子查詢、fill-empty、佐證升信心；見內文 isMore 分支）。
    */
   async function runDeep(args: {
     orgId: string;
     jobId: string;
     targetId: string;
+    mode: CrawlMode;
     url?: string;
     domain?: string;
     requestedBy?: string;
   }): Promise<RunResult> {
     const { orgId, jobId, targetId, url } = args;
+    // more＝「研究更多」補缺變體：DB 空欄種子查詢、基礎角度縮為 overview+news、公司欄 fill-empty、佐證升信心。
+    const isMore = args.mode === "more";
     const company = await core.companies.findById(orgId, targetId);
     if (!company) throw new Error("company not found");
     const companyName = company.name;
     const dom = args.domain ?? company.domain ?? domainFromUrl(url);
+    // 整場軟 deadline（逐項補查前檢查用；早於硬 withTimeout，讓補查在 job 逾時前先自我收斂＋留時間落庫/markDone/reindex）。
+    const runDeadlineAt = Date.now() + softDeadlineMs();
 
     const deepResearcher = deepResearcherFor(orgId, jobId, args.requestedBy);
     const deepExtractor = deepExtractorFor(orgId, jobId, args.requestedBy);
@@ -679,34 +743,46 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     ];
     const socialHandles = discoverHandles(seedSocialUrls);
 
+    // more：以「目前 DB 值」的空欄產定向雙語 gap 種子（cap 12/輪），當 follow-up round 的查詢；只發一次（第二輪跑 gap 後即停）。
+    const moreGapSeeds = isMore
+      ? await buildMoreGapSeeds(orgId, targetId, company, seedSocialUrls)
+      : [];
+    let gapEmitted = false;
+
     // 並行（WP1 §1.4 / WP3 §3）：多輪 web 研究 ∥ 官網 detailed 爬蟲（產品）∥ 社群 fetch（youtube/threads）。
     // 各自有界、個別失敗容忍（partial 可接受）。無 url → 跳過官網 crawl（siteRaw=undefined）。
     const sitePromise: Promise<RawCrawl | undefined> = url
       ? crawler.crawl({ url, mode: "detailed", screenshots: false })
       : Promise.resolve(undefined);
-    const socialPromise: Promise<SourceText[]> =
+    const socialPromise: Promise<Awaited<ReturnType<typeof runSocialFetch>>> =
       deps.socialFetchers && deps.socialFetchers.length > 0
         ? runSocialFetch(
             deps.socialFetchers,
             { companyName, domain: dom, handles: socialHandles },
             { budgetMs: socialFetchBudgetMs(), log: (m) => console.log(m) },
           )
-        : Promise.resolve([]);
-    const roundsPromise = runDeepRounds(
-      deepResearcher,
-      { companyName, domain: dom, startUrl: url, includeSocial: true },
-      {
-        rounds: deepResearchRounds(),
-        buildFollowUps: (b) => buildFollowUpQueries(companyName, b),
-        onRound: async (_round, srcs) => {
-          try {
-            await jobs.markProgress(orgId, jobId, srcs);
-          } catch {
-            /* 進度回寫失敗不致命 */
+        : Promise.resolve({ sources: [], posts: [] });
+    // more：基礎角度縮為 overview+news（baseAngleKeys）、關社群模板（社群缺口已由 gap 種子承載）；follow-up＝gap 種子（發一次）。
+    const roundsInput = isMore
+      ? { companyName, domain: dom, startUrl: url, includeSocial: false, baseAngleKeys: ["overview", "news"] }
+      : { companyName, domain: dom, startUrl: url, includeSocial: true };
+    const roundsPromise = runDeepRounds(deepResearcher, roundsInput, {
+      rounds: deepResearchRounds(),
+      buildFollowUps: isMore
+        ? () => {
+            if (gapEmitted) return []; // gap 種子只發一次 → 跑完該輪無新種子即停
+            gapEmitted = true;
+            return moreGapSeeds;
           }
-        },
+        : (b) => buildFollowUpQueries(companyName, b),
+      onRound: async (_round, srcs) => {
+        try {
+          await jobs.markProgress(orgId, jobId, srcs);
+        } catch {
+          /* 進度回寫失敗不致命 */
+        }
       },
-    );
+    });
 
     const [webRes, siteRes, socialRes] = await Promise.allSettled([roundsPromise, sitePromise, socialPromise]);
     const bundle: DeepResearchBundle =
@@ -714,7 +790,9 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
         ? webRes.value.bundle
         : { groundedFindings: [], sourceTexts: [], citationUrls: [] };
     const siteRaw = siteRes.status === "fulfilled" ? siteRes.value : undefined;
-    const socialTexts: SourceText[] = socialRes.status === "fulfilled" ? socialRes.value : [];
+    const socialResult = socialRes.status === "fulfilled" ? socialRes.value : { sources: [], posts: [] };
+    const socialTexts: SourceText[] = socialResult.sources;
+    const socialPosts: NewSocialPost[] = socialResult.posts;
     // 社群 SourceText 併入 bundle（自動繼承 [S#]→真實 URL provenance，WP1 §1.1）。
     if (socialTexts.length > 0) bundle.sourceTexts.push(...socialTexts);
 
@@ -744,7 +822,8 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     const gm = geminiFor(orgId, jobId, args.requestedBy);
     if (gm && siteRaw && siteProducts.length > 0) {
       try {
-        siteProducts = await enrichProductDetails(gm, deps.extractModel, siteProducts, siteRaw);
+        // 記債：逐項前檢查 runDeadlineAt——補抽超時即停止剩餘產品（best-effort，不拖垮研究）。
+        siteProducts = await enrichProductDetails(gm, deps.extractModel, siteProducts, siteRaw, runDeadlineAt);
       } catch (e) {
         console.error("[research:deep] product-detail enrich failed:", e);
       }
@@ -793,19 +872,78 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     }
 
     // 合併公司欄位：web 覆蓋官網（profile 以外部來源為準）；provenance 官網在前、web 在後 → 覆蓋欄 web 勝（真實外部來源）。
-    const mergedCompany: Partial<Company> = { ...(siteExtract?.company ?? {}), ...(deep?.company ?? {}) };
-    const provenance: ProvenanceInput[] = [
+    let mergedCompany: Partial<Company> = { ...(siteExtract?.company ?? {}), ...(deep?.company ?? {}) };
+    let provenance: ProvenanceInput[] = [
       ...(siteExtract?.provenance ?? []),
       ...(deep?.companyProvenance ?? []),
     ];
     const products: Partial<CompanyProduct>[] = mergedProducts;
 
+    // more：(2) 公司非受信任欄改 fill-empty（既有非空不覆寫）＋(3) 佐證升信心。
+    //   - fill-empty：只保留「既有為空」的欄進 payload（含其 provenance），其餘不覆寫、其 provenance 也不寫（避免值/來源漂移）。
+    //   - 佐證：既有非空、正規化相等、新 sourceUrl 網域 ≠ 既有 provenance 網域、且既有欄非人工/已驗證 → supersede 一筆
+    //     higher-confidence provenance（保留既有值當快照、不動 verified）。
+    const boostRows: NewProvenance[] = [];
+    if (isMore) {
+      const existingProv = await core.provenance.listForEntity(orgId, "company", targetId).catch(() => []);
+      const provByField = new Map(existingProv.map((p) => [p.fieldName, p] as const));
+      const kept: Partial<Company> = {};
+      const filledFields = new Set<string>();
+      const existingCompany = company as unknown as Record<string, unknown>;
+      for (const [k, v] of Object.entries(mergedCompany)) {
+        if (isEmptyValue(existingCompany[k])) {
+          (kept as Record<string, unknown>)[k] = v; // 既有為空 → 允許填
+          filledFields.add(k);
+        }
+      }
+      for (const p of provenance) {
+        if (filledFields.has(p.fieldName)) continue; // 該欄走 fill-empty 正常寫入，不重複佐證
+        const ep = provByField.get(p.fieldName);
+        if (ep && (ep.filledBy === "human" || ep.verified === 1)) continue; // 不動人工/已驗證欄（避免 supersede 掉信任）
+        const boost = decideEvidenceBoost({
+          fieldName: p.fieldName,
+          existingValue: existingCompany[p.fieldName],
+          newValue: p.value,
+          newSourceUrl: p.sourceUrl,
+          newSourceType: p.sourceType,
+          existing: ep ? { sourceUrl: ep.sourceUrl, confidence: ep.confidence, verified: ep.verified } : undefined,
+        });
+        if (boost) {
+          boostRows.push({
+            entityType: "company",
+            entityId: targetId,
+            fieldName: boost.fieldName,
+            valueSnapshot: boost.valueSnapshot,
+            filledBy: "crawler",
+            sourceType: boost.sourceType ?? "web",
+            sourceUrl: boost.sourceUrl,
+            confidence: boost.confidence,
+            verified: boost.verified,
+          });
+        }
+      }
+      mergedCompany = kept;
+      provenance = provenance.filter((p) => filledFields.has(p.fieldName));
+    }
+
     const upsertDomain = dom ?? domainFromUrl(siteRaw?.finalUrl ?? url) ?? "";
-    const payload: CrawlPayload = { company: mergedCompany, contacts: [], products, news: [], provenance };
+    // Task 1：deep 不再丟棄官網 contacts——把 siteExtract.contacts 也走 contacts 落庫（先 site 後 deep.people，
+    // 靠 CONTACT_SPEC 的 full_name_zh fallback 鍵與 title/title_zh mergeTitle 收斂同一人）。
+    const siteContacts = siteExtract?.contacts ?? [];
+    const payload: CrawlPayload = { company: mergedCompany, contacts: siteContacts, products, news: [], provenance };
     // provenance 守則：人工建立/確認的公司名不被爬蟲/全網研究覆寫（P2-8）。
     await protectHumanCompanyName(orgId, targetId, companyName, payload);
     const saved = await core.companies.upsertFromCrawl(orgId, upsertDomain, payload, { targetId });
     const companyId = saved.id;
+
+    // more：佐證升信心的 supersede provenance（值/verified 不變、confidence↑）。best-effort，不因記帳失敗而讓研究失敗。
+    if (boostRows.length > 0) {
+      try {
+        await core.provenance.record(orgId, boostRows);
+      } catch (e) {
+        console.error("[research:more] evidence-boost provenance failed:", e);
+      }
+    }
 
     let fieldsFilled = payload.provenance.length;
 
@@ -835,9 +973,9 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
         savedPeople.push(saved);
         fieldsFilled += prov.length;
       }
-      // S1-A6：per-contact 背景補查（背景欄空缺的主管，≤5）。best-effort，補查失敗不讓研究失敗。
+      // S1-A6：per-contact 背景補查（背景/照片欄空缺的主管，≤5）＋照片獵取。best-effort，補查失敗不讓研究失敗。
       try {
-        fieldsFilled += await enrichKeyPeople(orgId, jobId, companyId, companyName, savedPeople, args.requestedBy);
+        fieldsFilled += await enrichKeyPeople(orgId, jobId, companyId, companyName, savedPeople, runDeadlineAt, args.requestedBy);
       } catch (e) {
         console.error("[research:deep] key-people enrich failed:", e);
       }
@@ -889,6 +1027,38 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       }
     } catch (e) {
       console.error("[research:deep] social_links persist failed:", e);
+    }
+
+    // 社群結構化貼文落庫（company_social_posts；自然鍵 [platform,url]，重抓更新不重複）。best-effort。
+    if (socialPosts.length > 0) {
+      try {
+        await core.companySocial.bulkUpsert(orgId, companyId, socialPosts);
+        fieldsFilled += socialPosts.length;
+      } catch (e) {
+        console.error("[research:deep] social posts persist failed:", e);
+      }
+    }
+
+    // Task 1 / more (4)：落庫完成後收斂同一人的重複主管列（按 full_name_zh 分組；survivor＝human-verified 或最舊）。
+    // 深度/more 皆跑；刪 stale profile_cards/embeddings，runJob 收尾的 reindex 會以合併後資料重建。best-effort。
+    // 軟 deadline 守衛（比照 enrichKeyPeople 記債）：dedupe 是多步 delete+rebuild（刪 stale 卡→改欄→靠收尾 reindex
+    // 重建）。若逼近硬 kill 才起跑，可能被 withTimeout 硬 timeout 打斷成半套（stale 卡已刪、reindex 未跑）。
+    // 故超過 runDeadlineAt 即 log 並跳過此尾段，讓 job 留餘裕 markDone＋reindex；未收斂的重複列下輪研究會再收斂。
+    if (Date.now() > runDeadlineAt) {
+      console.warn(
+        "[research:deep] dedupe tail deadline exceeded — skipping dedupeCompanyContacts (next round will converge)",
+      );
+    } else {
+      try {
+        const dd = await dedupeCompanyContacts(core.db, orgId, companyId);
+        if (dd.groupsMerged > 0 || dd.groupsSkipped > 0) {
+          console.log(
+            `[research:deep] dedupe contacts: merged=${dd.groupsMerged} removed=${dd.contactsRemoved} skipped=${dd.groupsSkipped}`,
+          );
+        }
+      } catch (e) {
+        console.error("[research:deep] dedupeCompanyContacts failed:", e);
+      }
     }
 
     // WP2 §2：單例 AI 筆記（narrative pinned + observations 每條附來源連結）。best-effort。
@@ -976,10 +1146,13 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
   }
 
   /**
-   * S1-A6：per-contact 背景補查。deep 落庫 people 後，對「背景欄空缺」的主管（≤5 人）各跑一條 grounded 查詢
+   * S1-A6：per-contact 背景補查。deep 落庫 people 後，對「背景或照片欄空缺」的主管（≤5 人）各跑一條 grounded 查詢
    * （姓名+公司+職稱 學經歷 LinkedIn，雙語擇一依姓名語言），把回答結構化，**僅回填空欄**（title/titleZh/
    * backgroundSummary/backgroundSummaryZh/linkedinUrl/fullNameZh），帶 provenance（sourceUrl＝真實 citation）。
-   * 查無/失敗即跳過，**嚴禁捏造**。回新增的欄位數（fieldsFilled 計入）。需 grounding + gemini，缺一即 skip。
+   * 照片獵取：對仍無 photoUrl 者，取該人 grounding citation 前 2 個 URL fetchRaw（SSRF/渲染預算沿用 crawler），
+   *   解析 <img> alt 含人名 token 的 src（og:image 僅當 title 含人名才收），過絕對 http(s)＋副檔名/追蹤像素過濾，
+   *   confidence 0.5＋provenance sourceUrl=該頁。查無/失敗即跳過，**嚴禁捏造**。
+   * 記債：deadlineAt 逐項前檢查——超時即停止剩餘主管並 log。回新增的欄位數。需 grounding + gemini，缺一即 skip。
    */
   async function enrichKeyPeople(
     orgId: string,
@@ -987,6 +1160,7 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
     companyId: string,
     companyName: string,
     people: Contact[],
+    deadlineAt: number,
     userId?: string,
   ): Promise<number> {
     if (!deps.grounding || !deps.gemini) return 0;
@@ -995,10 +1169,17 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       deps.meter && deps.gemini
         ? meteredGeminiFor(orgId, `person-bg:${jobId}`, "gemini_extract", userId)
         : deps.gemini;
-    // 觸發條件：backgroundSummary 空缺（deep 抽取從不填此欄 → 實際即「尚未補查過」的主管）。取前 N。
-    const targets = people.filter((p) => p.fullName && !cleanStr(p.backgroundSummary)).slice(0, PERSON_ENRICH_MAX);
+    // 觸發條件：backgroundSummary 或 photoUrl 空缺（尚未補查過 / 尚無頭像）。取前 N。
+    const targets = people
+      .filter((p) => p.fullName && (!cleanStr(p.backgroundSummary) || !cleanStr(p.photoUrl)))
+      .slice(0, PERSON_ENRICH_MAX);
     let filled = 0;
     for (const c of targets) {
+      // 記債：逐項前檢查 deadline——超時即停止剩餘主管（log 一次）。
+      if (Date.now() > deadlineAt) {
+        console.warn("[research:deep] key-people enrich deadline exceeded — stopping remaining");
+        break;
+      }
       const zh = hasCjk(c.fullName); // 姓名語言分流：中文名走中文查詢、否則英文
       const query = (
         zh
@@ -1066,6 +1247,40 @@ export function createResearchOrchestrator(deps: ResearchDeps): ResearchOrchestr
       fillEmpty("backgroundSummaryZh", c.backgroundSummaryZh, bg.backgroundSummaryZh);
       fillEmpty("fullNameZh", c.fullNameZh, bg.fullNameZh);
       fillEmpty("linkedinUrl", c.linkedinUrl, validLinkedinUrl(bg.linkedinUrl));
+
+      // 照片獵取：仍無 photoUrl 者 → 取該人 grounding citation 前 2 個 URL fetchRaw，解析 <img> alt/og:image 含人名者。
+      if (!cleanStr(c.photoUrl)) {
+        const candidateUrls: string[] = [];
+        const addUrl = (u?: string): void => {
+          if (u && !candidateUrls.includes(u)) candidateUrls.push(u);
+        };
+        addUrl(srcUrl); // 已解析的真實 citation 優先
+        for (const cc of grounded.citations) addUrl(cc.url);
+        const zhName = (patch.fullNameZh as string | undefined) ?? c.fullNameZh;
+        for (const purl of candidateUrls.slice(0, 2)) {
+          if (Date.now() > deadlineAt) break; // 記債：逐項前檢查
+          let raw: Awaited<ReturnType<typeof crawler.fetchRaw>> = null;
+          try {
+            raw = await crawler.fetchRaw(purl);
+          } catch (e) {
+            console.error("[research:deep] photo fetchRaw failed:", e);
+          }
+          if (!raw) continue;
+          const page = raw.finalUrl || purl;
+          const photo = findPersonPhotoInHtml(raw.html, { fullName: c.fullName, fullNameZh: zhName, pageUrl: page });
+          if (photo) {
+            patch.photoUrl = photo;
+            prov.push({
+              fieldName: "photoUrl",
+              value: photo,
+              sourceUrl: page,
+              sourceType: classifySourceType(page),
+              confidence: 0.5,
+            });
+            break;
+          }
+        }
+      }
       if (prov.length === 0) continue; // 全部欄位皆已有值或查無 → 不寫
       try {
         await core.contacts.upsertFromCrawl(orgId, companyId, {

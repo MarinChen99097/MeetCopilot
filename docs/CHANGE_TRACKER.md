@@ -28,611 +28,157 @@
 
 ## Archives
 
-（尚無）
+- [`change_archives/archive_2026-07-19.md`](change_archives/archive_2026-07-19.md) — 涵蓋 2026-07-07 ~ 2026-07-18（55 筆、602 行）。主題：M0 地基→M5 完成→GCP Cloud Run 部署上線；CRM 核心＋研究引擎擴編（爬蟲深廣多輪、社群來源、雙語 *Zh gloss、per-contact 背景抽取 MAX_TOKENS 韌性、deep/more 模式）；DynamicSlide／會中副駕／模擬訓練三產品線；admin 平台後台＋記帳＋停權；UI 換皮＋可收折側欄 Shell＋首頁儀表板；Postgres 移植；多輪 code-review／simplify 修復。2026-07-19（含）起之新紀錄留於本檔。
 
 ---
 
 <!-- TRACKER_BELOW -->
 
-### 2026-07-18 21:40 | 研究引擎擴編輪 化簡：PersonBackgroundRaw 重複介面收斂為別名＋ProductsTab 巢狀三元運算子扁平化
-- **工作區**: apps/server, apps/web
-- **類型**: refactor
-- **檔案**: `apps/server/src/research/deep-extractor.ts`, `apps/web/components/crm/ProductsTab.tsx`
-- **改了什麼**:
-  - **deep-extractor.ts（重複邏輯收斂）**: `PersonBackgroundRaw` 與 `PersonBackground` 兩介面欄位完全相同（6 個同名 optional string），前者僅用於 `gemini.generateJson<PersonBackgroundRaw>` 模型輸出邊界。將 `interface PersonBackgroundRaw {…6 欄…}` 改為 `type PersonBackgroundRaw = PersonBackground;`（別名保留「Raw＝未消毒模型形狀」語意，消掉重複欄位清單）。Before：兩個各列 6 欄的 interface。After：`PersonBackground` interface ＋ `type PersonBackgroundRaw = PersonBackground;`。行為零變（同型別，消毒流程 cleanStr/saneTitle 不動）。
-  - **ProductsTab.tsx（巢狀三元運算子扁平化）**: `const oneLiner = product ? (isZh && product.oneLinerZh ? product.oneLinerZh : product.oneLiner) : undefined;` 巢狀三元→改 guard＋單層三元（對齊本檔 line 78 既有 `const oneLine = isZh && p.oneLinerZh ? p.oneLinerZh : p.oneLiner;` 慣例）。After：`let oneLiner: string | undefined; if (product) oneLiner = isZh && product.oneLinerZh ? product.oneLinerZh : product.oneLiner;`。型別/行為零變。
-- **為什麼**: 研究引擎擴編輪（S1/S2，未 commit）化簡精煉——保功能完全不變，僅收斂重複與去巢狀三元。刻意**不動**：`OpportunitySignalType` 型別＋`OPPORTUNITY_SIGNALS` 陣列雖看似重複，但對齊本檔既有 `SENIORITIES`/`NEWS_CATEGORIES`（型別＋顯式字面陣列）慣例，改 `as const` 派生反增 readonly cast 摩擦，故保留；`withRenderTimeout` 的 `as Promise<T | null>` 非冗餘（`Promise.race` 產 `Awaited<T>` 對泛型 T 不可證等於 T，cast 承載型別橋接），保留；`unionArr`/`unionStrArr`/`cleanStrArr` 三處相似小工具分居三檔、語意各異（回 [] vs undefined），跨檔抽共用屬過度工程，保留；`enrichKeyPeople` 內 gm 選取雖與 `geminiFor` 相似，但改用 helper 會因回傳 `GeminiClient | undefined` 需加 `!` 斷言，內聯反而更清楚，保留。不違反 I1/I2/I3。
-- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 31 檔 152 測全綠（基準不變）；`cd apps/web; npx tsc --noEmit` 綠（EXIT=0）。未 commit（硬規則 10）。
-
-### 2026-07-18 21:05 | per-contact 人物背景抽取 MAX_TOKENS 根因修復 v3：定位為 titleZh 退化重複循環→prompt 硬性單一職稱＋關 thinking＋temp 0.4＋職稱防污染守衛
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `apps/server/src/research/deep-extractor.ts`
-- **改了什麼**:
-  - **根因（用 usageMetadata 微型實測定位，推翻前一版假設）**: 前一版（20:05）以為 MAX_TOKENS 是「thinking token 吃光 maxOutputTokens」，遂放寬 8192／壓 thinkingBudget——**無效**。用 raw `generateContent` 直讀 usageMetadata 實測：撞 MAX_TOKENS 時 `thoughtsTokenCount=undefined`（thinking 非元兇），而 `candidatesTokenCount` 撐滿整個 maxOutputTokens——模型對 **`titleZh` 欄進入退化重複循環**（如 `"技術長合夥創辦人兼技術長技術長技術長…"` 灌爆輸出→JSON 未收尾→不可解析）。誘因＝人物身兼多職（CTO＋共同創辦人＋顧問＋董事），模型想把所有職稱塞進單一 gloss 欄而繞不出來。gemini-3.5-flash **不支援 frequencyPenalty**（實測回 400「Penalty is not enabled for this model」），故不能用懲罰項打斷。
-  - **修法（四管齊下，全部經實測驗證）**: (1) **PERSON_BG_SYSTEM 硬性單一職稱**（根因解）——title/titleZh 只取「單一主要職稱」、`titleZh ≤8 字`、明令禁列舉/禁串接/禁重複字/禁塞日期URL。(2) **config 改 `maxOutputTokens 8192→2048`＋`thinkingBudget 512→0`（關閉）＋`temperature 0.3→0.4`**（實測 temp 0.3 偏易循環、1.0 反更糟、0.4/0.6 皆 6/6 乾淨；max 2048 對 ~250 token 小 JSON 綽綽有餘，循環時 ~5s 快失敗而非 ~20s；thinking 必須關，否則 thinking token 會吃掉 2048）。(3) **輸入截斷 `8000→6000`＋MAX_TOKENS 單次重試砍半 `3000` 重取獨立樣本**（新 `isMaxTokensError`＋`runOnce(chars)`；新配置下每次獨立取樣 ~100% 成功，再失敗才上拋→呼叫端 `enrichKeyPeople` 逐人 try/catch 隔離跳過，寧缺勿錯）。(4) **職稱防污染守衛 `saneTitle(v,maxLen)`**（純函式）——title/titleZh 若過長（EN 80／zh 40）或含 URL／含換行＝欄位污染（實測 temp 稍高時偶發 `titleZh="營運長2020年起…https://…"`）→視為缺回 undefined，不落庫垃圾。
-  - Before：`maxOutputTokens:4096, thinkingBudget:1024, temperature:0.3`、`answer.slice(0,8000)`、無重試、titleZh 直接 `cleanStr` 落庫、PERSON_BG_SYSTEM 未限單一職稱。After：如上（含 `PERSON_BG_INPUT_CHARS=6000`/`PERSON_BG_RETRY_CHARS=3000`/`PERSON_TITLE_MAXLEN=80`/`PERSON_TITLEZH_MAXLEN=40` 常數）。
-- **為什麼**: S1-A6 per-contact 補查在 gemini-3.5-flash 下 E2E 實測 8 位主管 backgroundSummary 全空，微型實測（本次）於「身兼多職」長文 3/5 撞 MAX_TOKENS，根因為 titleZh 退化重複循環（非 thinking）。硬性單一職稱＋關 thinking＋適中溫度打斷循環、防污染守衛擋殘餘欄位污染、重試＋隔離兜住罕見殘餘。沿用雙語不變量（主要欄留來源語言、繁中走 *Zh gloss）與 fill-empty；不違反 I1/I2/I3。
-- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 31 檔 152 測全綠。微型實測（一次性 tsx，放 session scratchpad 未進 repo，從 apps/server/.env 唯讀 GEMINI_API_KEY，gemini-3.5-flash）：**修後**真實 `extractPersonBackground` 對 (a) ~5.7K「身兼多職」中英混合長文 3/3 OK＋(b) ~611 字正常長文 3/3 OK，共 6/6 無 MAX_TOKENS，titleZh 皆單一職稱（技術長／營運長）、backgroundSummary ≤3 句、繁中 gloss ≤2 句、姓名/LinkedIn 正確，1.4–2.0s；stub 決定性驗證：MAX_TOKENS 重試路徑（首呼 6034 字→拋 MAX_TOKENS→砍半 3034 字重取→復原）PASS、輸入本已短時不重試直接上拋 PASS。**修前**同長文 3/3 撞 MAX_TOKENS 且砍半重試亦 3/3 失敗（證舊「砍輸入」策略對輸出重複循環無效）。.env 唯讀未動。未 commit（硬規則 10）。
-
-### 2026-07-18 20:05 | S1/S2 E2E 品質尾巴修復：per-contact／per-product 抽取 MAX_TOKENS 韌性＋grounding 504 逾時放寬＋render fallback 觀測
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `apps/server/src/gemini.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/extractor.ts`, `apps/server/src/research/deep-research.ts`, `.env.example`, `apps/server/src/research/product-detail-isolation.test.ts`(新)
-- **改了什麼**:
-  - **症狀1+2 MAX_TOKENS（thinking 吃光預算）**: gemini-3.5-flash 的 thinking token 與可見輸出**共用** `maxOutputTokens`，小任務給太緊時 thinking 吃光預算→零 JSON→`finishReason=MAX_TOKENS`。`gemini.ts`：`GenerateJsonOptions` 新增 `thinkingBudget?`，`generateJsonMetered` config 於有值時帶 `thinkingConfig:{thinkingBudget}`。`deep-extractor.extractPersonBackground`：`maxOutputTokens` 2048→4096＋`thinkingBudget:1024`＋PERSON_BG_SYSTEM 明限（背景 ≤3 句、繁中 gloss ≤2 句）。`extractor`：`PRODUCT_DETAIL_MAX_OUTPUT_TOKENS` 4096→8192、新增 `PRODUCT_DETAIL_THINKING_BUDGET=2048`，`extractOneProductDetail` 帶 `thinkingBudget`。失敗仍**寧缺勿錯**（維持跳過，不退化填原文）；單人/單品失敗隔離既有（enrichKeyPeople／enrichProductDetails 迴圈各有 try/catch continue），新增測試覆蓋。
-  - **症狀3 grounding 504 DEADLINE_EXCEEDED**: `generateGrounded` 原沿用 client 預設逾時 30s，升模 gemini-3.5-flash 後單次常 >30s→attempt 1/2、2/2 皆 AbortError／504。新增 `GENERATE_GROUNDED_TIMEOUT_MS=90_000` 並於呼叫帶 `httpOptions:{timeout}`；預設 `attempts` 2→3；加 try/catch `normalizeCallError`（client 逾時→retryable=false 不白等第二次 90s；上游 504 帶數字 status→原樣可重試退避）。`deep-research.ts`：`GROUNDING_CONCURRENCY` 由固定 3 改 env `DEEP_RESEARCH_GROUNDING_CONCURRENCY`（clamp 1–6，**預設 3→2** 降上游互相拖慢），`.env.example` 同步一行註解。
-  - **症狀4 render fallback 觀測**: `deep-research.renderWithLimits` 觸發時補一行 `console.log('[research:deep] render fallback: <url>')`（僅觀測、不改行為、每 job ≤8 次有界）。
-- **為什麼**: 研究引擎擴編（S1/S2，未 commit）E2E 對 Connact AI 實測發現三品質尾巴——8 位主管 backgroundSummary 全空、一產品二段深抽整筆丟失、多筆 grounding 逾時。根因皆為升模 gemini-3.5-flash 後 thinking 變重＋grounding 變慢，而小任務 token 預算與 grounded 逾時未同步放寬。沿用雙語不變量與欄位級 provenance；不違反 I1/I2/I3。
-- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 31 檔 152 測全綠（新 product-detail-isolation.test.ts 1 測：一品拋 MAX_TOKENS、另一品成功→不上拋、失敗品保原樣、成功品被補抽；standard-retry／breadth-s1／merge-deep-products 回歸綠）。.env 未動（唯讀），僅改 .env.example。未 commit（硬規則 10）。
-
-### 2026-07-18 19:30 | S1 code-review 修復：A8 mergeDeepProducts base/variant 誤配＋A6 per-contact provenance grounding-redirect 未還原
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/merge-deep-products.test.ts`(新)
-- **改了什麼**:
-  - **A8 mergeDeepProducts 精確配對優先**: 官網同時有基礎名與變體（如 `Ghost` / `Ghost Pro`）時，原 `products.find(... productNameMatches ...)` 因 `productNameMatches` 對稱含式匹配（`na.includes(nb) || nb.includes(na)`）＋ first-match，會把外部 `Ghost Pro` 觀點誤併入排序在前的較短基礎名 `Ghost`。改為**兩段配對**：先 `normalizeProductName(p.name) === normalizeProductName(name)`（正規化後精確相等），無精確命中才退回 `productNameMatches`（含式，契約 A8 允許）。Before：`const target = products.find((p)=>...&&productNameMatches(p.name,name));` After：`const target = products.find((p)=>named(p)&&normalizeProductName(p.name)===nName) ?? products.find((p)=>named(p)&&productNameMatches(p.name,name));`（`named` 為 hoisted type-guard）。新 import `normalizeProductName`。合併規則（fill-empty/union、notableCustomers 併 notes、unmatched 不建新列）不變。
-  - **A6 per-contact provenance sourceUrl 還原真實出處**: `enrichKeyPeople` 內 `firstCitationUrl` 在「該人物新查詢的 citations 全為 grounding-redirect（vertexaisearch，Gemini grounding 常態）」時會退回中介 redirect，且此 URL 從未經 `resolveRedirects` 還原 → `classifySourceType` 誤標 `web`，與 deep.people/uncategorized/opportunities（皆已還原）不一致。改為：取得 `srcUrl` 後若 `isGroundingRedirect(srcUrl)`，用 `resolveRedirects(deps.fetcher ?? safeFetcher, citations, { budgetMs:10_000, max:8 })` 還原，依 citation 順序取第一個非 redirect 真實 URL 覆寫 `srcUrl`（有界、best-effort、失敗保留原值——與 uncategorized/opportunities 路徑一致）。`srcUrl` 由 `const` 改 `let`。
-- **為什麼**: S1 廣度包 code-review 確認缺陷。A8（medium）：base+variant 產品目錄（X / X Pro、Cloud / Cloud Enterprise）下外部競品/客戶/差異化錯置到基礎名；精確相等優先解決 first-match 貪婪選短名的碰撞，不改契約。A6（low）：契約 A6 明列「sourceUrl＝真實 citation」，還原後 UI 徽章顯示真新聞/維基網域而非中介 redirect。沿用雙語不變量與欄位級 provenance；不違反 I1/I2/I3。
-- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 30 檔 151 測全綠（新 merge-deep-products.test.ts 6 測：精確配對優先/順序顛倒/含式 fallback/fill-empty union/unmatched 不建列/不變異入參；breadth-s1、name-guard、deep-notes 回歸綠）。未動 web。未 commit（硬規則 10）。
-
-### 2026-07-18 19:05 | S2 產品包 B1–B5：每頁截斷動態化＋prompt 最低具體度＋產品 schema 補 techStack/competitors＋per-product 二段式聚焦補抽＋爬蟲客戶案例加權
-- **工作區**: apps/server
+### 2026-07-19 22:10 | DynamicSlide 匯入徹底重構——保留原簡報＋尾端 append（獨立 worktree 分支）
+- **工作區**: packages/shared, packages/crm, apps/server, apps/web, tools(Dockerfile.server)
 - **類型**: feat
-- **檔案**: `apps/server/src/research/extractor.ts`, `apps/server/src/research/crawler.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/product-detail-s2.test.ts`(新)
-- **改了什麼**:
-  - **B1 每頁截斷動態化**: extractor 移除固定 `PER_PAGE_PROMPT_CHARS=6000`，改 `PER_PAGE_MAX_CHARS=12000`/`PER_PAGE_MIN_CHARS=6000` ＋純函式 `computePerPageChars(textLengths, miscChars)`（匯出供測）：`sum(min(len,12000))+雜項 ≤ MAX_PROMPT_CHARS(180K)` → 每頁給足 12000；否則 `(180K−雜項)/頁數` clamp `[6000,12000]`。`buildPrompt` 先算「非頁面文字」雜項（task/header/每頁框線 label/PAGE IMAGES 清單/join 換行）再據此 slice 每頁（Before：每頁一律 `.slice(0,6000)`，就算預算沒用滿也砍）。
-  - **B2 prompt 硬性最低具體度**: SYSTEM 產品段加「MINIMUM SPECIFICITY」硬要求（每產品 ≥3 keyFeatures 含 detail、≥1 句 targetMarket；頁面有價格 MUST 填 priceText；有規格表 MUST 填 specs），並把 priceText/targetMarket/keyFeatures/specs 各行語氣由 SHOULD/optional 改 MUST/at least。**schema required 仍只留 name（防幻覺）**，純靠 prompt 強制。
-  - **B3 產品 schema 補 techStack/competitors**: `ExtractedProduct`＋`RESPONSE_SCHEMA.products.items.properties` 加 `techStack`/`competitors`（string[]），`foldProduct` 落庫（`strArr` 去空去重）。**knownIssues 不加**。落庫路徑既有（mappers `tech_stack_json`/`competitors_json`）→ 無需改 crm。
-  - **B4 per-product 二段式**: extractor 抽出共用 `foldProduct`（toProducts 逐筆呼叫）；新增純函式 `matchProductsToPages`（匯出供測：productUrl 完全命中爬取頁優先→正規化名稱含式匹配 url/title，短名 <4 不匹配，cap 10，nearby 收其餘同名頁 ≤2）、`extractOneProductDetail`（單品 rich schema `PRODUCT_DETAIL_SCHEMA`/`PRODUCT_DETAIL_SYSTEM`，只餵該頁全文 ≤12000＋鄰近頁，maxOutputTokens 4096，required 仍只 name）、`mergeProductDetail`（純量 fill-empty、陣列 union、keyFeatures 依名 union、specs 依 key union，就地變異，不覆寫既有非空）、匯出 `enrichProductDetails`（並行 ≤3、單品失敗容忍、gemini 未設/無頁/無產品→原樣返回）。orchestrator 加 `geminiFor`（metered `product-detail:` idem 或裸 gemini），runStandard（用 `raw`）與 runDeep 產品組裝區（用 `siteRaw`、在 S1-A8 對齊前）各跑一次，try/catch 容忍。**維持既有 halveCrawlPages MAX_TOKENS 減半重試不動**。
-  - **B5 爬蟲客戶案例權重**: crawler `LINK_KEYWORDS` 客戶/案例兩條（英 customers|case-study|clients|success｜中 客戶|案例|實績|成功案例|合作夥伴）weight 2→4（排在新聞/媒體之前）。
-- **為什麼**: RESEARCH 產品深度升級（S2，S1 完成後跑）——首段全站抽取常因固定砍 6000 字/頁而漏規格、且對有專頁的產品只得 `{name}`。B1 讓預算沒用滿時整頁餵、B2 用 prompt 逼最低具體度、B4 對有專頁產品二段式聚焦補抽（fill-empty/union 不覆寫），B3 補兩欄、B5 讓客戶案例頁更易被爬到。沿用雙語不變量（主要欄留來源語言、繁中走 *Zh gloss）與欄位級 provenance；不違反 I1/I2/I3。
-- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 29 檔 145 測全綠（含新 product-detail-s2 14 測：computePerPageChars 7＋matchProductsToPages 7；breadth-s1 11 測回歸綠）。未 commit（硬規則 10）。
+- **隔離**: 全部在 git worktree 分支 `worktree-dynamicslide-preserve-original`（從 HEAD 585a077 分出），**主樹那批未提交的 research/social 工作原封未動**（使用者拍板獨立 worktree 隔離）。以下檔案指 worktree 分支內。
+- **檔案（新增）**: `packages/crm/migrations-pg/018_deck_import.sql`, `packages/crm/migrations/018_deck_import.sql`, `packages/crm/src/repos-deck-assets.ts`, `packages/crm/src/repos-import-jobs.ts`, `apps/server/src/lib/signed-url.ts`, `apps/server/src/decks-routes/assets-route.ts`, `apps/server/src/decks-routes/import-handler.ts`, `apps/server/src/decks-routes/export-handler.ts`, `apps/server/src/import/deck-rasterize.ts`, `apps/server/src/import/conversion-job.ts`(+test), `apps/server/src/generation/pptx-merge.ts`(+test), `apps/server/src/generation/pdf-merge.ts`(+test), `apps/server/src/generation/supplement-render.ts`, `apps/server/src/generation/canvas-size.ts`
+- **檔案（改）**: `packages/shared/src/deck.ts`, `packages/crm/src/{ports,core,index,repos-decks}.ts`, `packages/crm/test/crm-core.test.ts`, `packages/crm/test/decks-repo.test.ts`, `apps/server/src/decks-routes/index.ts`, `apps/server/src/index.ts`(boot reaper+對帳), `apps/server/src/import/pptx-parser.ts`, `apps/server/src/generation/pptx-render.ts`, `apps/server/src/crm-routes/helpers.ts`, `apps/server/package.json`(+pdf-lib), `apps/web/lib/api.ts`, `apps/web/components/studio/{StudioView,SlideEditor}.tsx`, `apps/web/components/present/PresentStage.tsx`, `apps/web/components/slide/SlideRenderer.tsx`, `apps/web/messages/{en,zh-TW}.json`, `Dockerfile.server`
+- **改了什麼**（架構重構，根因＝匯入把 pptx/pdf 拆成純文字＋平台模板重畫、丟棄原檔）:
+  - **匯入**（import-handler）: 修 multer 檔名編碼(latin1→utf8)＋讀真標題(docProps/core.xml / pdf metadata)；原檔位元組存 `deck_assets(source_pptx|source_pdf)`；建 `import_status='processing'` deck；enqueue 背景轉檔 job；廢除舊「extractSlideBlocks 拆文字建 deck」路徑（pptx-parser 只留 theme/title）。
+  - **轉檔 job**（deck-rasterize+conversion-job）: pptx→`soffice`→pdf→`pdftoppm`→PNG；pdf→`pdftoppm`→PNG（免 LibreOffice）；逐頁存 `deck_assets(page_image)`＋建 N 筆 `deck_slides(kind='original')` image-full spec（dataUri=內部參照 `asset:<id>`）；設 original_count/import_status。boot reaper（failInterruptedJobs）＋**開機對帳 failInterruptedImports**（processing deck→failed，修中斷卡死）。
+  - **顯示**: getDeck route 把 `asset:<id>` 換 HMAC 簽章短效 URL（signed-url.ts，TTL 預設 8h）；asset 串流端點（assets-route，免 authRequired、純簽章＋org 綁定）；前端 `<img>` 吃簽章 URL、每 30 分續簽。
+  - **鎖定**（I1/I2）: `deck_slides.kind='original'` → `updateSlide` guard 拒改（OriginalSlideLockedError→409）；前端原始頁唯讀面板＋縮圖鎖。append 仍只尾端。
+  - **匯出雙路**（export-handler）: pptx 來源→補充頁 pptxgenjs→**jszip 嫁接**回原 pptx（可編 pptx，含 app.xml 頁數/多 layout/撞名避讓/就地覆寫省 recompress）；pdf 來源→補充頁→pdf→**pdf-lib** 接原 pdf；0 補充頁回原檔 bytes；補充頁以**原檔畫布尺寸**渲染(canvas-size 讀 sldSz/pdf 頁尺寸，修寬螢幕破版)。
+  - **Docker**: apt 疊 `libreoffice-impress poppler-utils fonts-noto-cjk`（+~1GB，中文渲染硬需求）。
+- **為什麼**: 使用者匯入設計精美簡報後發現變成「另一份純文字簡報」（標題亂碼、heading 全 Page、bullets 夾 CONNACT/頁碼、視覺全失）。重構＝保留原簡報視覺原封（原檔存 bytes＋轉圖顯示＋鎖定）、只尾端 append 補充頁、匯出＝原簡報＋新頁。
+- **不變量**: I1（原始頁 kind guard＋append 尾端不動已播/原始頁）、I2（approval gate 未動）、I3（播放視圖零 HUD、簽章 URL/原始頁/匯入進度不外流）皆保留；Phase 3 五維對抗式審查確認零違反。
+- **migration 撞號注意**: 本支用 **018**（主樹 research 工作已佔 016_social_tech/017_more_mode）；crm-core.test 冪等測試改 gap-tolerant（平行分支合法產生版本間隙，保「版本唯一＋重跑穩定」）。merge 時確認 018 不與屆時主樹最高號相撞。
+- **驗證**: typecheck 5 workspace 全綠；crm 50 測、server 163 測綠；Phase 3 對抗式審查 4 confirmed（migration 撞號/匯入卡死/補充頁尺寸/簽章 TTL）**全修**；/code-review ≥80 confirmed **0**；/simplify 14 建議套 6（去重/就地嫁接/刪死碼/並行讀）；**Docker 真檔 E2E 3 案例全綠**（PDF 19→21頁、真 pptx 16→18 slide、寬螢幕補充頁滿版；中文轉檔像素忠實、`unzip -t`/`pdfinfo` 無錯）。未 commit（硬規則 10，等使用者核准）。
 
-### 2026-07-18 18:55 | S1 廣度包 A1–A10：深度研究扇出雙語×全角度＋新五角度＋grounding升模＋深讀擴編/JS fallback＋per-contact補查＋商機/產品外部回填＋sources補真
-- **工作區**: apps/server
-- **類型**: feat
-- **檔案**: `apps/server/src/research/deep-research.ts`, `apps/server/src/research/deep-rounds.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/grounding.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/breadth-s1.test.ts`(新), `.env.example`
-- **改了什麼**:
-  - **A1 基礎查詢一律雙語**: `buildQueries` 改為**對全部角度同時出 zh+en**，`isBilingual` 只決定排序（zh 先/en 先，逐角度交錯），不再排除 zh；移除 `ZH_ANGLES`。`deep-rounds.buildFollowUpQueries` gap 加深查詢改**雙語各一條**（deepen map 由 `Record<string,string>` 改 `{zh,en}`，每弱角度 push 兩條），slice 上限 8→13。
-  - **A2 新增五角度（雙語）**: `ANGLES` 加 hiring／caseStudies／reviews／registry／awards（各 zh+en）；`ROUND_QUERY_CEIL` 24→32。為容 11 角度×2=22 條基礎查詢：`DEFAULT_MAX_QUERIES` 9→22、clamp `[3,12]`→`[3,24]`（round1＝22 基礎+7 社群=29≤32）。
-  - **A3 grounding 升模**: `GroundingContext` 加 `model?`，`createGroundingProvider` 把 `ctx.model` 傳入 `generateGrounded`；`DeepResearcherOptions.groundingModel` → `research()` 的 `grounding.answer(q,{...,model})`；orchestrator `deepResearcherFor` 帶 `groundingModel: deps.extractModel`（deep 走 flash 而非 flash-lite）；`meteredGrounding` 估價 key 對齊 `extractModel ?? textModel`。**/ground 端點不帶 model → 仍 textModel（不受影響）**。
-  - **A4 深讀擴編**: `DEFAULT_MAX_SOURCES` 6→12、env clamp `[0,10]`→`[0,20]`。
-  - **A5 深讀 JS fallback**: `DeepResearcherOptions.renderFallback` 注入（orchestrator 傳 `crawler.fetchRaw`＝Playwright、SSRF 安全同 crawler：host-resolver pin＋page.route 逐請求攔截）。source pool worker 在 `extractFromUrl` throw 或 `text<200` 時走 render fallback；deep-research 端 closure 限「每 job ≤8 次（跨輪）、並行 ≤2（semaphore）、單 URL 20s（withRenderTimeout）」。
-  - **A6 per-contact 補查**: orchestrator `enrichKeyPeople`——deep 落 people 後對 backgroundSummary 空缺者（≤5）各跑一條 grounded 查詢（姓名+公司+職稱 學經歷 LinkedIn，依姓名 CJK 分流雙語擇一），`deep-extractor.extractPersonBackground` 結構化，**僅 fill-empty**（title/titleZh/backgroundSummary/backgroundSummaryZh/linkedinUrl(驗 https+linkedin.com)/fullNameZh）＋provenance（sourceUrl＝真實 citation）；查無/失敗跳過，嚴禁捏造。people 迴圈改捕捉 `savedPeople: Contact[]`。
-  - **A7 商機路徑**: deep-extractor `RESPONSE_SCHEMA`/`ExtractedDeep`/`DeepExtraction` 加 `opportunities[]`{title,detail,signalType(enum),sourceUrl?}＋SYSTEM 指示；orchestrator 落入 **observations 單例筆記「## 研究商機線索」**（與未歸類情報同一則，避免兩個 observations 單例互覆寫），每條附 [來源]；sourceUrl 走 resolveMerged/citation resolve 還原。**不建 deals**。
-  - **A8 產品外部回填**: deep-extractor 加 `products[]`{name,differentiators?,competitors?,notableCustomers?,sourceUrl?}＋SYSTEM 指示；orchestrator `mergeDeepProducts`（`productNameMatches`＝正規化 lowercase+去空白標點符號＋含式匹配）對齊官網既有產品，**fill-empty/union** 進 differentiators/competitors（`unionArr` 不覆寫既有非空）、notableCustomers 併入 notes；配不到→uncategorized（不建新產品列）。
-  - **A9 sources 補真**: `deep-research.assembleSources`（純函式）——官網頁優先→深讀真實來源→解析後真實出處→**已引用但未深讀的 citation（resolve 後真實 URL）**；去重、cap 60、排除仍是 grounding-redirect 的中介 URL。orchestrator 另加一趟 `resolveRedirects(bundle.citationUrls, {max:40,budget:20s})`。
-  - **A10 純函式 vitest**（`breadth-s1.test.ts`）: buildQueries 雙語（非 CJK 名也含 zh）＋全角度＋交錯截斷；`normalizeProductName`/`productNameMatches`；`assembleSources` cap 60/去重/官網優先/排除中介 redirect。
-- **為什麼**: RESEARCH 廣度升級（S1 凍結契約）——把深度研究從「單語為主、9 扇出、6 深讀、純 undici 抓取」擴為「全角度雙語、22 扇出、12 深讀＋JS 渲染 fallback、grounding 升模」，並補三類消費（主管背景 per-contact 補查、商機線索筆記、產品外部回填），使 sources 顯示真實出處。沿用雙語不變量（主要欄留來源語言、繁中走 *Zh gloss）與欄位級 provenance；不建 deals、不建新產品列、不違反 I1/I2/I3。
-- **驗證**: `cd apps/server; npx tsc --noEmit` 綠（EXIT=0）；`npx vitest run` 28 檔 131 測全綠（含新 breadth-s1 11 測；deep-notes/deep-rounds/social-discovery 回歸綠）。未 commit（硬規則 10）。
-
-### 2026-07-18 15:15 | WEB 包 C1/C2：ProductsTab 明細補 render（specs 表/keyFeatures 副行/personas/competitors/pricingNotes/oneLiner/外開連結）＋ productsTab i18n namespace
-- **工作區**: apps/web
-- **類型**: feat
-- **檔案**: `apps/web/components/crm/ProductsTab.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
-- **改了什麼**:
-  - **ProductsTab 明細補 render（C1）**: (1) `SpecTable` 把 `product.specs`（JsonObject）render 成 key-value 表格（`fmtSpecValue` 值序列化：string/number/boolean 直出、陣列 join、其餘 JSON.stringify；空值/空物件不 render；`mc-spectable__wrap` overflow-x 橫捲）。(2) `FeatureList` 取代原「keyFeatures 只 render `.name` chip」——名稱主行＋ `detail`／`benefit` 副行（**有值才顯示副行**，benefit 以 ✓ 綠字標價值點）。(3) 新增 `targetPersonas`（ListBlock accent）、`competitors`（ListBlock warn）。(4) `pricingNotes` 以 `field()`（ProvenanceField，可細填/驗證，與 targetMarket 一致）插入定價群組。(5) `oneLiner(Zh)` 於明細頭部（`isZh && oneLinerZh ? oneLinerZh : oneLiner`，`mc-product-detail__oneliner`）。(6) `productUrl`/`docsUrl` 外開連結（`mc-extlink`、`target="_blank" rel="noopener noreferrer"`）。既有 techStack/integrations/differentiators/knownIssues ListBlock 沿用不動。
-  - **i18n 化 ProductsTab 標籤（C2 前置）**: 全元件 UI 標籤改走 `useTranslations("productsTab")`（原本硬編繁中，且英文 locale 會看到繁中標籤——latent i18n 缺口）；資料語言邏輯（oneLinerZh/descriptionZh 依 `useLocale` 擇顯）維持不動。原因：C1 新標籤須經 messages，若只新標籤走 t() 會與既有硬編繁中在同一明細面板混排（英文使用者半英半中），故將明細面板＋外層清單標籤一併收斂到 t() 以維持面板一致。
-  - **globals.css 新增 class**: `mc-product-detail__oneliner`、`mc-product-detail__links`、`mc-extlink`(+hover)、`mc-spectable__wrap`/`mc-spectable`(th/td/last-child)、`mc-featurelist`/`__item`/`__name`/`__detail`/`__benefit`。全用既有 `var(--mc-*)` token（benefit 用 `--mc-ok` 綠、extlink border 沿用 info 藍 rgba），僅**新增** selector，未改既有規則、未動 studio-present.css（I3）。
-  - **messages productsTab namespace（C2）**: zh-TW.json＋en.json 各新增 25 鍵 `productsTab.*`（title/emptyTitle/emptyHint/loadError/uncategorized/category/model/status/pricingModel/priceFrom/pricingNotes/targetMarket/productLink/docsLink/zhSummary/keyFeatures/specs/techStack/integrations/targetPersonas/differentiators/competitors/knownIssues/peopleTitle/peopleEmpty）。
-- **為什麼**: 本輪 server 包開始外部回填產品級 techStack/competitors 及 specs/keyFeatures 明細（S1/S2 契約），web 端須把既有型別已有、但明細完全沒 render 的欄位（specs 完全沒 render、keyFeatures 只顯示 name、targetPersonas/competitors/pricingNotes/productUrl/docsUrl/oneLiner 明細皆缺）補齊消費，並將新標籤正規 i18n（雙語 parity）。不違反 I1/I2/I3。
-- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（EXIT=0）；messages 兩檔 JSON 合法、leaf key parity 211=211（productsTab 25=25）。未動 /present 播放視圖與 studio-present.css。未 commit（硬規則 10）。
-
-### 2026-07-18 14:35 | 審查修復三則：crawl 聯絡人空 gloss 去空＋逃生口樂觀 job 時間錨＋圖片排除對齊契約四
-- **工作區**: apps/server, apps/web
+### 2026-07-19 20:30 | code-review 後四筆修復：社群 URL XSS 縱深＋photo-hunt attr 詞界＋CJK 誤組護欄＋dedupe 尾段軟 deadline
+- **工作區**: apps/server, apps/web, packages/crm
 - **類型**: fix
-- **檔案**: `apps/server/src/research/extractor.ts`, `apps/server/src/research/crawler.ts`, `apps/server/src/research/image-whitelist.test.ts`, `apps/web/components/crm/EnrichPanel.tsx`
+- **檔案**: `apps/server/src/crm-routes/companies.ts`, `apps/web/components/crm/SocialTab.tsx`, `apps/server/src/crm-routes/companies-social.test.ts`(新增), `apps/server/src/research/photo-hunt.ts`, `apps/server/src/research/photo-hunt.test.ts`, `packages/crm/src/contact-merge.ts`, `packages/crm/src/contact-merge.test.ts`, `apps/server/src/research/orchestrator.ts`
 - **改了什麼**:
-  - **extractor.ts sanitizeContacts 去空字串（medium 顯示回歸修復）**: 原本只驗 photoUrl、其餘欄位 `{ ...c }` 原封 spread。Gemini 結構化輸出對未填的 optional STRING 回 `""`，故 `fullNameZh`/`titleZh` 等空 gloss 一路落庫成 `full_name_zh=''`；web 端 `fullNameZh ?? fullName` 因「空字串非 nullish、不 fallback」→ 人物姓名/職稱顯示成空白（本輪引入之回歸）。Before：只 `validatePhotoUrl(photoUrl)`。After：先 `for (key of Object.keys(out))` 對每個 `typeof v==='string'` 欄套 `cleanStr`——空→`delete`（落庫 NULL）、非空→trim，再做 photoUrl 白名單驗證。與 deep-extractor 對同欄位 `cleanStr` 守護一致。非字串欄（seniority enum 等）不動。
-  - **EnrichPanel.tsx 樂觀 job 補 createdAt（low 逃生口修復）**: `submit()` 送出後設的樂觀 job `{id,targetType,targetId,mode,status:'queued'}` 無時間錨；若伺服器接受 POST 後、第一個成功 tick 前即不可達，`isJobStale` 的 `anchor=toEpochMs(startedAt)??toEpochMs(createdAt)` 全 null→逃生口永不翻轉，使用者卡死 spinner／按鈕鎖死。After：樂觀 job 加 `createdAt: new Date().toISOString()`（client 時戳），令此情境仍能於 65min 後翻成「已中斷」；首個成功輪詢後 setJob 以伺服器 job 覆蓋。ResearchJob.createdAt 型別已為 `number|string`，toEpochMs 吃 ISO。
-  - **crawler.ts 圖片排除對齊凍結契約四（low 字面偏差修復）**: `IMAGE_EXCLUDE_EXT_RE` 由 `/\.(svg|ico|gif)(\?|#|$)/i` 改為 `/\.(svg|ico)(\?|#|$)/i`——契約四僅列 `data:/svg/ico/明顯追蹤像素`，未列 gif；移除 gif 讓合法產品動態展示 gif 得以保留，追蹤像素仍由既有尺寸啟發式（w/h≤2px）攔截。同步更新註解。`image-whitelist.test.ts` 內 1x1 gif 案例仍被尺寸過濾攔下（測試續綠），僅更新其註解說明。
-- **為什麼**: 本輪 CRM 品質升級（13:55/14:20 兩批）經 code-review 確認三則問題：crawl 端漏了 deep 端已有的空 gloss 防護造成顯示回歸；逃生口對「送出後即不可達」的樂觀 job 失效與其自身註解矛盾；圖片排除多排了契約未列的 gif。皆為對齊既有契約/一致性的收斂修復，不改凍結契約。
-- **驗證**: server `npx tsc --noEmit` 綠、`npx vitest run` 27 檔 120 測全綠（含 image-whitelist 7 測）；web `npx tsc --noEmit` 綠、`next build` 綠（16 路由）。未 commit（硬規則 10）。
+  - **(1) 社群 URL 全鏈路 scheme 白名單（XSS 縱深，契約三）**:
+    - **companies.ts**: `GET /companies/:id/social` 的 `put()` inline helper（Before: `if (typeof val==="string" && val.trim().length>0) links[key]=val.trim()`）抽成 exported 純函式 `buildSocialLinks(company)`＋`sanitizeSocialPosts(posts)`，改用 `cleanUrl`（複用 `../research/extract-shared.js`）——只收絕對 http(s)，`javascript:`/`data:`/相對路徑一律不進 links；posts 的 url 非 http(s) → 剝除為 undefined（其餘欄不動）。
+    - **SocialTab.tsx**: 新增 `httpUrl(u)` scheme 驗證（絕對 http(s) 才回值）。帳號連結（原 `:120`）非 http(s) → 改渲染 `<span>` 純文字（不掛 href）；貼文連結（原 `:164`）非 http(s) → heading 純文字。
+    - **companies-social.test.ts**（新增 5 測）: `buildSocialLinks`/`sanitizeSocialPosts` 對 javascript:/data:/vbscript:/相對路徑過濾＋curated 單欄勝＋合法 http(s) 保留。
+  - **(2) photo-hunt attr() 正則詞界（photo-hunt.ts:77）**: Before `\\b${name}\\s*=`——`\b` 把連字號當詞界，`attr("alt")` 誤中 `data-alt`、`attr("src")` 誤中 `data-src`（抓錯照片）。After `(?:^|[\\s"'])${name}\\s*=`（屬性名前須為行首/空白/引號）。+2 regression 測（data-alt/data-src 干擾屬性、僅 data-src lazy-load 由 `?? attr("data-src")` 顯式取）。
+  - **(3) contact-merge CJK 誤組護欄（contact-merge.ts `extractEmbeddedCjkName` ~:125）**: 抽出的 CJK 段當人名鍵前加兩護欄——(a) `[...seg].length` 須 2–4 字（≥5 多為機構/描述如「台北辦公室」）；(b) `CJK_NON_NAME_STOPLIST`（台北/台中/公司/集團/董事…完全相等才擋）。只看第一段連續 CJK，不合即 undefined 改走羅馬拼音橋接。+3 測（John(台北)≠Mary(台北)、≥5 字段不組、程峻宏 regression 照常入組）。
+  - **(4) dedupe 尾段軟 deadline（orchestrator.ts `runDeep` ~:1045）**: `dedupeCompanyContacts` 前加 `if (Date.now() > runDeadlineAt)` 守衛（比照 `enrichKeyPeople` 記債）——超過軟 deadline 就 `console.warn` 並跳過 dedupe。dedupe 是多步 delete+rebuild（刪 stale 卡→改欄→靠收尾 reindex 重建），逼近硬 kill 才起跑會被 withTimeout 打斷成半套（stale 卡已刪、reindex 未跑）；跳過後未收斂列下輪研究再收斂。
+- **為什麼**: code-review 五鏡頭發現的四筆問題（XSS 縱深缺 server+client 雙層白名單；attr `\b` 連字號誤配；CJK 內嵌抽取把地名/機構誤當人名鍵；dedupe 無軟 deadline 有半套風險）。
+- **不變量**: (1) 強化契約三（HUD/資料不外流之外，補 stored-URL XSS 縱深）；(3)/(4) 屬 CRM／研究層資料收斂，不動 deck patch/approval/HUD。不違反 I1/I2/I3。
+- **驗證**: `packages/crm npx vitest run` 64 測全綠（基準 61，+3）；`apps/server npx tsc --noEmit` 綠、`npx vitest run` 188 測全綠（基準 181，+7=companies-social 5＋photo-hunt 2）；`apps/web npx tsc --noEmit` 綠。未 commit（硬規則 10）。
 
-### 2026-07-18 14:20 | web 包 CRM 品質消費：產品縮圖/型號＋人物中文名/職稱/背景＋公司 *Zh 優先＋研究逃生口(65min stale)
-- **工作區**: apps/web
-- **類型**: feat
-- **檔案**: `apps/web/lib/api.ts`, `apps/web/components/crm/ProductsTab.tsx`, `apps/web/components/crm/ContactsTab.tsx`, `apps/web/components/crm/PersonaCard.tsx`, `apps/web/components/crm/CompanyDetailView.tsx`, `apps/web/components/crm/EnrichPanel.tsx`, `apps/web/components/ui/JobProgressCard.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
-- **改了什麼**:
-  - **api.ts ResearchJob 加 createdAt**: `createdAt?: number | string`（逃生口時間錨）。與 server 包一致——現行 `rowToJob` 回 epoch ms（number），型別放寬為 number|string 是對 ISO／SQLite「YYYY-MM-DD HH:MM:SS」的防禦性上界，解析交 `toEpochMs`。Company/CompanyProduct/Contact/ContactSummary 新欄（industryZh/taglineZh/businessModelZh/model/fullNameZh/titleZh）由 server 包在 `@meetcopilot/shared` 補齊（apps/web tsconfig 指向 shared 源碼），web 直接引用不另鏡像。
-  - **ProductsTab 縮圖＋型號**: 清單列 `mc-productrow__thumb`（mediaUrls[0]、方形、`loading="lazy"`、onError 隱藏容器）＋品名旁 `mc-productrow__model`（mono 小字）；明細 `mc-product-detail__media`（object-fit contain、onError 隱藏）＋型號 ProvenanceField 列。新 `hideImageParent(e)`：img onError → 隱藏 parentElement 防破圖佔位。
-  - **ContactsTab／PersonaCard 中文優先**: 人名 `fullNameZh ?? fullName`（有中文名時原拼音名以次行 `mc-contactrow__aka`/`mc-persona__aka` 小字保留）；職稱 `titleZh ?? title`；avatar initials 改用 displayName。PersonaCard 補 render `backgroundSummary`（`mc-persona__bg`）＋ isZh 時 `backgroundSummaryZh`（沿用既有 `mc-i18n-sum`），加 `useLocale`。
-  - **CompanyDetailView *Zh 優先**: 公司頭 `industryZh ?? industry`；OverviewTab 標語/產業/商業模式 value 改 `*Zh ?? 主 ?? "—"`，`field()` 加選填 rawValue＝**來源主要欄**（細填編輯錨定主欄，繁中 gloss 不覆寫主欄＝守雙語不變量）。
-  - **逃生口（EnrichPanel＋JobProgressCard）**: `STALE_MS=65min`＋`toEpochMs`（number/純數字字串/ISO/SQLite 空格式；無時區當 UTC 補 Z）＋`isJobStale(job,now)`。EnrichPanel 加 `nowTs` 20s 時鐘（僅 active&&!stale 跑，令輪詢中斷/伺服器不可達也能翻轉 stale）；stale→停輪詢；`busy=active&&!stale`（解鎖「研究此公司」）；`dismissJob`/`retryJob` 皆停輪詢＋清 localStorage（retry 再開面板）。JobProgressCard 加 `stale`/`staleTitle`/`staleBody` props：顯示「已中斷」warn badge＋文案＋重試（done/failed 區塊以 `!stale` gate），`mc-job.is-stale` warn 邊框。
-  - **i18n**: `enrichPanel.staleBadge`/`staleBody` 進 zh-TW.json＋en.json，兩檔 leaf parity 186=186。
-- **為什麼**: server 包（同批 13:55 記錄）新增產品型號/圖、人物中文名/職稱/背景 *Zh gloss 與 crawl_jobs reaper，web 端須顯示且守雙語不變量（繁中走 *Zh、不覆寫主欄），並補研究 job 前端逃生口（伺服器重啟/逾時致 queued/running 卡死 >65min 時顯示已中斷＋重試＋解鎖研究按鈕）。
-- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（EXIT=0）。未動 /present 播放視圖與 studio-present.css（I3）；globals.css 僅**新增** selector（mc-job.is-stale／mc-productrow__thumb/__namegroup/__model／mc-product-detail__media／mc-contactrow__aka／mc-persona__aka/__bg），未改既有 /present 規則。未 commit（硬規則 10）。
-
-### 2026-07-18 13:55 | CRM 品質升級（server 包）：*Zh 品質欄＋型號/SKU＋頁內圖片抓取＋imageUrls 白名單防幻覺＋crawl_jobs 開機 reaper
-- **工作區**: packages/shared, packages/crm, apps/server
-- **類型**: feat
-- **檔案**: `packages/crm/migrations/015_crm_quality.sql`(新), `packages/crm/migrations-pg/015_crm_quality.sql`(新), `packages/shared/src/crm-types.ts`, `packages/crm/src/mappers.ts`, `packages/crm/src/repos-prospect.ts`, `apps/server/src/research/crawler.ts`, `apps/server/src/research/extract-shared.ts`, `apps/server/src/research/extractor.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/jobs.ts`, `apps/server/src/index.ts`, `apps/server/src/research/reaper.test.ts`(新), `apps/server/src/research/image-whitelist.test.ts`(新)
-- **改了什麼**:
-  - **DB 新欄（migration 015，SQLite 一句一欄／PG 多欄一次＋IF NOT EXISTS）**: `companies +industry_zh/+tagline_zh/+business_model_zh`、`company_products +model`、`contacts +full_name_zh`（皆 TEXT／NULL／無 CHECK）。*_zh 為繁中 gloss，不覆寫來源語言主要欄；model＝型號/SKU（如 CP1500PFCLCD）。
-  - **型別＋映射（crm-types.ts / mappers.ts）**: `Company.taglineZh/industryZh/businessModelZh`、`CompanyProduct.model`、`Contact.fullNameZh`、`ContactSummary +fullNameZh/+titleZh`；COMPANY_DEFS/CONTACT_DEFS/COMPANY_PRODUCT_DEFS 補對應 col↔camelKey。
-  - **聯絡人清單 SELECT（repos-prospect.ts）**: `ContactRepository.list` 與 `listPeople` 的 SELECT 補 `full_name_zh/title_zh`；`mapContactSummary` 補 `fullNameZh/titleZh`。
-  - **爬蟲抓圖（crawler.ts）**: `CrawledPage` 加 `ogImage:string|null` 與 `images:{src,alt}[]`（透過 `pages[]` 供 RawCrawl 消費）。`extractPage` 加 string-form `page.evaluate` 抓 og:image/twitter:image＋頁內 `<img>`；新純函式 `sanitizeCrawledImages`（絕對 http(s)、去 svg/ico/gif/data:、去 ≤2px 追蹤像素、依 src 去重、每頁上限 15）與 `sanitizeOgImage`。抓圖失敗不影響文字抽取。
-  - **imageUrls 白名單防幻覺（extract-shared.ts）**: 新純函式 `filterToImageWhitelist(urls, whitelist)`／`validatePhotoUrl(url, whitelist)`——只保留確實爬到清單內的 URL（模型憑空捏造的一律濾掉）。
-  - **站點抽取器（extractor.ts）**: responseSchema＋SYSTEM 加 `products[].model/imageUrls`、`contacts[].fullNameZh/photoUrl`、`company.industryZh/taglineZh/businessModelZh`；`buildPrompt` 每頁尾附 `PAGE IMAGES` 清單（模型挑圖唯一合法來源，每頁 cap 10 控 token）。`toCompany` 建 `buildImageWhitelist(raw)` → `toProducts` 驗 imageUrls 併入 mediaUrls＋帶 model；`sanitizeContacts` 驗 photoUrl。明令 model 只抽規格頁型號、fullNameZh 僅來源有中文名才填（嚴禁音譯捏造）、imageUrls/photoUrl 只能從清單挑。
-  - **深度抽取器（deep-extractor.ts）**: COMPANY_PROPS 白名單加 `industryZh/taglineZh/businessModelZh`（→自動入 company＋逐欄 provenance）；people schema＋型別＋落庫加 `fullNameZh`；SYSTEM 補「*Zh 一律繁中台灣用語、industryZh 是產業別翻譯、fullNameZh 僅來源有中文名、deep 不做人物照」。
-  - **reaper（jobs.ts / index.ts）**: `CrawlJobStore.failInterrupted()`——跨 org 把 `status IN (queued,running)` 一律 UPDATE 成 failed、finished_at=now、error＝`伺服器重啟，研究已中斷，可重新發起`（匯出常數 `REAPER_INTERRUPTED_ERROR`），回筆數。`index.ts main()` 於 `core.migrate()` 後呼叫並 log 筆數（try/catch 非致命）。
-  - **落庫（orchestrator.ts）**: 無需改碼——新欄位經既有路徑自動持久化（company *Zh 走 upsertFromCrawl+COMPANY_DEFS；people fullNameZh 走 contacts.upsertFromCrawl+CONTACT_DEFS；product model＋驗證後 mediaUrls 走 upsertChild(PRODUCT_SPEC)+COMPANY_PRODUCT_DEFS）。
-  - **routes.ts createdAt**: 無需改——`rowToJob` 既有回傳 `createdAt`（epoch ms，對齊 `CrawlJob.createdAt:number` 型別；前端逃生口 `now-(startedAt??createdAt)` 算術即用），GET 回應已含。
-- **為什麼**: RESEARCH_UPGRADE 契約——CRM 加繁中品質欄與型號/SKU、爬蟲抓真實產品/人物圖並防模型幻覺 URL、server 重啟後清殘留研究 job 讓前端能逃生重試。
-- **驗證**: server `npx tsc --noEmit` 綠、`npx vitest run` 27 檔 120 測全綠（含新 reaper 2＋image-whitelist 9）；crm `npx vitest run` 7 檔 49 測全綠（含 admin-migration 套用 015）；shared/crm `typecheck` 綠。未 commit（硬規則 10）。
-
-### 2026-07-17 23:40 | 深色對比徹查定案三修：button color:inherit＋:root color-scheme:dark＋新增公司表單裸 input 補 mc-input/id/name
-- **工作區**: apps/web
-- **類型**: fix
-- **檔案**: `apps/web/app/globals.css`, `apps/web/components/crm/CompanyListView.tsx`
-- **改了什麼**:
-  - **button 規則補 color:inherit（globals.css:76）**: Before `button { font-family: inherit; }` → After `button { font-family: inherit; color: inherit; }`。根因：卡片型 `<button>`（.mc-companycard/.mc-contactrow/.mc-productrow/.mc-personacard/.mc-deckcard）自身與子元素皆無 color 宣告 → 吃 UA system color ButtonText≈#000，在深底 --mc-card #121a2c 上對比僅 1.21:1。加 `color: inherit` 使其承 body 的 `color: var(--mc-text)` #e8edf8 亮字。
-  - **:root 加 color-scheme: dark（globals.css:4 附近，token 區塊開頭＋2 行註解）**: 讓 UA 表單控件（input/select/textarea/捲軸/下拉）原生深色、並使 system color ButtonText 解析為亮色（與 color:inherit 雙保險）。**保留** `.mc-google__btn { … color-scheme: light }`（globals.css:380，Google iframe 需要，未動）。
-  - **NewCompanyForm 三個裸 input 補 mc-input/id/name（CompanyListView.tsx:225/229/233 附近）**: 公司名稱/網域/官網 URL 三個原無 className 的 `<input>` 各補 `className="mc-input"`＋`id`/`name`（`newco-name`/`newco-domain`/`newco-website`，照 AuthForm 慣例）。原本吃 UA 淺底、且無 id/name 觸發瀏覽器表單告警。
-- **為什麼**: 深色對比徹查定案（對抗式驗證 6 confirmed 全同根因）——`button` 缺 `color: inherit` ＋全站無 `color-scheme: dark`，致五種卡片型按鈕標題吃 UA ButtonText 近黑貼在深底卡片上（1.21:1）。
-- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（TSC_EXIT=0）。
-  - **誤傷掃描（含唯讀 studio-present.css）**: 掃「淺/accent 底 `<button>` 且自身＋子元素皆無 color」→ **0 誤傷**。所有淺/accent 不透明底 button 皆已明設 color：`.mc-btn--primary`(#fff on --mc-accent)、`.mc-btn--danger-solid`(#2a0a0a)、`.mc-langswitch button.is-on`(#fff)、`.mc-prov__confirm`(var(--mc-ok))；其餘缺 color 的 button（.mc-companycard/.mc-contactrow/.mc-productrow/.mc-personacard/.mc-deckcard/.mc-hud__jump/.mc-iconbtn/.mc-thumb/.mc-imgjob__close 等）背景皆為 --mc-card/透明深底 → 承亮字正是本修目的。無任何深底 button 之祖先設深色字（設深色 color 者皆為 badge/CTA 葉節點、不含 button）→ 級聯安全。
-  - **color-scheme:dark 副作用（裸 input/select/textarea）**: 全 apps/web 掃出裸控件——`ContactsTab.tsx:198/202`（fullName/title 兩個裸 `<input>`，本次 out-of-scope 未動）、`CopilotView.tsx:313`（裸 checkbox）。三者在 UA 深色化後皆為深底亮字＝更佳非更差、**無反例**（原本反是淺底白框貼深頁）。ContactsTab 兩裸 input 為既存技術債（不在允許改檔清單，僅回報不修）。
-- **紅線**: 未動 studio-present.css/present/hud/copilot/apps/server/apps/admin。admin 淺色主題其 `button` 規則同缺 `color: inherit`（潛在債）——依任務只回報不修。未 commit（硬規則 10）。
-
-### 2026-07-13 15:10 | cockpit 收尾三修：嵌入式 HUD 單欄直向流＋會議標題 input id/name＋雙 h1 降級
-- **工作區**: apps/web
-- **類型**: fix
-- **檔案**: `apps/web/app/globals.css`, `apps/web/components/copilot/CopilotView.tsx`
-- **改了什麼**:
-  - **嵌入式 HUD 改單欄直向流（globals.css，僅 mc-cockpit 區塊 :1338）**: `.mc-cockpit__hud > .mc-hud` 由 `{max-width:none;margin:0;padding:0}` 補 `display:flex; flex-direction:column; align-items:stretch`。根因：全域 `@media (min-width:860px){.mc-hud{display:grid;grid-template-columns:1fr 1fr;align-items:start}}`（特異度 (0,1,0)）滲進嵌入式 HUD → 佔位／連線中單子節點被擠右欄左半、連線後巢狀雙欄空狀態右下留洞。此 selector 特異度 (0,2,0) > 媒體查詢，同時覆蓋 `.mc-hud` 與 `.mc-hud--connecting` 兩態的 grid；`align-items:stretch` 抵銷媒體查詢的 `align-items:start`（否則卡片縮成內容寬、左靠）；`flex-direction:column`＋`gap:14px` 承自 base `.mc-hud`(:1051)。卡序維持 DOM 順序（佇列→逐字稿→情報卡→深查）。**僅動 mc-cockpit 區塊，standalone `.mc-hud` 的 >=860px 雙欄 grid 零影響（selector 皆掛 `.mc-cockpit__hud` 下）**。
-  - **cockpit 會議標題 input 補 id/name（CopilotView.tsx SetupPanel）**: 標題 `<input>` 加 `id="meeting-title" name="meeting-title"`（照 AuthForm 慣例，消瀏覽器「form field 應有 id/name」告警）。
-  - **雙 h1 修正（CopilotView.tsx）**: cockpit 頁 h1＝CockpitView 頁首「會中副駕」；CopilotInner 主渲染「會中副駕 · 擷取端」與 SetupPanel「開始一場會議 session」原皆 `<h1>`→ **僅 embedded 時降 `<h2>`**（`const Heading = embedded ? "h2" : "h1"`，class `mc-cap__h1` 不變＝樣式不動；React 動態 tag 同檔既有 `const Root=rootTag` 手法）。SetupPanel 加選填 `embedded` prop，呼叫點傳 `<SetupPanel … embedded={embedded} />`。**standalone（`CopilotView` 無參包裝，embedded=false）仍 h1，零回歸**。HudInner 嵌入路徑無 h1（唯一 h1 `mc-hud__connect-title` 只在 `!embedded` 的 ConnectPanel），佇列卡已 h2 → 不動；HudView.tsx 未觸。
-- **為什麼**: 指揮官看圖驗收 cockpit 三收尾——媒體查詢雙欄 grid 滲進嵌入式 HUD（對抗式驗證確認 :1338 未 reset display）、會議標題 input 缺 id/name、cockpit 頁雙 h1（初始 setup 相為 CockpitView h1＋SetupPanel h1）。
-- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（EXIT=0）。git 現況：working tree **非乾淨**（HEAD 尚無 cockpit；含前序未 commit 的整組 cockpit 工作＋server/packages 變更），故 `git diff HEAD` 含大量非本次改動；本次改動由 Edit 精確字串替換保證僅：globals.css mc-cockpit 區塊 1 條規則＋5 行註解、CopilotView.tsx 上述 h1／embedded／input 三點。/hud standalone 行為零改（CSS scope 於 `.mc-cockpit__hud`、h1 降級 gate 於 embedded、HudView.tsx 未動）。未 commit（硬規則 10）。
-
-### 2026-07-13 13:25 | 研究品質兩缺口：社群帳號發現擴多頁＋擷取器補缺｜uncategorized 來源轉址還原
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `apps/server/src/research/crawler.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/social-discovery.test.ts`(新), `apps/server/src/research/deep-notes.test.ts`
-- **改了什麼**:
-  - **缺口1(a) 多頁社群 hrefs（crawler.ts）**: 抽純函式 `filterSocialHrefs(hrefs)`（export，http/https＋`classifySocialUrl` 命中四平台、去#hash、去重）；`collectSocialHrefs` 改用之。`fetchMany` 結果型別加 `social:string[]`，每頁（不論 `collect`，末層頁也掃）呼叫 `collectSocialHrefs(wp)`；BFS 迴圈把 `r.social` 併入 `socialSet`（跨頁 Set 去重）。Before：只掃首頁 `<a href>` → 首頁 icon JS 渲染/非錨點就漏。After：掃**所有已爬頁面**的錨點。
-  - **缺口1(b/c) 擷取器補缺（deep-extractor.ts）**: `ExtractedDeep`＋`DeepExtraction` 加 `socialLinks`；RESPONSE_SCHEMA 加 `socialLinks`(object youtube/facebook/instagram/threads 各選填 STRING)；SYSTEM 加一句「僅**官方**帳號、須從來源確認、不確定就省略、勿臆造」。新 `toDeepSocialLinks(v)` 機械保險：**只接受 https＋`classifySocialUrl` 命中四平台**，其餘（http/非四平台/非法 URL）丟棄、跨 key 去重。import `./social/discover.classifySocialUrl`。
-  - **缺口1(b) 合併優先序（orchestrator.ts）**: `discoverHandles(seedSocialUrls, siteRaw?.socialLinks, deep?.socialLinks)`——擷取器排最後（先出現者勝＝**官網爬到的贏、擷取器只補缺**）；落庫/provenance 路徑不變。
-  - **缺口2 uncategorized 轉址（orchestrator.ts resolveMerged）**: `used` 解析集合加 `deep.uncategorized.forEach((u)=>add(u.sourceUrl))`。Before：只涵蓋 companyProvenance/people/competitors/news/funding → 只出現在 uncategorized 的 redirect 從未被解析。After：同一 30s 預算、best-effort（解不到留原 URL）納入解析。
-  - **deep-notes.test.ts**: 既有 `DeepExtraction` 假物件補 `socialLinks: []`（新增必填欄）。
-- **為什麼**: Connact AI 本地 E2E 實測發現 (1) companies.social_links 落空（首頁 icon 未掃到）、(2) observations 部分 [來源] 停在 vertexaisearch grounding redirect（resolveMerged 漏 uncategorized）。
-- **驗證**: 全 workspace `npm run typecheck` 綠（shared/crm/admin/server/web）；server 測試 111/111（含新檔 5 測：多頁 hrefs 合併去重／擷取器 socialLinks 機械保險／官網 vs 擷取器合併優先序（爬取贏、補缺）／uncategorized redirect 進解析集合 mock resolver）；crm 49/49。實測重跑 Connact AI deep（job 019f59ec…done, fields=32）：**observations 7 條來源、0 條 redirect**（前三＝cake.me×2／tcloud.gov.tw），全 54 筆 provenance＋3 筆 notes 皆 0 redirect（缺口2 ✓）；**social_links 仍空**——經查為可接受結果：9 個已爬 connact.ai 頁（含 aboutus/各 solution/request）渲染 DOM 無任何四平台錨點、server HTML 亦無社群 URL，且 grounding narrative 明言「Connact AI 並未將 Facebook 或 Instagram…作為活躍管道」→ 擷取器無官方社群 URL 可填、依「不確定不填」正確留空。未 commit（硬規則 10）。
-
-### 2026-07-13 13:05 | 會中副駕 cockpit（交付二）：/copilot 擷取端＋HUD 合為同一視窗＋文案
-- **工作區**: apps/web
-- **類型**: feat
-- **檔案**: `apps/web/components/copilot/CockpitView.tsx`(新), `apps/web/components/copilot/CopilotView.tsx`, `apps/web/components/hud/HudView.tsx`, `apps/web/app/[locale]/copilot/page.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
-- **改了什麼**（依 ROM 2026-07-13 14:25 方案 A）:
-  - **CopilotView.tsx 抽可嵌版**: `CopilotInner` 改 `export` 並加選填 props `{embedded?, creds?, onCreds?, rootTag?}`（預設 `{}` → 無參呼叫等同舊行為）。`const Root = rootTag`（"main"|"section"）取代所有 `<main className="mc-cap">`／SetupPanel 的 `<main className="mc-cap mc-cap--setup">`（React 動態 tag，class 不變）。creds：embedded 時鏡射 `credsProp`（parent 控制，effect deps `[embedded, credsProp]`；SetupPanel 建會後 parent 回寫使 credsProp 變→本 side 由 setup 翻 idle）；standalone 時仍 `readMeetingCreds()`（effect 一次，deps 恆定＝等同舊 `[]`）。新 `adoptCreds`（setCreds＋phase idle＋`onCreds?.()`）取代 SetupPanel inline onReady——standalone 無 onCreds＝行為不變。`CopilotView`(standalone 包裝)保留 `<ToastProvider><CopilotInner/></ToastProvider>`。
-  - **HudView.tsx 抽可嵌版**: `HudInner` 改 `export`＋同款 props（無 onCreds；HUD 不建會）。`Root` 同上覆蓋所有 `<main className="mc-hud …">`。embedded 且無 creds → 顯示輕量「尚未開始 session」placeholder（復用既有 `mc-hud__connstate` 樣式），**不**出 ConnectPanel 貼連結面板（cockpit 由擷取端建會）。fail banner 與 ConnectingState 的「重新貼連結」按鈕在 embedded 隱藏（`embedded?null:…`／`showRelink={!embedded}`；ConnectingState 加選填 `showRelink=true`）——避免 cockpit 清 creds 死路。**standalone HudView（`<HudInner/>` 無參）行為完全不變**：Root="main"、creds 讀 storage、ConnectPanel/relink 全在。
-  - **CockpitView.tsx（新）**: 單一 `<ToastProvider>`＋單一 `<main className="mc-cockpit">`；grid 兩欄——左 `mc-cockpit__cap`（340px 擷取控制＝`<CopilotInner embedded rootTag="section">`）＋右 `mc-cockpit__hud`（建議流主戲＝`<HudInner embedded rootTag="section">`）。creds 由 cockpit 持有：mount 時 `useEffect`→`readMeetingCreds()`（**非** lazy init，避 SSR/hydration mismatch），SetupPanel 建會經 `onCreds` 回寫——HudInner 立即拿 creds 連線、免重整。兩側各開一條 WS（capture＋hud）到同會議（hub 無 user/role 上限；HUD 內容只推 hud role，故雙連線）。
-  - **copilot/page.tsx**: render 由 `CopilotView`→`CockpitView`；檔頭註解更新為 cockpit 融合敘述、保留「零 AppShell chrome（I3）」精神（grep 確認全頁/元件無 AppShell import，僅註解提及）。
-  - **globals.css（檔尾追加）**: 新增 `.mc-cockpit`／`__bar`／`__title`／`__lead`／`__grid`（`340px minmax(0,1fr)`）／`__cap`／`__hud`（panel/elev 底＋border＋r-lg）／`__collabel`（mono kicker）＋ `.mc-cockpit__cap>.mc-cap`／`.mc-cockpit__hud>.mc-hud` 覆蓋（max-width:none/margin:0/padding:0 使嵌入面填滿欄）＋ `.mc-cockpit__hud>.mc-hud--connecting{min-height:0}`（消 60vh）＋ `<1100px` 單欄堆疊（控制在上）。**全部新 `mc-cockpit*` class、僅追加檔尾、零改既有 mc-cap/mc-hud/mc-topbar 區塊**；無新動效。
-  - **文案（messages 只 Edit 對應 key）**: `copilot.title` zh「會中副駕擷取端」→「會中副駕」／en「Copilot Capture」→「Meeting Copilot」；`home.copilotDesc`／`home.hudDesc`（第二裝置鏡像（選配）／Second-device mirror (optional)）／`home.liveNote` 三語同步；新增 `copilot.{cockpitKicker,cockpitLead,captureLabel,hudLabel}` 兩語齊備。HomeDashboard/AppShell 未改（自動吃 `home.*Desc`／`copilot.title`）。
-- **為什麼**: 使用者拍板擷取端與 HUD 應同視窗（一邊聽一邊看建議）；/hud 獨立頁降為選配第二裝置鏡像（不動）。I3 未削弱（帳號 B 分頁永不被分享、cockpit 零播放元素）；I2 由交付一 server 端身分驗證把關。
-- **驗證**: 全 workspace `npm run typecheck` 綠（shared/crm/admin/server/web，EXIT=0）；zh/en key parity 184/184、無單邊 key、4 新 cockpit key 兩語俱在。grep：copilot/page.tsx 無 AppShell import；/hud 仍 render 標準 `HudView`；globals.css 我方 diff 全 `mc-cockpit`（14 行）、未刪任何既有 mc-cap/mc-hud/mc-topbar 規則（列出的刪除均係平行換皮工作線 topbar 移除/圓角 token 化，非本次）。未跑瀏覽器實測（本輪 typecheck＋靜態核對）。未 commit（硬規則 10）。
-
-### 2026-07-13 12:55 | 會中副駕 cockpit（交付一）：I2 isPresenter role 裂縫修正＋ws-server 層 authz 測試
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `apps/server/src/realtime/ws-server.ts`, `apps/server/src/realtime/ws-token.ts`, `apps/server/src/realtime/patch-service.ts`, `apps/server/src/realtime/ws-presenter-authz.test.ts`(新), `docs/API_CONTRACT.md`
-- **改了什麼**:
-  - **I2 role 裂縫修正（ws-server.ts:96）**: `meta.isPresenter` 由 **`claims.userId === claims.presenterUserId && role === "present"`** 改為**純身分** `claims.userId === claims.presenterUserId`。根因：suggestion_action/info_card 等 HUD 內容只推給 `hud` role，而批准（suggestion_action/page_commit）走 `isPresenter` 閘——原閘要求 `role==="present"`，故現行獨立 /hud（及新 cockpit 的 hud 連線）送批准會被 `forbidden_not_presenter` 拒。安全論證：wsToken 由 presenter 建會議時鑄造、內含 presenterUserId，role 是連線時自選的 query param（任何持 token 者本就可自稱 present），role 不構成安全邊界、只擋掉正當用法。isPresenter 的**使用點清單**：ws-server.ts:96(定義)、:168(page_commit 閘)、:187(suggestion_action 閘)、:197(deep_research 閘 `role!=="hud" && !isPresenter`)、types.ts:22(ConnMeta 型別)、測試 hub-endmeeting-authz.test.ts:72／ws-async-gate.test.ts:66(直接設 true，不受定義變更影響)。**patch-service.ts 的 `if(!presenterAuth) return` double-check 邏輯不動**（縱深防禦保留），僅同步其 docstring(:7) 與 ws-server 頂部/ws-token 頂部三處描述舊公式的註解。
-  - **ws-server 層 authz 測試（新檔，+6）**: `ws-presenter-authz.test.ts` 用真 `attachRealtimeWs`＋fake hub（記錄 patch.act/broadcastState/setDeckCommitted 是否被呼叫）＋always-active fake core（隔離出「presenter 身分閘」為唯一變數），經真 ws client 送訊觀察：(a) presenter token＋role=hud/present → suggestion_action 通過（patch.act 被呼叫、無 forbidden）；(b) presenter token＋role=hud → page_commit 通過（broadcastState/setDeckCommitted 被呼叫）；(c) 非 presenter userId token（同會議）→ suggestion_action 在 hud/present/capture **每個 role 皆** forbidden_not_presenter、patch.act 未呼叫；(d) 非 presenter → page_commit（role=present，舊逃生門）被拒；(e) 跨 org 非 presenter token＋role=present 被拒；(f) 跨 meeting token → handshake close 4001 unauthorized、訊息閘不可達。**補回 CI 盲點**：既有 realtime-authz.test.ts 只測 patch.act(presenterAuth=false)，未經 ws-server 算 isPresenter，故 role 裂縫過關。
-  - **API_CONTRACT §6 授權敘述更正**: 「只接受 presenter 的連線」→「依 wsToken 身分（userId===presenterUserId）純身分判定、與 role 無關；cockpit 由 presenter 從 hud 連線批准；非 presenter 任何 role 一律拒 forbidden_not_presenter」，與 §6 送訊表 `suggestion_action // hud` 一致。**未動 packages/shared/src/protocol.ts**（另一工作線編輯中；其註解矛盾僅回報）。
-- **為什麼**: 使用者拍板擷取端與 HUD 合為同一視窗（cockpit）；偵察發現 role 裂縫會讓 cockpit/獨立 /hud 的批准被誤拒——本次正是把 I2 修對（批准仍 100% server 端身分驗證，且非 presenter 攻擊者一律被拒）。
-- **驗證**: apps/server `npx vitest run` 全綠 **106/106**（基線 100＋6 新）；ws-presenter-authz.test.ts 單跑 6/6。I1/I3 未觸及。未 commit（硬規則 10）。
-
-### 2026-07-13 18:40 | /simplify 行為不變清理 8 項（會中熱路徑白名單快取＋擷取器共用模組＋SSRF/社群單一來源）
-- **工作區**: apps/server
-- **類型**: refactor（純清理，零行為改動；四路清理審查已裁決，只套用清單、不找 bug）
-- **檔案**: 新增 `apps/server/src/research/extract-shared.ts`；改 `apps/server/src/realtime/retrieval.ts`, `apps/server/src/realtime/orchestrator.ts`, `apps/server/src/research/extractor.ts`, `apps/server/src/research/deep-extractor.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/deep-rounds.ts`, `apps/server/src/import/extract.ts`, `apps/server/src/research/social/http.ts`, `apps/server/src/research/crawler.ts`
-- **改了什麼**（項次對齊審查裁決，行為逐一等價）:
-  - **#1 會中熱路徑白名單快取**: `retrieval.ts collectWhitelist` 原每個分析窗對 contacts/notes/products/news 各 1 次 org-scoped 讀。改：`collectWhitelist` 匯出＋加選填 `contactIds`（提供則沿用不重讀 contacts）；`RetrievalOptions` 加 `entityIds?`（提供則 retrieveInfoCards 略過 collectWhitelist）。orchestrator 新增 per-session `contactsCache`（ContactSummary[]）＋`whitelist`（string[]）兩 Map，`contactsFor()` 單讀 contacts 供 roster 與白名單**共用一份**（消 orchestrator 對 `contacts.list` 的重複讀），`whitelistFor()` 快取整場靜態白名單；`disposeSession` 一併清兩 Map。未提供 entityIds 的獨立/單測路徑仍走內部 collectWhitelist（行為不變）。
-  - **#2 resolveTrust 平行化**: retrieveInfoCards 先序列做 score 過門檻＋seen 去重取存活者（seen 依 hits 序就地變異，跨窗語意不變），再 `Promise.all` 平行查 trust（上限 TOP_K=3），依存活序建卡——卡片順序/內容/trust 與序列版逐一致。
-  - **#3 擷取器共用模組**（`extract-shared.ts`）: 抽 `UncategorizedIntel` 介面、`cleanStr`、`dedupUncat(items, resolveUrl)`（cleanStr→去空→去重→cap MAX_UNCATEGORIZED=25）、`NARRATIVE_UNCAT_SCHEMA`（narrativeZh/uncategorized responseSchema 片段，兩擷取器逐字相同→spread 進兩邊）。extractor/deep-extractor/research-orchestrator 三處 narrativeZh 正規化（inline ternary／local cleanStr／`?.trim()`）統一為 `cleanStr`。**SYSTEM prompt 兩句 narrativeZh/uncategorized 刻意不合併**：站點抽取 vs 全網合成措辭各自貼切（欄位集不同、deep 帶 [S#] 標註）→ 各檔逐字保留（審查允許保留差異）。
-  - **#4 移除冗餘 re-filter**: research/orchestrator `writeSingletonNotes` 的 `(data.uncategorized ?? []).filter(...).slice(0,25)`→`data.uncategorized ?? []`（上游 dedupUncat 已 trim/去重/cap）。
-  - **#5 移除死參數**: deep-rounds.ts follow-up round 的 `includeSocial:false`（queriesForRound 在 includeBaseQueries=false 時不讀 includeSocial，deep-research.ts:168-171）→ 移除。
-  - **#6 magic number 具名化**: realtime/orchestrator inferSpeaker 的 `.slice(-6)`→新具名常數 `SPEAKER_CONTEXT_MAX=6`（與 RETRIEVAL_CONTEXT_MAX 語意不同故另立，值不變）。
-  - **#7 pinnedAgent 單一來源**: import/extract.ts `pinnedAgent` 加 `export`＋`timeoutMs` 參數（呼叫端傳自己的 FETCH_TIMEOUT_MS）；social/http.ts 刪本地逐字複製，改匯入複用並**保留自己的 12s**（行為不變）；http.ts 移除已不用的 `Agent` import。
-  - **#8 社群網域單一來源**: crawler.ts `SOCIAL_HOST_RE` 刪除，`collectSocialHrefs` 改用 `social/discover.classifySocialUrl(href) !== undefined`（保留原 http/https 協定守衛；discover 只 import ./types，無循環依賴）。兩 regex 語意等價（唯一極端差異＝ www.youtu.be 子網域，現實不存在）。
-  - **#9（選做）indexer contacts N+1**: **skipped**。`contacts.list` 回 `ContactSummary`（id/fullName/title/seniority/decisionPower/verifiedStatus/photoUrl），**不含** collectSources 需要的 titleZh/department/bio/backgroundSummary/backgroundSummaryZh → 必須 findById 取全欄，保留原樣。
-- **為什麼**: /simplify 四路清理審查裁決後套用（reuse/去重/熱路徑效率/altitude），行為完全不變（對外 API、落庫內容、卡片輸出、prompt 語意皆不動）。**嚴禁碰 apps/web**（平行換皮 session）——本批一字未動 apps/web。
-- **驗證**: 全 workspace typecheck 綠（shared/crm/admin/server/web）；server 100/100、crm 49/49（與套用前基線同數字，斷言未放寬）。未 commit（硬規則 10）。工作樹另含多個平行/前輪未 commit 變更（apps/web 換皮、config/budget 等），非本批產出。
-
-### 2026-07-13 18:10 | 爬蟲專輪 code-review 3 修：trust 死碼（card→base 對映）＋索引殘留 chunk 清理＋多輪整場預算閘門
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `apps/server/src/realtime/retrieval.ts`, `apps/server/src/research/indexer.ts`, `apps/server/src/research/deep-rounds.ts`, `apps/server/src/realtime/mid-meeting-crm.test.ts`, `apps/server/src/research/indexer.test.ts`, `apps/server/src/research/deep-rounds.test.ts`
-- **改了什麼**:
-  - **Finding 1（trust 死碼）**: `resolveTrust` 原直接以 embedding 命中列的 entity_type（`company_card`／`contact_card`／`company_product_card`／`company_news`／`note`，由 indexer collectSources 寫入）呼叫 `provenance.listForEntity`。但 field_provenance 記的是**基底型別**（repos-prospect.ts crawl/human：`company`(:287)／`contact`(:437)；company_products.update()：`company_product`(:505)）——查證後確認 **news 子表與 note 從不寫 provenance**（children 走 upsertChild 零 provenance、無 news/note update 路徑）。故 card 別名做 exact-match 永遠 0 列 → `verified` 分支不可達、人工驗證資料在會中卡永遠顯示 crawler。**修**＝新增顯式對映表 `PROVENANCE_BASE_TYPE`（company_card→company、contact_card→contact、company_product_card→company_product、company_news→null、note→null）＋ `provenanceTypeFor()`（未列型別沿用原值直查以維持舊行為）；resolveTrust 先對映再查，null（news/note 無 provenance）直接 crawler、不查。頂部與函式 docstring 同步更正。
-  - **Finding 2（陳舊索引殘留）**: `buildCompanyIndex` 對每 entity 只 upsert chunk 0..N-1；內容縮短跨 1000 字邊界後高 index 舊 chunk 殘留、仍可被會中檢索命中出過時卡。**修**＝每個 (entity_type, entity_id) 內層 upsert 迴圈後，`core.db.run("DELETE FROM embeddings WHERE org_id=? AND entity_type=? AND entity_id=? AND chunk_index >= ?", [...,pieces.length])`（org 隔離；未殘留時 no-op；沿用 indexer 既有 raw core.db 存取，未改 packages/crm、無需 dist 重建）。**已知限制**：entity 整個消失（如筆記被刪）的孤兒 embeddings 不在 collectSources 來源內，且 embeddings 表無 company_id 欄可定位同公司同型別列 → 無法在此安全清除（docstring 標注，需另建 GC/schema）。
-  - **Finding 3（預算語意）**: `DEEP_RESEARCH_BUDGET_MS` 經 createDeepResearcher.research 每次呼叫各自 `deadlineAt=now+budget`，而 runDeepRounds 每輪呼叫一次 → 實為**每輪**軟 deadline，docstring 卻稱整場，多輪把 grounding 時間乘上輪數。**修**＝DeepRoundsOptions 加選填 `budgetMs?`（預設 `deepBudgetMs()`）；runDeepRounds 開場記 `overallDeadline=now+budget`，迴圈內 `if (r>1 && Date.now()>=overallDeadline) break`（round 1 一律跑、逾期不開新輪；已在跑的輪不強殺，job timeout 兜底）；模組與 options docstring 更正為整場語意。orchestrator 呼叫端未傳 budgetMs → 走預設，行為對齊。
-  - **測試（+3）**: mid-meeting-crm.test.ts 加「company_card（indexer 實際型別）命中 → 依基底 company provenance 判信任：human→verified／無→crawler」；indexer.test.ts 加「長內容 2+ chunk → 改短重建 → 該 entity 只剩 chunk_index=0、殘留已刪」；deep-rounds.test.ts 加「budgetMs:0 整場預算到期 → 只跑 round 1、不開第 2 輪」。
-- **為什麼**: /code-review 對「爬蟲專輪」未 commit 變更抓到的 3 個確認問題。只碰三實作檔＋其測試；wire/API 形狀不變；I1/I2/I3 未觸及（trust 標記只影響 HUD 卡片誠實度，不碰 deck/approval/播放視圖）。
-- **驗證**: 全 workspace typecheck 綠（crm/shared/admin/server/web）；server 100/100（基線 97＋3 新）、crm 49/49（不變）。未 commit（硬規則 10）。
-
-### 2026-07-13 17:15 | UI 改版實機走查 5 個收尾缺陷（表單深色皮＋登入落點＋側欄 label＋train landmark＋空狀態 icon）
-- **工作區**: apps/web
-- **類型**: fix
-- **檔案**: `apps/web/components/auth/AuthForm.tsx`, `apps/web/components/auth/GoogleSignInButton.tsx`, `apps/web/messages/en.json`, `apps/web/app/[locale]/train/page.tsx`, `apps/web/app/globals.css`, `apps/web/components/ui/EmptyState.tsx`
-- **改了什麼**:
-  - **#1 登入/註冊輸入框未套深色皮（P0）**: AuthForm 四個 `<input>`（顯示名稱/組織名稱/Email/密碼）都放在 `.mc-field` label 內但**未掛 `.mc-input`**，且 CSS 無 `.mc-field input` 規則 → 落回瀏覽器原生白底 input 貼在深色卡上。修＝每個 input 補 `className="mc-input"`（套 `--mc-field` 深底＋border＋focus 光環）＋補 `id`／`name`（DevTools 對缺 id/name 出 issue）：displayName/orgName/email/password。autocomplete 原本已正確（name／organization／email／new-password｜current-password），保留不動。GoogleSignInButton 等其他區塊未碰。
-  - **#2 登入成功落點改首頁儀表板**: `redirectTarget()` 預設 `/crm` → **`/`**（AuthForm.tsx:16），docstring「route to /crm」同步改「route to the home dashboard (/)」。此函式驅動 email/password 的**註冊＋登入**兩路（onSubmit→router.replace）。原 gap：Google 登入導向在 GoogleSignInButton.tsx（`router.replace("/crm")`），該檔原不在可動清單→**指揮官裁決核准擴充範圍**，已改 `router.replace("/")`（GoogleSignInButton.tsx:75，該檔無 next/redirect prop 機制，依裁決直接落 `/`；docstring「setToken → /crm」同步改「setToken → home dashboard "/"」）。**auth 路徑最終落點**：(a) 註冊（email/password）＝AuthForm onSubmit→redirectTarget(next)→無 next 時 **`/`**（有 invite next 則導回 invite 頁）；(b) 登入（email/password）＝同 onSubmit→**`/`**；(c) Google 登入＝**`/`**（不吃 next——invite 頁的 Google 登入會落首頁而非回 invite，為本裁決已知取捨）；(d) invite 接受＝InviteAcceptView onAccept→`router.replace("/crm")`（**未動**，依指示保留）。
-  - **#3 EN 側欄 label 截斷**: `copilot.title` en「In-Meeting Copilot Capture」（26 字元）在 248px 側欄被 ellipsis（AppShell NAV_GROUPS 用 `copilot.title` 當 labelKey）→ 縮為「**Copilot Capture**」（15 字元，/copilot 頁內標題語意仍成立）。其餘 surface title 英文核對：CRM(3)／DynamicSlide Studio(19)／Slide Stage(11)／HUD(3)／Simulation Training(19)／org.nav.team「Team settings」(13) 皆 ≤20，**不動**。zh 不動（zh copilot.title＝會中副駕擷取端，保留）。
-  - **#4 /train 缺 main landmark**: train 三個 phase 視圖（PersonaPicker／TrainCall／ScoreReport）根元素都是 `<section>`，AppShell 內容區為 `.mc-shell__body` div（非 main）→ /train 無 main landmark。修＝在 `train/page.tsx` 用 `<main className="mc-trainmain">` 包住 `<TrainWorkbench/>`（擇「page 包 main」路徑，不動 phase 機邏輯）。`.mc-shell__body` 非 flex（max-width＋padding＋margin auto），多一層 block main 不改版面；phase section 各自維持既有樣式。
-  - **#5 空狀態 icon 存在感近零**: `EmptyState` 預設 icon＝字元「◦」＋ `.mc-empty__icon{font-size:34px;opacity:.5}`＝深底上一顆半透明小空心圓，像壞圖。修兩處：(a) globals.css `.mc-empty__icon` 升級為 **56px 圓形底座**（flex 置中／margin:0 auto／border-radius:50%／`--mc-accent-soft` 底／`--mc-accent-line` 邊／色 #c4b5fd／font-size:24px，**拿掉 opacity:.5**）；(b) EmptyState.tsx 預設 icon 由「◦」改為清楚的 **inline SVG**（22px inbox/tray 輪廓、stroke currentColor）。三個消費端（CompanyListView／StateBoundary／PersonaPicker）皆用預設 icon → 全站空狀態同步受益；caller 若自帶 icon（emoji/自訂）也照樣進 56px 圓座。
-- **為什麼**: UI 換皮實機走查揪出的 5 個收尾缺陷（指揮官核准的契約範圍擴充）。**present/hud/copilot 一字未改（I3）；apps/server、packages/** 平行工作線未碰。**
-- **驗證**: `apps/web` `npx tsc --noEmit` 綠（TSC_EXIT=0，含 GoogleSignInButton 擴充改動後重跑仍綠）。en/zh key parity＝180/180、無單邊 key（node 遞迴比對 OK）；copilot.title en=Copilot Capture／zh=會中副駕擷取端。未 commit（硬規則 10）。未跑瀏覽器實測（本輪 typecheck＋靜態核對）。
-
-### 2026-07-13 16:50 | 整合收尾：shared NoteType 聯集補值＋standard MAX_TOKENS 韌性＋MAX_CRAWL_DEPTH env 化＋過時註解
-- **工作區**: packages/shared｜apps/web｜apps/server
-- **類型**: fix
-- **檔案**: `packages/shared/src/crm-types.ts`, `packages/shared/dist/*`（重建）, `apps/web/components/crm/NotesTab.tsx`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/crawler.ts`, `apps/server/src/research/deep-research.ts`, `apps/server/src/research/standard-retry.test.ts`（新增）, `.env.example`
-- **改了什麼**:
-  - **shared NoteType 聯集補值（#1）**: `NoteType` 加 `'narrative'`、`'observations'`（原 general|call|email|research），註解標明二者＝研究引擎產出的單例 AI 筆記、非 API 可建；重建 shared dist。shared 無 `NOTE_TYPES` 常數故無需同步（server crm-routes/notes.ts 的 `NOTE_TYPES` 是 API POST 白名單，narrative/observations 非使用者可建，**刻意不加**以保 wire 契約）。`NotesTab.tsx` 的 `isNarrative` 移除 `(n.noteType as string)` cast，改正常 `n.noteType === "narrative"` 型別比對，刪掉多餘 `NARRATIVE_NOTE_TYPE` 常數。
-  - **standard 路徑 MAX_TOKENS 韌性（#2）**: `runStandard` company 分支的 `jobExtractor.toCompany(raw)` 原無容錯——大站（MAX_CRAWL_PAGES 已放寬到 150）輸出被 MAX_TOKENS 截斷會 throw → 整個 enrich job failed。修法（對齊 deep 路徑 runDeep 的 try/catch）：擷取失敗 → 以新 `halveCrawlPages(raw)`（保前半、至少 1 頁）**減半頁面重試一次**；仍失敗才上拋可行動錯誤（訊息含「內容過大」＋原因），由 runJob catch → markFailed。附測試 `standard-retry.test.ts`：第一次 throw、第二次成功→job done 且頁數 [8,4]；兩次 throw→job failed 帶「內容過大」訊息、只重試一次。
-  - **MAX_CRAWL_DEPTH env 化（#3）**: crawler.ts 原固定 `const MAX_CRAWL_DEPTH = 3` → 改 `MAX_CRAWL_DEPTH_DEFAULT=3`＋`_CEIL=6`＋新 `maxCrawlDepth()`（clampEnvMs 讀 env `MAX_CRAWL_DEPTH`，clamp [1,6]），BFS 迴圈於呼叫時讀一次 `maxDepth`；`.env.example` 對應列由「固定常數」改為實 env 說明。
-  - **過時註解（#4）**: deep-research.ts:12 「預設 150s」→ 改正為「預設 1_200_000ms＝20 分，clamp 30s–1800s」（對齊實際 DEFAULT_BUDGET_MS）。
-- **為什麼**: 三實作 agent＋對抗驗證留下的 4 個小項（shared 聯集缺值致前端需 cast／standard 無截斷容錯／深度寫死／註解過時）。範圍受限：只碰指名檔＋其測試＋.env.example＋shared dist，未動 apps/web 換皮中檔案。wire 契約不變（NoteType 純新增聯集值、不動 API 形狀）。
-- **驗證**: 全 workspace typecheck 綠（shared/crm/admin/server/web）；server 97/97（+2 新測試）、crm 49/49（不變）。未 commit（硬規則 10）。
-
-### 2026-07-13 16:30 | 爬蟲專輪前端三塊（WP3 UI／WP2 筆記／WP4.3 HUD）：EnrichPanel 單一深度入口＋NotesTab AI 敘事置頂＋逐字稿 speakerLabel
-- **工作區**: apps/web
-- **類型**: feat
-- **檔案**: `apps/web/components/crm/EnrichPanel.tsx`, `apps/web/components/crm/NotesTab.tsx`, `apps/web/components/hud/TranscriptStream.tsx`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
-- **改了什麼**（依 RESEARCH_UPGRADE_CONTRACT §2/§3/§4.3）:
-  - **EnrichPanel（§3 UI）**: 移除 `MODES`（quick/detailed/deep 三選 radiogroup）＋二次確認 dance（`deepConfirm`/`effectiveDeep`/`chooseMode`/`primaryLabel`）。改為單一深度入口——常數 `DEEP_MODE:CrawlMode='deep'`，`enrich()` 一律送 `mode:'deep'`（payload 形狀不變、不自創欄位）；新增時間提示 `timeHint`（可能 30–60 分鐘、可離開頁面稍後回來）。官網 URL 保留為可選研究起點。**路徑分離證據**：本面板走 `enrich()`（EnrichPanel.tsx:100）→ `/api/research/enrich`；DeckWizard「從網址匯入」走 `extractUrl`/`extractPdf`（DeckWizard.tsx:134,147）→ 另一端點，互不影響。
-  - **NotesTab（§2）**: 新增 `isNarrative(n)`（以字串比對 `note_type==='narrative'`，繞過 shared NoteType 未含 narrative 的 no-overlap 型別錯）；`sortNotes` 讓 AI 敘事恆置頂（narrative→pinned→新到舊），observations 走一般清單；narrative 卡加輕量 `AI 敘事` 標籤（`mc-noteitem__tag`）＋ `is-narrative` class。
-  - **TranscriptStream（§4.3）**: 逐字稿說話者顯示改為 `seg.speakerLabel?.trim() ? speakerLabel : SPEAKER_LABEL[seg.speaker]`——有選填標籤（如「客戶-王經理」）優先、空/缺席退回既有 presenter/client，**缺席不壞版面**。className 仍鍵於 `seg.speaker`（樣式穩定）。
-  - **InfoCardStream**: 讀碼確認既有渲染已涵蓋 CRM 卡（5 kinds／verified·crawler·live trust／sourceUrl／confidence）→ **無需改動**。
-  - **i18n**: 新增 `enrichPanel.{deepEntryLabel,deepEntryDesc,timeHint,start}`＋`notesTab.aiNarrative`，zh-TW／en 兩份都補（Edit 追加，未 Write 覆寫）。
-- **為什麼**: server 側 R（深廣多輪＋社群＋筆記落庫＋索引）與 M（會中檢索卡＋speakerLabel）已完成，前端跟上：研究入口簡化為單一深度模式、AI 敘事筆記置頂、HUD 顯示多人說話者標籤。
-- **驗證**: web workspace `tsc --noEmit` 綠（EXIT=0，無 external 錯誤）。**gap**：shared `NoteType`（packages/shared/src/crm-types.ts:91）＝general|call|email|research，未含 R 已落庫的 'narrative'/'observations'；因禁改 packages，前端以字串比對辨識 narrative，回報待 R/M 補 union。未 commit（硬規則 10）。
-
-- **工作區**: apps/server｜packages/crm
-- **類型**: feat
-- **檔案**: 新增 `apps/server/src/research/social/{types,http,youtube,threads,discover,index}.ts`、`apps/server/src/research/deep-rounds.ts`、`apps/server/src/research/indexer.ts`、`packages/crm/migrations/013_social_notes.sql`＋`migrations-pg/013_social_notes.sql`、`packages/crm/migrations/014_signal_kinds.sql`＋`migrations-pg/014_signal_kinds.sql`、測試 `apps/server/src/research/{deep-rounds,indexer,deep-notes,social,reindex-authz,signal-kinds}.test.ts`＋`packages/crm/src/notes-singleton.test.ts`；改 `apps/server/src/config.ts`、`apps/server/src/research/{crawler,deep-research,deep-extractor,extractor,orchestrator,jobs,routes}.ts`、`packages/crm/src/{ports,repos-pipeline}.ts`、`.env.example`、`docs/DEPLOY.md`
-- **改了什麼**:
-  - **WP3 深廣預算**（契約 §3）：`CRAWL_HARD_CAP_MS` 300s→**1800s**、`CRAWL_DEADLINE_DETAILED` 預設＝硬上限、`MAX_CRAWL_PAGES` 28→**150**（clamp 上界 300）、`MAX_CRAWL_DEPTH` 2→**3**（crawler.ts）；`DEEP_RESEARCH_BUDGET_MS` 150s→**1200s**（clamp 上界 1800s）＋新 `deepResearchRounds()`（DEEP_RESEARCH_ROUNDS 預設 3，clamp 1–5）（deep-research.ts）；`RESEARCH_JOB_TIMEOUT_MS` 600s→**3600s**（orchestrator.ts）；`SOCIAL_FETCH_BUDGET_MS`（預設 600s）（social/index.ts）。
-  - **WP3 多輪研究**（deep-rounds.ts）：`runDeepRounds`（round1＝基礎角度＋社群模板；round2/3＝缺口分析 follow-up；**一輪 0 新來源即提早停**）＋`buildFollowUpQueries`（heuristic，依角度 citation 數）；`jobs.markProgress`（每輪回寫 sources_json 供 admin 監控）。
-  - **WP1 社群來源層**（social/**）：`SocialFetcher` 介面（凍結，§1.4）；YouTube＝官方 Data API v3（缺 YOUTUBE_API_KEY→整平台優雅 skip＋一次 warning，非 job 失敗）；Threads＝無登入 Playwright（crawler 新增 `fetchRaw` 取 outerHTML 解析 `<script>` JSON）；FB/IG＝Gemini grounding（deep-research 新增 `buildSocialQueries` ≥6 條雙語＋official accounts）；社群 SourceText 併入 `bundle.sourceTexts` 繼承 [S#] provenance。官網 `<a href>` 抽社群連結（crawler `RawCrawl.socialLinks`）→ `companies.social_links`（migration 013 TEXT JSON）＋ field_provenance filledBy='crawler'（orchestrator 走 core.db + core.provenance.record）。外呼走既有 SSRF path（social/http.ts 重用匯出的 `resolveAndValidate`＋本地 pinned agent）。
-  - **WP2 筆記區**（契約 §2）：extractor＋deep-extractor responseSchema/SYSTEM 新增 `narrativeZh`＋`uncategorized[{text,sourceIndex}]`（≤25，明令歸類不進既有欄位者一律進 uncategorized）；`NoteRepository.upsertSingletonNote`（冪等鍵 (org,entity_type,entity_id,note_type)，ports.ts+repos-pipeline.ts）；orchestrator 產兩單例（narrative pinned＋observations 每條附 `[來源](url)`）；migration 013 放寬 notes.note_type CHECK 加 'narrative'/'observations'。
-  - **WP4.1 索引管線**（indexer.ts）：`buildCompanyIndex` 切塊（≤1000 字）company_card/contact_card/company_product_card/company_news/note（entity_id＝來源 row id，對齊 realtime/retrieval.ts collectWhitelist/kindOf），embeddings 冪等 upsert（content_hash 未變連 embed 都省）；runJob 成功收尾呼叫；`POST /api/research/companies/:id/reindex`（org 隔離：非成員→findById null→**403**）。
-  - **指揮官追加三項**：migration 014 放寬 meeting_signals.type CHECK 加 person_mention/topic_shift（sqlite 重建表、pg DROP/ADD CONSTRAINT）；config.youtubeApiKey 改**選填**（4 個既有 AppConfig 測試字面量不用動即過）；indexer entity_type 詞彙對齊 M 的 retrieval.ts（已核對）。
-- **為什麼**: 使用者拍板爬蟲要深與廣（30–60 分鐘級）、擴社群來源、未歸類情報進筆記區、CRM 索引管線補上（生產原本索引空→會中檢索回 []）。依 `docs/RESEARCH_UPGRADE_CONTRACT.md` §0–§5 實作。
-- **驗證**: 全 workspace typecheck 綠；crm 49/49（+3）、server 95/95（+16 新測試涵蓋筆記單例冪等/indexer 冪等/多輪提早停/uncategorized 落 observations 帶來源/YouTube 缺 key skip/reindex 跨 org 403/migration 014 兩新訊號落庫）。未 commit（硬規則 10）。pg 方言 migration 013/014 未本機驗證（此環境無 pg，同既有 migrations-pg 慣例）。
-
-### 2026-07-13 15:40 | 側欄 Shell 對抗式驗證 3+1 小缺陷修復（rail 閃跳／抽屜 a11y／縮放殘留／reduced-motion 護欄）
-- **工作區**: apps/web
-- **類型**: fix
-- **檔案**: `apps/web/components/AppShell.tsx`, `apps/web/app/globals.css`
-- **改了什麼**:
-  - **#1 rail 閃跳（AppShell.tsx）**: `useState(false)`＋mount 後補水 useEffect（讀 `localStorage["mc.sidebar.rail"]`）→ 改為 `useState<boolean>(() => …)` **lazy initializer** 同步讀取（`typeof window==="undefined"→false`＋try/catch→false）。刪掉原補水 useEffect。首屏不再由展開閃成收合。檔內留註解說明前提：Shell 永遠在 client-only AuthGuard 之後掛載（AuthGuard checking 階段只 render spinner，SSR 不出側欄），故無 hydration mismatch；若未來 AuthGuard 改 SSR-capable 須把讀取搬回 effect。
-  - **#3 縮放往返抽屜殘留（AppShell.tsx）**: 新增 useEffect——`window.matchMedia("(min-width: 881px)")` 的 `change` 事件 `e.matches` 時 `setMobileOpen(false)`，`addEventListener`/`removeEventListener` 成對清理。斷點 881 對齊 CSS off-canvas 的 `max-width:880px`。
-  - **#2 手機抽屜關閉仍可 Tab 進入（globals.css `@media (max-width:880px)`）**: `.mc-sidebar` 補 `visibility:hidden` 並把 visibility 掛進 transition（`transition: transform 0.2s ease, visibility 0s linear 0.2s;`，delay 對齊既有 transform 0.2s）；`.mc-shell.is-mobile-open .mc-sidebar` 補 `visibility:visible; transition: transform 0.2s ease, visibility 0s;`。關閉時滑出動畫跑完（0.2s）後才 hidden→退出 tab 序；開啟時 visibility 立即可見。只在此 media query 內，桌機不受影響、滑入/滑出動畫保留。
-  - **#4 reduced-motion 護欄補洞（globals.css 檔尾護欄區塊）**: 本批既有 `@media (prefers-reduced-motion: reduce)` 護欄補 `.mc-shell { transition: none; }`（收折不播動畫）＋`.mc-sidebar { transition: none; }`（消去 #2 引入的 visibility 0.2s 延遲；transition:none 時 visibility 立即切換，行為正確）。
-- **為什麼**: 側欄 Shell 批次經對抗式驗證後 confirmed 的 3 個小缺陷（1 warning：rail 閃跳；1 a11y info：抽屜關閉仍可 Tab；1 info：縮放往返殘留開啟）＋1 個 reduced-motion 護欄補洞。只動 AppShell.tsx 與 globals.css 兩檔；未碰 present/hud/copilot、未碰 apps/server（I1/I2/I3 未觸及）。
-- **驗證**: web workspace `npx tsc --noEmit` 綠（EXIT=0）。grep 佐證：AppShell.tsx 無「mount 後讀 localStorage 設 rail」的補水 useEffect 殘留；matchMedia listener 有 removeEventListener cleanup。globals.css：mobile 區塊 visibility 兩態齊、reduced-motion 護欄含 `.mc-shell`。未跑瀏覽器實測（本輪僅 typecheck＋靜態核對）。未 commit（硬規則 10）。
-
-### 2026-07-13 11:10 | 會中 CRM 消費端（WP4-M）：檢索白名單擴大＋CRM 補充卡去重／信任＋兩類新訊號＋多人 speakerLabel
-- **工作區**: packages/shared, apps/server
-- **類型**: feat
-- **檔案**: `packages/shared/src/signals.ts`, `packages/shared/src/protocol.ts`, `apps/server/src/realtime/retrieval.ts`, `apps/server/src/realtime/orchestrator.ts`, `apps/server/src/realtime/hub.ts`, `apps/server/src/analysis/gemini-analysis.ts`, `apps/server/src/realtime/mid-meeting-crm.test.ts`(新)
-- **改了什麼**（依 RESEARCH_UPGRADE_CONTRACT §4.2/§5）:
-  - **signals.ts**: SIGNAL_KINDS 加 `person_mention`／`topic_shift`（檢索觸發類，SIGNALS_SCHEMA enum 與 sanitize 皆由 `[...SIGNAL_KINDS]`／`.includes` 自動涵蓋）。
-  - **protocol.ts**: TranscriptSegment 加**選填** `speakerLabel?: string`（wire `speaker` 枚舉不變＝向後相容）。
-  - **retrieval.ts**: 白名單由 {company, contacts, deal} 擴為 **＋notes＋company_products＋company_news**（新 `collectWhitelist`，全走 org-scoped repo；EmbeddingRepository 再強制 org_id）。query＝signal label＋近期逐字稿（`buildQuery`，contextText 上限 600 字）。新增 similarity 門檻 `SIMILARITY_MIN=0.5`、同場同 entity 去重（`opts.seen` 集合，`entityType:entityId`）、trust 由 `resolveTrust`（provenance human/verified→`verified` 否則 `crawler`，沿用 shared `isTrusted`）。`retrieveInfoCards` 加第 4 參 `opts:{contextText?,seen?}`；kindOf 收斂為 substring 判別（product/deal→battlecard、contact→contact、news/note/company→company）。
-  - **orchestrator.ts**: 每場 `cardedEntities`(seen 集合)＋`contactRoster`(名冊快取) Map；onSignals 傳 `{contextText(近6句), seen}` 給檢索。`inferSpeaker` 回傳 `SpeakerInference{speaker, speakerLabel?}`（原回 TranscriptSpeaker）——prompt 帶入該場公司 CRM contacts 名冊（唯讀 org-scoped `contacts.list`，姓名/職稱），能對上用「客戶-姓名/職稱」、對不上用「客戶-A/B」、unknown 或空 label 則省略；SPEAKER_SCHEMA 加選填 speakerLabel、maxOutputTokens 64→96。disposeSession 一併清兩個新 Map。AUTO_RESEARCH_KINDS 不變（person_mention／topic_shift **不觸發**自動研究）。
-  - **hub.ts**: onAsrFinal 解構 `{speaker, speakerLabel}` 並寫入 TranscriptSegment（undefined 時序列化自動省略＝舊 client 不壞）。
-  - **gemini-analysis.ts**（邊界說明見 gap 回報）: 僅在 analysis SYSTEM prompt 加兩句，指示偵測 person_mention／topic_shift。
-- **為什麼**: 使用者拍板「會中依交談內容顯示 based on CRM 的補充資訊、雙方可能各不只一位」。偵察證實檢索入口白名單過窄、說話者只壓 presenter/client、訊號無人名/話題類。**I2/I3 未觸及**：新卡只走既有 hub `onInfoCard`→hud 推送，不碰 deck/approval/播放視圖。
-- **驗證**: shared/crm 重建；server 我方 6 檔 typecheck 0 錯（workspace 僅剩 4 個 `youtubeApiKey` 錯＝R 的 config.ts 平行改動未補 AppConfig 測試 fixture，非本批）；server 79/79（＋6 新）、CRM 46/46 全綠；web typecheck 0 錯。未 commit（硬規則 10）。
-
-### 2026-07-13 14:30 | 全站換皮＋可收折側欄 Shell＋首頁儀表板（凍結設計契約 v1）
-- **工作區**: apps/web
-- **類型**: feat（＋globals.css refactor 清掃）
-- **檔案**: `apps/web/app/globals.css`, `apps/web/components/AppShell.tsx`, `apps/web/app/[locale]/page.tsx`, `apps/web/components/home/HomeDashboard.tsx`(新), `apps/web/app/[locale]/layout.tsx`, `apps/web/app/icon.svg`(新), `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
-- **改了什麼**:
-  - **globals.css token 重整（契約 §1）**: `:root` 全量換新——新增 `--mc-panel/--mc-elev/--mc-field/--mc-surface-2/--mc-border-strong/--mc-text-2/--mc-accent-soft/--mc-accent-line/--mc-hi/--mc-r-sm/md/lg/--mc-font-display/--mc-font-mono/--mc-shadow-1/2/accent`；既有 token 名全保留（值可改）。`--mc-accent-2` 由粉 `#ec4899`→靛 `#6d7cff`；`--mc-accent-contrast` `#0b0616`→`#ffffff`（grep 證實 0 消費端）；`--mc-radius` 由 `10px`→`var(--mc-r-md)` 別名。
-  - **元件手感清掃（契約 §2）**: 主按鈕廢漸層（`.mc-btn--primary` 改實色 `var(--mc-accent)`＋hover `#9d74f8`＋translateY(-1px)＋`--mc-shadow-accent`，active/disabled 不上浮；`.mc-btn` transition 補 transform/box-shadow）；`.mc-input` 底改 `var(--mc-field)`＋focus 3px 光環；新增 `.mc-kicker`/`.mc-kicker--live` mono primitive；companycard/personacard hover 補 `--mc-shadow-1`。全檔清掃：粉 `rgba(236,72,153,X)`→`rgba(109,124,255,X)`（5 處，頭像/漸層）；`#0e1728`＋`rgba(14,23,40,.5/.6)` 底→`var(--mc-field)`（9 處）；border-radius 原始 px 全收斂為 `--mc-r-sm/md/lg`（≤9→sm、10–14→md、15–20→lg；999px/50% 不動，~35 處）；刪未用 `.mc-nav`（`.mc-placeholder`/`.mc-tag` 保留——仍被 dead `components/Placeholder.tsx` 引用，不在可動檔案清單）。檔尾補 reduced-motion 護欄。
-  - **AppShell → 可收折側欄（契約 §3）**: TopBar 全刪，改 `mc-shell` grid（248px↔64px rail）＋sticky `mc-sidebar`（head logo/wordmark/收折鈕＋5 導覽群組＋foot org/user/langswitch/logout）。收折持久化 `localStorage["mc.sidebar.rail"]`（mount 後 hydrate 避免 mismatch）；active 用 `usePathname()`（首頁精確、其餘 startsWith、external 不標）；present/copilot/hud `target=_blank rel=noopener`＋「↗」；owner/admin 才見團隊設定（沿用 `useMe`）；語言切換 `router.replace(pathname,{locale})`；登出改 i18n `nav.logout`（修硬編碼「登出」）。RWD <880px off-canvas 抽屜＋scrim＋Esc/點項關閉＋mobilebar。inline SVG `Icon` 元件（export 供 HomeDashboard 共用，零新依賴）。
-  - **首頁儀表板（契約 §4）**: `page.tsx` server 改 `generateMetadata`（`home.metaTitle`）＋`<AppShell><HomeDashboard/></AppShell>`（納入 AuthGuard＝未登入導 /login，契約 §5）。新 `HomeDashboard`（client，useMe＋useTranslations）＝hero（live kicker＋問候＋lead）＋三欄 `mc-flow`（PRE/LIVE/DRILL）流程 rail＋唯一動效脈衝點＋6 張 `mc-surfacecard`（present/copilot/hud 外開）。
-  - **layout.tsx**: 只加 `next/font/google` Geist＋Geist_Mono variable class 到 `<body>`＋預設 metadata；I3 註解保留、無 chrome。新增 `app/icon.svg`（紫圓角方＋白 M）。
-  - **i18n（契約 §6）**: 新 `nav` namespace（workspace/pre/live/practice/admin/home/logout/collapse/expand/menu/closeMenu/newTab/language）＋`home` 增補（metaTitle/greeting/greetingAnon/lead/phase*×6/liveNote/*Desc×6）；role 標籤沿用既有 `org.roles.*`（未重造 nav.role*）。zh-TW/en key 集合一致（node 驗 PARITY OK）。
-- **為什麼**: 使用者嫌舊 TopBar 首頁醜、要左側可收折導覽＋右內容區、全站深色「會議控制室」換皮（凍結契約 v1，Fable 拍板）。I1/I2/I3 未觸及——present/hud/copilot 一字未改、不 import 新 chrome；首頁不再公開曝露會中連結（順修 I3 縱深）。
-- **驗證**: web workspace `tsc --noEmit` 綠（exit 0）。grep 證據：globals.css `#ec4899`/`rgba(236,72,153`=0；全 repo tsx+css `mc-topbar`=0；present/hud/copilot 目錄無 AppShell import；`--mc-surface-2` 已定義；globals.css border-radius 原始值只剩 token/999px/50%。studio-present.css（未改）消費的 12 個 token 全保留。**server workspace typecheck 紅＝平行 in-flight 工作**（config.ts 新增必填 `youtubeApiKey` 但 4 個 server 測試 fixture 未同步；該 4 檔非本次改動、本次只動 apps/web），與本 UI 批次無關。未跑瀏覽器實測（本輪僅 typecheck＋grep 靜態驗；使用者將派 fresh-context read-back）。未 commit（硬規則 10）。
-
-### 2026-07-09 16:55 | 安全修正：補完 admin A1 洞——register 拒收 allowlist 保留 email
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `apps/server/src/auth/routes.ts`, `apps/server/src/auth/register-admin.test.ts`, `apps/server/src/admin-routes/admin.test.ts`, `apps/server/src/auth/suspension.test.ts`
-- **改了什麼**: 前一輪只讓 register 不「衍生」platformAdmin，但 login 仍對 allowlist email 發 admin → 攻擊者可「用尚無帳號的 allowlist email 自助 register 設密碼 → 再 login」竊 admin（register 修法不完整）。**修**＝register handler 在 dup-409 檢查後、建帳號前，`isPlatformAdmin(email)` 命中 → **403「email reserved」**（用與 payloadFor 同一正規化小寫比對）。**Before**: allowlist email register → 201 建本地密碼帳號。**After**: → 403、不建帳號。login/google 的 admin 衍生不變（兩者證明 email 擁有權）；既有 allowlist 帳號不受影響（真帳號已於前面 409）。測試：register-admin.test 改 allowlist→403 且未建帳號＋非 allowlist→201＋「out-of-band provision 後 login→仍拿 admin」；admin.test/suspension.test 的 admin seed 由 `register` 改 `createUserWithOrg`（+bcrypt hash）。
-- **為什麼**: /simplify altitude 鏡頭揪出的安全殘留（A1 register 修法不完整）。server 73/73（+1 安全測試）、typecheck 綠。
-
-### 2026-07-09 16:55 | 品質清理（行為不變）：dedup／熱路徑單查詢／repo 復用／併發
-- **工作區**: apps/server
-- **類型**: refactor
-- **檔案**: `apps/server/src/ops/metered-gemini.ts`, `apps/server/src/ops/pricing.ts`, `apps/server/src/admin-routes/admin-queries.ts`, `apps/server/src/admin-routes/index.ts`, `apps/server/src/auth/active-account.ts`
-- **改了什麼**: (1) metered-gemini `{value,usage}→MeterResult` 五欄映射兩處 → 抽近端 `toMeterResult()` helper。(2) pricing `pricingRows` 內聯定價解析 → 復用 `priceFor(kind,model)`（與 `estimateCostUsd` 同一解析；順修誤導註解）。(3) **admin-queries 復用既有 CRM repo**：`adminOrgDetail` invite 清單→`core.invites.list`（**只投影不含 token 的欄位，A3**）、per-org 用量→`core.usage.rollup`（映射回 `{kind,costUsd}`＋保留 cost DESC 排序＋`totalCostUsd`）；`orgMemberEmails`→`core.members.list`、`userEmailById`→`core.users.findById`（三 fn 簽名 `db`→`core`，index.ts 三處呼叫同步改）；**跨租戶 overview/usage/jobs 全域 rollup 維持手刻**（既有 repo 帶 org filter 不可用）。(4) active-account `isAccountActive` 熱路徑兩次 sequential await → **單一 correlated-subquery 查詢**（`SELECT (SELECT status FROM orgs...) AS org_status, (SELECT status FROM users...) AS user_status`；SQLite/PG 皆可、`?` 參數化，**fail-closed 語意逐位元不變**）。(5) `adminOverview` ~10 個獨立 await → `Promise.all`（冷路徑、零風險）。
-- **為什麼**: /simplify 清理批次。**admin 端點回傳形狀逐欄比對契約 §4 不變**（admin.test 17/17 過，含 #5 `byKind`／invite-no-token、#1/#2 shape）；server 73/73、typecheck 綠。
-
-### 2026-07-09 16:50 | apps/web 行為不變品質清理：抽共用 ConfirmDialog＋WsStatus 直用＋CopilotView 巢狀三元化簡
+### 2026-07-19 19:45 | 會中進行 cockpit /simplify：3 項行為不變清理（死 radius fallback／單子 <g>／靜態預覽 URL 收斂）
 - **工作區**: apps/web
 - **類型**: refactor
-- **檔案**: `apps/web/components/ui/ConfirmDialog.tsx`(新), `apps/web/components/studio/SlideEditor.tsx`, `apps/web/components/train/PersonaPicker.tsx`, `apps/web/app/globals.css`, `apps/web/app/studio-present.css`, `apps/web/components/hud/HudView.tsx`, `apps/web/components/copilot/CopilotView.tsx`
+- **檔案**: `apps/web/app/globals.css`, `apps/web/components/copilot/CockpitView.tsx`, `apps/web/lib/meeting-session.ts`, `apps/web/components/studio/SlideEditor.tsx`
 - **改了什麼**:
-  - **抽共用 ConfirmDialog（reuse）**: 新增 `components/ui/ConfirmDialog.tsx`（props：title／message(ReactNode)／confirmLabel／cancelLabel／onConfirm／onCancel／confirmTone("primary"|"accent"|"danger"，含危險樣式旗標)／dismissOnBackdrop／ariaLabel）。SlideEditor 原內嵌 `.mc-confirm` 生圖確認 → 改用 ConfirmDialog（ariaLabel="AI 生圖確認"、confirmTone="accent"、不允許點背景關）；PersonaPicker 原 `StartConfirmDialog`（`.mc-modal`）→ 改用 ConfirmDialog（dismissOnBackdrop、confirmTone 預設 primary），並刪除該區域元件。文案（生圖付費/耗時預警、麥克風/計費/如何結束三點、對練對象名）逐字保留。CSS 合併：`.mc-modal`（globals.css）＋ `.mc-confirm`（studio-present.css）→ 單一 `.mc-confirm` 家族（backdrop 模糊、panel 陰影、`__list`/`__who`），移至 **globals.css**（因 ConfirmDialog 也用於 /train，而 studio-present.css 只在 studio/present 載入）；studio-present.css 舊 `.mc-confirm` 區塊移除只留註記。
-    - **TeamSettingsView 決定＝維持 window.confirm 不動**（只讓 SlideEditor＋PersonaPicker 共用）。理由：同步阻塞式 `window.confirm` → 非同步 React modal 客觀上改變互動時序（違本批「行為不變」宗旨），且需憑空生一個新標題字串（違「i18n 一字不改」）＋新增 pending-state。走了指示明文給的逃生門。
-  - **HudView WsStatus 直用**: `ConnectingState` 的 `status: ReturnType<typeof useRealtime>["status"]` → `status: WsStatus`；`useRealtime` 已匯出 `WsStatus`，import 補上 `type WsStatus`。
-  - **CopilotView 巢狀三元化簡**: `granted ? (status === "failed" ? "mc-badge--warn" : "mc-badge--ok") : "mc-badge--warn"` → `granted && status !== "failed" ? "mc-badge--ok" : "mc-badge--warn"`（四種輸入逐一比對語意等價後才改）。
-- **為什麼**: 上一批 UI 新增造成兩個各異但同構的確認 dialog（各帶一套 CSS）與繞圈型別推導、巢狀三元；純品質清理、不改行為、不找 bug。未觸及 lib/ws.ts toWsEndpoint（本輪刻意不動）、error-i18n.ts；i18n 文案只搬結構未改字。
-- **驗證**: `apps/web` `tsc --noEmit` 綠。本機 web dev(:3000) 有跑，但較重的 client 路由（/train、/copilot、/hud）在此環境會因 Next dev 編譯 worker 崩潰回 500（錯誤＝「Jest worker encountered 2 child process exceptions」，屬 dev-server 基建不穩、非本次改動：typecheck 綠、錯誤未指向任何本次檔案、未改動的重路由 zh-TW/studio 同樣 500 而輕路由 en 的 crm/login/studio 清單頁 200），故無法在瀏覽器實際點按確認鈕；以 typecheck 綠＋結構等價為佐證。未 commit（硬規則 6）。
+  - **globals.css**: `.mc-cockpit__second-qr`／`.mc-cockpit__second-link` 的 `border-radius: var(--mc-r-md, 8px)`→`var(--mc-r-md)`（--mc-r-md 於 :root 已定 12px，8px fallback 永不觸發且值不符；渲染半徑不變）。
+  - **CockpitView.tsx**: QR 佔位內只包單一 <rect> 的 `<g fill opacity>` 折進 rect（`<g fill="currentColor" opacity="0.35"><rect .../></g>`→`<rect ... fill="currentColor" opacity="0.35" />`）；另一個共用 stroke 的四路徑 finder-mark <g> 保留；渲染相同。
+  - **meeting-session.ts**: 新增 `buildStaticPresentUrl(deckId)`＝復用私有 `absoluteInApp`（`/present?deckId` only、無 meeting/token）。
+  - **SlideEditor.tsx**: openStaticPreview 由手拼 `${origin}/${locale}/present?deckId=` 改呼 buildStaticPresentUrl；移除只剩此路徑在用的 useLocale import＋const locale＋useCallback deps 的 locale（locale 來源收斂為 currentLocale 單一）。live-play（openLivePlay/buildPresentUrl）不動。
+- **為什麼**: /simplify 四鏡頭 10 候選收斂為 3 行為不變清理（reuse／altitude／simplification）。/code-review 五鏡頭同輪零高信心問題（8 raw→0 confirmed ≥80，I1/I2/I3 再查皆成立）。
+- **不變量**: 純美學／URL 收斂，不動 deck patch／approval／HUD；`buildPresentUrl` 必帶 present-role token 的契約保留（另開 buildStaticPresentUrl 而非把 creds 改可選）。不違反 I1/I2/I3。
+- **驗證**: apps/web `tsc --noEmit` exit 0 零診斷；靜態預覽 URL byte-identical（URLSearchParams 與 encodeURIComponent 同編碼、currentLocale 讀同一 path 段）。未 commit（硬規則 10）。
 
-### 2026-07-09 16:40 | admin 行為不變品質清理（/simplify 12 項）
-- **工作區**: apps/admin
-- **類型**: refactor（純清理，零行為改動）
-- **檔案**: 新增 `src/components/charts/geometry.ts`、`src/lib/useConfirmAction.ts`；改 `charts/Sparkline.tsx`、`charts/LineChart.tsx`、`components/DataTable.tsx`、`components/StatusBadge.tsx`、`app/orgs/page.tsx`、`app/orgs/[id]/page.tsx`、`app/jobs/page.tsx`、`app/page.tsx`、`lib/api.ts`、`lib/useAsync.ts`、`app/login/page.tsx`、`lib/format.ts`、`app/globals.css`。
-- **改了什麼**: (1) 抽泛型純函式 `projectPolyline(items,getValue,geom)→{coords,line,area,min,max}`，Sparkline/LineChart 各傳自己幾何（Sparkline x0=pad/yBase=h-pad；LineChart maxFloor=1）——投影數學逐字等價（座標/字串 toFixed 皆不變）。(2) 刪 LineChart 死碼 `height` prop。(3) Sparkline 守衛 `>=1`→`>=2`（單點本就不渲染，輸出不變）。(4) 抽 `useConfirmAction(perform,onDone)` hook，orgs 兩頁的 pending/busy/actionErr 狀態機收斂，各傳差異 perform。(5) 抽 `errMessage(err,fallback)` 進 lib/api.ts，useAsync/login/hook 共用（原 4 處 `err instanceof ApiError?…`）。(6) orgs status 解析化簡為 `raw==="suspended"||raw==="active"?raw:""`。(7) jobs `orgId` 無 setter 的 useState→純 const。(8) page.tsx 相鄰兩 KpiCard 的 `sparkFromDays(rows,7)` 提為 `spark7` 共用。(9) 刪 DataTable 未用的 `caption` prop＋死 CSS `.ad-table__caption`。(10) DataTable client/server 兩段頁尾導航抽 presentational `<Pager>`（DOM/class/文案/disabled 邏輯全等）。(11) 刪無呼叫端的 `fmtRelative`。(12) 刪 StatusBadge 未被傳的 `title` prop。
-- **為什麼**: /simplify 結果，去重＋除死碼，不碰 API 參數/回傳（dayParamToEpochMs、labels 皆未動）。`tsc --noEmit`（root hoist next15/react19）全綠；未 commit。
+### 2026-07-19 14:36 | simplify 化簡：CRM 五指令輪未 commit 變更——import 收斂＋社群平台常數單一真源
+- **工作區**: packages/crm, apps/server
+- **類型**: refactor
+- **檔案**: `packages/crm/src/repos-social.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/more-mode.ts`
+- **改了什麼**（保功能化簡，三處，皆零行為變更）:
+  - **repos-social.ts import 收斂**: 同模組兩行 type import 併一行。Before: `import type { DbPort } from "./ports.js";` ＋ `import type { CompanySocialRepository } from "./ports.js";`。After: `import type { DbPort, CompanySocialRepository } from "./ports.js";`（對齊檔內慣例）。
+  - **orchestrator.ts import 收斂**: `@meetcopilot/crm` 的 type-only 與 value import 兩行併一行。Before: `import type { CrmCore } from "@meetcopilot/crm";` ＋ `import { dedupeCompanyContacts } from "@meetcopilot/crm";`。After: `import { dedupeCompanyContacts, type CrmCore } from "@meetcopilot/crm";`（沿用檔內既有 inline `type` 混寫慣例，如 deep-research 的 `type SourceText`）。
+  - **社群平台清單單一真源（重複收斂）**: `["youtube","facebook","instagram","threads"]` 原在 more-mode.ts（`SOCIAL_PLATFORMS`，供 `buildMoreGapQueries` 判缺）與 orchestrator.ts `buildMoreGapSeeds`（inline 算 `socialPlatformsPresent`）各存一份、須手動同步。改為 more-mode 的 `SOCIAL_PLATFORMS` 加 `export`，orchestrator 改 `SOCIAL_PLATFORMS.filter((p) => handles[p])`。producer/consumer 共用同一常數，杜絕漂移。新增 export 不改既有簽名。
+- **為什麼**: 本輪 RESEARCH_UPGRADE v2（社群/技術棧/more/照片）未 commit 變更的收尾化簡。只做 import 收斂與重複域常數收斂；child-upsert `matchRow` 抽取、contact-merge、more-mode/photo-hunt 純函式等既已乾淨，刻意不動（見回報）。純資料層/研究層，不動 deck patch/approval/HUD，不違反 I1/I2/I3。
+- **驗證**: `packages/crm npx vitest run` 8 檔 61 測全綠；`apps/server npx tsc --noEmit` 綠、`npx vitest run` 35 檔 181 測全綠。未動 web（本輪 web 檔已乾淨）；未 commit（硬規則 10）。
 
-### 2026-07-09 15:16 | admin 停權批次 2 個 regression 修復：WS 監聽器 async 窗口＋register 竊取 admin
-- **工作區**: apps/server
+### 2026-07-19 19:20 | E2E 尾巴修復：contact dedupe CJK 內嵌抽取＋羅馬拼音等值橋接｜photo-hunt 佔位/預設圖黑名單
+- **工作區**: packages/crm, apps/server
 - **類型**: fix
-- **檔案**: `apps/server/src/realtime/ws-server.ts`, `apps/server/src/realtime/hub.ts`, `apps/server/src/auth/routes.ts`, `apps/server/src/auth/register-admin.test.ts`(新), `apps/server/src/realtime/ws-async-gate.test.ts`(新), `apps/server/src/admin-routes/admin.test.ts`, `apps/server/src/auth/suspension.test.ts`
+- **檔案**: `packages/crm/src/contact-merge.ts`, `packages/crm/src/contact-merge.test.ts`, `apps/server/src/research/photo-hunt.ts`, `apps/server/src/research/photo-hunt.test.ts`
 - **改了什麼**:
-  - **Finding 1 WS async 窗口（crash＋洩漏）**: `ws-server.ts` connection handler 把 `ws.on("error")`＋`ws.on("close",()=>hub.detach(ws))` 移到 `isAccountActive(...).then` **之前同步掛上**（帳號檢查是兩個 await 的 DB 查詢，有真實窗口）。理由：(a) 無 error listener 時 ws@8 的 EventEmitter 會 re-throw 成 uncaught → index.ts 無 uncaughtException handler → 整 process crash；(b) 窗口內 close 若在 attach 前發生，close 事件需已有人接才會 detach，否則幽靈 entry 殘留、room Set 永不歸 0 → runtime＋Gemini ASR 洩漏。`.then` 內只留 `hub.attach`＋`ws.on("message")`（error/close 不重掛，避免 double-detach）。`hub.ts attach()` 開頭加防呆 `if (ws.readyState !== ws.OPEN) return;`——窗口內已關閉的 socket 不入房（其 close 已 fire 過、不會再 detach）。停權語意不變（不通過仍 close 4003 fail-closed）。
-  - **Finding 2 register 竊取 admin（A1 繞過）**: `routes.ts` register handler 的 token 改為 `issueToken(jwtSecret,{userId,orgId,role:"owner"})`，**不再走 `payloadFor`**（後者會對 allowlist email 蓋 `platformAdmin:true`）。契約 §1：platformAdmin 只在 login/google（兩者證明 email 擁有權）蓋；register 證明不了任何事（Google-only admin 的 allowlist email 尚無本地帳號 → 攻擊者可 register 該 email 竊取 admin JWT）。login/google 路徑不動。
-  - **測試**: 新增 `register-admin.test.ts`（allowlist email 走 register → token 非 platformAdmin；對照同 email login → 為 platformAdmin）；新增 `ws-async-gate.test.ts`（① 真 hub：已關閉 socket attach 不入房、不 materialize runtime＝不洩漏，OPEN socket 正常入房為對照；② 真 WS server＋慢速 fake core：窗口內 `emit("error")` 不 throw＝證同步 error listener 在，client close 觸發 detach＋attach 收到非 OPEN socket）。因安全修法改變 register 語意，`admin.test.ts`／`suspension.test.ts` 的 adminToken 取得改為「register 建帳號後再 login」（原本直接用 register token 當 admin，正是本次修掉的洞）。
-- **為什麼**: 兩者皆為今日 admin/停權批次新引入的 regression（review 確認）。未動契約；I1/I2/I3 未觸及；未改 index.ts。
-- **驗證**: server typecheck 綠；server 全測試 72/72 綠（原 68＋4 新）；realtime 子集 22/22（原 20＋2）。WS 窗口驗法＝ws-async-gate.test.ts 用真 WebSocketServer＋可控 gate 的 fake core 模擬「連線→窗口中 close/emit error→放行檢查」，實證不 crash（error listener 同步在）＋不洩漏（attach 收非 OPEN、真 hub guard 拒收）。未 commit（硬規則 6）。
+  - **尾巴1 dedupeCompanyContacts 漏併（contact-merge.ts）**: 舊版只按「非空 full_name_zh」trim 分組——同一人的英文變體（full_name_zh 空）落單不併。E2E 實測 Connact AI 殘餘 3 列程峻宏未收斂。新增兩段保守分組（`groupContactRows`:159）：**(1) CJK 內嵌抽取**（`extractEmbeddedCjkName`:125，正則 `/[㐀-鿿豈-﫿]{2,}/`）——full_name_zh 空但 full_name 內含 ≥2 字連續 CJK 段（如「Cheng Chun-hung (程峻宏)」）→抽出中文段當 zh 鍵；合併時（`mergeGroup` backfillZh 參數，:382）把該中文名回填 survivor 空的 full_name_zh。**(2) 羅馬拼音正規化嚴格全等橋接**（`normalizeRomanName`:137——去括號內容/lowercase/去所有非 a-z0-9）——仍無鍵的列先橋接到某 zh 群成員（該成員 full_name 正規化相等，如「Cheng Chun-Hung」→chengchunhung == B 去括號後 chengchunhung），否則彼此相等才成新羅馬群。**嚴格全等、零模糊**：David Chen(davidchen)≠David Cheng(davidcheng) 不併。群鍵優先序 zh>羅馬（羅馬鍵只在能橋接 zh 群或彼此相等時成群）。survivor 選法/human-verified 護欄/re-point/provenance 併入**全不動**。Before: `const key=(r.full_name_zh??"").trim(); if(!key) continue;`（英文變體被 `continue` 丟棄）。After: `groupContactRows(rows)` 兩段分組＋回填。SELECT 加 `full_name` 欄。
+  - **尾巴2 photo-hunt 抓到佔位圖（photo-hunt.ts）**: 實測填入 `https://www.niea.org.tw/public/element/FB_default_image.jpg`（FB 預設佔位圖）。新增 `PLACEHOLDER_PATH_RE`（:28，`/(?:default|placeholder|blank|no[-_]?image|fallback|dummy|sprite|spacer)/i`，涵蓋 fb_default/og-default/avatar-default 等 *-default）；`toUsablePhoto` 改回傳前多過一關 `if (PLACEHOLDER_PATH_RE.test(u.pathname)) return undefined`（:96，比對整個 URL path、大小寫不敏感）。因 alt 命中與 og:image 兩條路徑皆經 `toUsablePhoto`，故一處守衛兩路都過。
+- **為什麼**: E2E 實測 Connact AI 揪出兩尾巴。dedupe 修法「保守零模糊」（僅 CJK 內嵌＋羅馬嚴格全等橋接，不做部分匹配），既知風險不變（同名不同人的 zh 鍵仍會併）。純 CRM 資料層＋研究解析，不動 deck patch/approval/HUD，不違反 I1/I2/I3。
+- **驗證**: `packages/crm npx tsc --noEmit` 綠、`npx vitest run` 8 檔 61 測全綠（contact-merge.test.ts 8→12：程峻宏三變體 3→1／CJK 抽取回填／David Chen≠Cheng 不併／同名陳志明仍併）；`apps/server npx tsc --noEmit` 綠、`npx vitest run` 35 檔 181 測全綠（photo-hunt 7→9：FB_default alt+og:image 兩路擋＋真照片仍取／placeholder/no-image/avatar-default/blank/dummy/fallback 皆擋）。**實資料驗收**（一次性 .mjs，scratchpad 未進 repo，自帶 busy_timeout DbPort 與 live server 併存，唯讀 .env）：對 Connact AI（org 019f59d7…/company 019f59d8…）先 log 合併計畫再執行——3 列程峻宏（「Cheng Chun-Hung」zh空最舊＝survivor／「Cheng Chun-hung (程峻宏)」zh空／「Troy」zh程峻宏）收斂為 1，`{groupsMerged:1,contactsRemoved:2,groupsSkipped:0}`，總列 7→5，survivor full_name_zh=程峻宏（fill-empty＋backfill）、title/title_zh 累加（上限 4 段）、其他 4 人（李光斌/廖柏維/高全德/李芳葦）零受影響；photo_url 那張 FB_default 佔位圖 UPDATE 為 NULL，複查 DB 內 FB_default 殘留＝0。未 commit（硬規則 10）。
 
-### 2026-07-09 15:10 | apps/admin 契約修復：日期參數 epoch-ms 化（修全頁 400）＋UsageSummary.from/to 型別＋KIND_LABELS 對齊真實 6 種 kind
-- **工作區**: apps/admin
+### 2026-07-19 18:10 | migration 017：crawl_jobs.mode CHECK 放寬納入 'more'（修 enrich mode=more 400 CHECK failed）
+- **工作區**: packages/crm
 - **類型**: fix
-- **檔案**: `apps/admin/src/lib/api.ts`, `apps/admin/src/lib/api-types.ts`, `apps/admin/src/app/usage/page.tsx`, `apps/admin/src/lib/labels.ts`
+- **檔案**: `packages/crm/migrations/017_more_mode.sql`(新), `packages/crm/migrations-pg/017_more_mode.sql`(新)
 - **改了什麼**:
-  - **Finding 1（Critical）日期參數不符**: DateRangePicker 產出 `YYYY-MM-DD`，前端原樣送 `?from=2026-06-10&to=...`；server `admin-routes/index.ts:46 parseEpoch` 做 `Number("2026-06-10")=NaN` → 400「from/to must be epoch-ms numbers」，`/usage`、`/jobs`、`/`(dashboard) 首次載入必中。修法＝在 api.ts 集中新增 `dayParamToEpochMs(day, edge)`（`start`→`Date.parse(day+"T00:00:00.000Z")`、`end`→`Date.parse(day+"T23:59:59.999Z")`，涵蓋整日以免 `created_at <= to` 排除同日事件；空值→undefined 由 qs 略過；非 `YYYY-MM-DD`（含已是數字字串）→數值化原樣回，防二次轉換）。套進 `getUsage`(from start/to end)、`getUsageEvents`(同)、`listJobs`(同)。UsageEventsDrawer 的「單日 cell」（groupBy=day 時 from=to=row.key）也走同轉換＝該日 00:00→23:59:59.999。
-  - **Borderline #4 型別漂移**: `UsageSummary.from/to` 型別 Before＝`string` → After＝`number`（server `admin-queries.ts:147-149 AdminUsage.from/to:number` 回 epoch-ms）；`usage/page.tsx` 約 106 行「區間」標籤 Before＝`{q.data.from} → {q.data.to}`（會渲染原始毫秒整數）→ After＝`{fmtDate(q.data.from)} → {fmtDate(q.data.to)}`（複用 format.ts 既有 formatter，另補 import）。
-  - **Finding 2（Info）KIND_LABELS 錯誤**: labels.ts 用了不存在的 `image`、漏真實 `openai_image`/`gemini_extract`。改為對齊真相來源 `packages/shared/src/ops-types.ts USAGE_KINDS` 六種（gemini_text/gemini_extract/gemini_live/openai_image/embedding/asr），`image`→`openai_image`（「OpenAI 生圖」）、補 `gemini_extract`（「Gemini 擷取（匯入解析）」）。usage 定價說明表與 drawer 項目欄一併正確。
-- **為什麼**: code-review 兩項確認問題——契約 §4/§8 規定 from/to 一律 epoch-ms number，前端違約送日期字串使每個帶日期範圍的 admin 查詢被 server 回 400；KIND_LABELS 對不上真實 kind 導致定價表缺項/誤標。**只動 apps/admin，未改 server**（違約方＝前端）；未動其他 review finding；未 commit（硬規則 6）。
-- **驗證**: `apps/admin` `tsc --noEmit` 綠；node 驗轉換函式（`2026-06-10`→from=1781049600000/`2026-06-10T00:00:00.000Z`、to=1781135999999/`2026-06-10T23:59:59.999Z`、同日跨距 86399999ms、空值→undefined、數字字串直通）。本機 admin dev(:3100) 與 server(:8787) 皆未啟動，未能實跑 `/usage` 驗 200；轉換與 typecheck 佐證修復。
+  - **根因**: RESEARCH_UPGRADE v2 已在 routes/orchestrator/shared 導入 `mode='more'`（「研究更多」補缺升級），但 DB 層漏做 migration——`crawl_jobs.mode` 的 CHECK 仍是 `IN ('quick','detailed','deep')`（010 定），故 `POST /api/crm/.../enrich` 帶 `mode=more` 落 crawl_jobs 時 CHECK constraint failed → 400。E2E 才暴露。
+  - **SQLite 017**: SQLite 無法 ALTER CHECK，沿用 010 的「建 `crawl_jobs_new`→`INSERT SELECT` 搬全部列→`DROP` 舊表→`RENAME`→重建 `idx_crawl_jobs_org_target`」重建。新表欄位/索引與 010 重建後的 crawl_jobs **一字不差**（006/010 後無他 migration 動過本表，已 grep 確認），僅 mode 的 CHECK 由 `IN ('quick','detailed','deep')`→`IN ('quick','detailed','deep','more')`。既有 job 列（研究執行簿記）完好搬運。
+  - **PG 017**: `ALTER TABLE crawl_jobs DROP CONSTRAINT IF EXISTS crawl_jobs_mode_check;` ＋ `ADD CONSTRAINT crawl_jobs_mode_check CHECK (mode IN ('quick','detailed','deep','more'));`（沿用 010 pg 版慣例——PG 對表級 CHECK 自動命名 `<table>_<col>_check`；`IF EXISTS` 防呆，純新庫走 head 亦不報錯）。
+- **為什麼**: 補上 v2 `more` 模式漏掉的 DB migration，讓「研究更多」不再 400。純簿記表 CHECK 放寬，不動 deck patch/approval/HUD，不違反 I1/I2/I3。
+- **驗證**: `packages/crm npx vitest run` 8 檔 57 測全綠（admin-migration 跑全套至 head，含 017）；一次性腳本（scratchpad，未進 repo）對全新 in-memory SQLite 依序套 001–017 後：`INSERT mode='more'` **成功**（row.mode='more'）、`INSERT mode='bogus'` **仍被擋**（CHECK constraint failed: mode IN ('quick','detailed','deep','more')）、quick/detailed/deep 皆仍 OK。`apps/server npx tsc --noEmit` EXIT 0 無波及。未 commit（硬規則 10）。
 
-### 2026-07-09 13:55 | 整合收線：接上 admin 半場留下的 5 個跨界缺口＋部署殘留檔棄用標記
-- **工作區**: apps/server（＋根目錄部署檔）
-- **類型**: fix
-- **檔案**: `apps/server/src/realtime/hub.ts`, `apps/server/src/realtime/session-runtime.ts`, `apps/server/src/realtime/ws-server.ts`, `apps/server/src/realtime/retrieval.ts`, `apps/server/src/realtime/orchestrator.ts`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/routes.ts`, `apps/server/src/decks-routes/index.ts`, `apps/server/src/index.ts`, `.env.example`, `docker-compose.yml`, `Caddyfile`, `.env.production.example`
-- **改了什麼**:
-  - **缺口1 ASR 記帳**: hub 建構子 `meter?` 改參數屬性存為欄位；`onAsrFinal` consent 閘後對每個成功轉寫的 final 逐字段記一筆 `asr`（fire-and-forget，`meter(orgId,'asr',()=>({result:undefined,meetingId}),\`asr:<meetingId>:<seq>\`)`）。冪等 key = meetingId＋單調 chunk 序號（新 `LiveSessionRuntime.asrChunkSeq`，隨 runtime dispose）。
-  - **缺口2 會中分析記帳**: hub `ensureRuntime` 的 `new RollingWindowAnalysisEngine(...)` 補第 4 引數 `this.meter ? {meter:this.meter, orgId:meta.orgId} : undefined`（engine 已支援，之前恆傳 undefined＝不計費）。
-  - **缺口3 WS 升級停權閘**: `ws-server.ts` import `isAccountActive`＋收 `core` 參數（index.ts 呼叫補傳 `core`）；連線 handler 在 `hub.attach` 前 `await isAccountActive(core,orgId,userId)`，不通過→送 `account_suspended` error＋`close(4003)`；DB 錯 fail-closed 關閉。attach＋message/close 監聽器移進通過分支（停權 socket 絕不入房，比照既有 send-error-then-close 拒絕風格）。
-  - **缺口4 userId 回填**: decks route generate/image 呼叫傳 `userId(req)`（服務層已就緒）；research/orchestrator 把 `requestedBy` 貫穿到 metered helpers（`meteredGeminiFor`/`extractorFor`/`deepExtractorFor`/`meteredGrounding`/`deepResearcherFor` 加 `userId?`）＋`runJob` 介面/`runStandard`/`runDeep` 加 `requestedBy?`，routes 的 runJob 呼叫補 `requestedBy: req.auth!.userId`；realtime `MeetingContext` 加 `userId?`（→ metered embed ctx），orchestrator 檢索 ctx 帶 `runtime.presenterUserId`。
-  - **缺口5 .env.example**: 補 `PRICING__<MODEL>__INPUT_PER_M/OUTPUT_PER_M/PER_IMAGE` 覆寫說明區塊（含 5 model 範例，預設全註解＝行為不變）；確認 `PLATFORM_ADMIN_EMAILS`/`ADMIN_ORIGIN` 已在。
-  - **棄用標記**: `docker-compose.yml`/`Caddyfile`/`.env.production.example` 檔頭加醒目 `⚠️ 未採用的 GCE VM 替代方案殘留 — 現行部署＝Cloud Run×2＋Cloud SQL，見 docs/DEPLOY.md`（.env.production.example 另指現行 env 以 DEPLOY.md 的 Secret Manager/env 清單為準）。
-- **為什麼**: 五路平行改動各自驗過，但 admin server 半場留下的 ASR/會中分析記帳、WS 停權掛勾、userId 歸屬全靠 hub/ws-server/route 各一處掛接才生效（該 agent 明列為 gap）；部署殘留檔（單 VM 方案）易誤導。**未動任何契約**；I1/I2/I3 未觸及（僅記帳副作用＋停權閘＋歸屬欄）。
-- **驗證**: 全 workspace（shared/crm/admin/server/web）typecheck 綠；server 68/68、CRM 46/46 全綠零回歸。本機起 server(:8788)＋web(:3000) 冒煙：health/ready 200；register 201→me 200；admin 無 token 401／一般 token 403／admin token（.env 臨時加 PLATFORM_ADMIN_EMAILS 後重啟）/api/admin/overview 200（測後已還原 .env）；WS 三角色 capture/hud/present 皆 open＋session_state（同時實證缺口3 放行 active 帳號）；web home/login/crm/studio 四頁 200。未 commit（硬規則 6）。
-
-### 2026-07-09 14:25 | 會議即時層 P0 修復：WS 連線根因＋三視圖連線狀態機＋train 預警
+### 2026-07-19 17:20 | 會中進行收斂：導覽剩兩入口＋/hud 降級＋收音摩擦精簡＋帳號A 一鍵開簡報
 - **工作區**: apps/web
-- **類型**: fix
-- **檔案**: `apps/web/lib/ws.ts`, `apps/web/lib/useRealtime.ts`, `apps/web/components/copilot/CopilotView.tsx`, `apps/web/components/hud/HudView.tsx`, `apps/web/components/present/PresentStage.tsx`, `apps/web/components/train/PersonaPicker.tsx`, `apps/web/app/globals.css`, `apps/web/app/studio-present.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
-- **改了什麼**:
-  - **P0 根因（連線恆失敗）**: `POST /api/meetings` 回的 `wsUrl` 是**完整 ws 端點** `ws://host/ws`；copilot/HUD 把它當 `apiBase` 傳進 `useRealtime`→`ws.ts connect()`，後者又補一次 `WS_PATH`（`/ws`）→ `ws://host/ws/ws`，被 path-scoped `WebSocketServer` abortHandshake(400) 拒 → 永遠連不上。present 用 `API_BASE`（非 wsUrl）故不受此 bug，但等待畫面無任何連線指示。**修**: `ws.ts` 新 `toWsEndpoint()`——base 若已以 `/ws` 結尾就不再補 → 同時吞掉 origin 型與 full-endpoint 型兩種輸入，`connect()` 改用之。Before `new URL(\`${toWsOrigin(apiBase)}${WS_PATH}\`)` → After `new URL(toWsEndpoint(apiBase))`。
-  - **連線狀態機（三視圖統一）**: `useRealtime` 加終態 `failed`＋重連上限 `MAX_ATTEMPTS=6`＋`describeWsClose(code)`（4001/4000→terminal 憑證/握手錯；其餘→可重試）＋`failureReason`＋`retry()`（bump nonce 重跑 effect、重置預算）＋`wsStatusLabel()`。禁「未連線但看似正常」與「永久重連中」：達上限或 auth-terminal → 停止重連、顯示原因＋[重試]。
-  - **copilot**: StatusBar 用 `wsStatusLabel`＋failed 時顯示 `.mc-cap__connfail`（原因＋重試連線鈕）；ConsentGate 標籤依 status（failed→「已同意（連線失敗）」）。
-  - **HUD 假聆聽修**: 加 `everConnected` 閘——**首次連上前不渲染串流面板**（原本會顯示假「聆聽中，尚無…」看似已連）；改顯示 `ConnectingState`（連線中 spinner／failed 時「無法連上會議 HUD」＋原因＋重試連線＋重新貼連結）。連上後掉線→banner（reconnecting／failed 專用 `--fail` banner 含重試＋重新貼連結）。`idle` 也視為未連。
-  - **present 等待畫面（I3 中性）**: `LinkState` 加 `failed`；重連耗盡→終態 `failed`；onClose 讀 `ev.code`，4001/4000 立即終態（不空耗 10 次重連）；等待畫面加中性連線指示點（`.mc-present__waitdot` 連線中/已連）＋failed 時「連線中斷＋重新連線」notice（`retryWs` bump nonce）。新 i18n key `connConnecting/connFailedTitle/connFailedDesc/connRetry`（zh-TW＋en）。**未新增任何 HUD/副駕元素或詞彙，守 I3**。
-  - **train 預警**: PersonaPicker「開始語音對練」改為先開確認 dialog（`.mc-modal`：需麥克風＋會開始計費語音 session＋結束方式），同意才 `onStart`（後續才 `getUserMedia`＋鑄 Live token＋連 Gemini Live）。
-  - CSS: globals.css 加 `.mc-cap__connfail`／`.mc-hud__banner--fail`／`.mc-hud__connstate*`／`.mc-hud__connspinner`／`.mc-modal*`；studio-present.css 加 `.mc-present__waitdot*`。
-- **為什麼**: 使用者痛點「多處無法使用」的主犯＝會中即時流程未連線就永遠卡死、零回饋零重試（audit-c P0）。根因是 client 端 wsUrl 雙重補 `/ws`；伺服器**不需**先 start（scheduled 會議即可連，WS handshake 不檢查 status）。附帶修 HUD 假聆聽/idle banner 消失（P1）與 train 無預警（P1）。
-- **驗證**: web typecheck 綠；realtime server 測試 20/20 綠（未觸 server）。WS 協定層對真 server(:8788) 決定性驗證（browser-free）：舊 `/ws/ws`→opened:false/1006（根因坐實）；新 `/ws` 三角色(capture/hud/present) 皆 opened:true+session_state（修復）；壞 token→close 4001（終態映射）。**Playwright 三視圖 UI 截圖受阻**：本機 Next dev server 在多 agent 並行下 OOM，SWC worker 崩潰（"Jest worker exceeding retry limit"，未改過的 home/login 同 500），且無授權重啟——非本次改動所致。未 commit（硬規則 6）。
-
-### 2026-07-09 13:40 | Admin 後台 server 半場（ADMIN_CONTRACT §1–§4/§6.1）＋記帳補洞
-- **工作區**: apps/server, packages/crm
 - **類型**: feat
-- **檔案**: 新 `apps/server/src/admin-routes/{index.ts,admin-queries.ts,admin.test.ts}`、`apps/server/src/auth/{active-account.ts,suspension.test.ts}`、`apps/server/src/ops/{meter-userid.test.ts,pricing.test.ts}`；改 `apps/server/src/config.ts`、`auth/{jwt.ts,routes.ts}`、`index.ts`、`ops/{meter.ts,meter-impl.ts,metered-gemini.ts,pricing.ts}`、`generation/generation-service.ts`、`decks/image-service.ts`、`train/{routes.ts,train-service.ts}`、`analysis/gemini-analysis.ts`、`realtime/hub-endmeeting-authz.test.ts`(config 字面補 2 欄)；`packages/crm/src/{repos-ops.ts,usage.test.ts}`、新 `packages/crm/test/admin-migration.test.ts`
+- **檔案**: `apps/web/lib/meeting-session.ts`(+buildPresentUrl/buildHudUrl), `apps/web/components/AppShell.tsx`, `apps/web/components/home/HomeDashboard.tsx`, `apps/web/components/copilot/CockpitView.tsx`, `apps/web/components/copilot/CopilotView.tsx`, `apps/web/components/studio/SlideEditor.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
 - **改了什麼**:
-  - **§1 平台管理員身分**: config 加 `PLATFORM_ADMIN_EMAILS`/`ADMIN_ORIGIN`；`AuthPayload.platformAdmin?`＋`verifyToken` 放行該欄；新 `platformAdminRequired`（無 token→401、非 admin token→403 `{error:"admin only"}`）；register/login/google 簽發時 email∈allowlist→`platformAdmin:true`。
-  - **§2 停權**: 新 `auth/active-account.ts`（`isAccountActive` 以 raw DbPort 查 orgs/users.status、不加寬 frozen 型別；`activeAccountRequired` middleware，DB 錯 fail-closed 403）；login/google 停權 403；index.ts 於 crm/research/decks/train/meetings/org router 掛 `activeGuard`（usage 依契約不掛）。`Meter.meter` 加可選 5th `userId`→`record` 寫 `usage_events.user_id`（repos-ops INSERT 補欄）；metered-gemini ctx.userId、generation/image-service 補可選 userId 參數。
-  - **§3 記帳補洞**: `loadPricingOverrides()` 實作（`PRICING__<MODEL>__INPUT_PER_M` 等，boot 於 index.ts 套用）＋`pricingRows()`/`PRICING_DISCLAIMER`（§4#10）；train `startSession` 鑄 Live token 時記 `gemini_live`（idem=`live:<sid>`、userId）；`gemini-analysis.ts` 加可選 metering（建構傳 `{meter,orgId}`→包 metered client）。
-  - **§4 Admin API**: `admin-routes/`（10 端點，全過 `platformAdminRequired`，跨 org 走 raw DbPort、`?` 佔位、小寫別名+JS camel 映射、日期分桶用 JS UTC；overview/usage(4 groupBy)/usage-events/orgs/orgs:id/PATCH status×2(自鎖守門)/jobs/jobs-stats/health/pricing）。v1.2：時間戳 epoch ms、usage30d.byKind={kind,costUsd}、durationMs/queueMs server 算。
-  - **§6.1 CORS**: index.ts 單 origin→allowlist Set（WEB_ORIGIN+ADMIN_ORIGIN+localhost:3000/3100）；掛 `/api/admin`（在 `/api` decks catch-all 之前）。**index.ts 只動 CORS 區塊與 router 掛載**。
-- **為什麼**: token 花費儀表板／帳號管理／job 監控／健康頁的後端＋補齊 ASR/gemini_live/會中分析漏記帳與 pricing env 覆寫（使用者痛點 #2）。**不改契約**；未碰 realtime/research 檔本體（僅 index.ts 掛載點與 analysis 可選注入）；ASR 記帳＋analysis/ws 停權掛接需 hub/ws-server 各 1 行掛勾（realtime 平行 agent 所有，列為 gap）。
-- **驗證**: 全 workspace（shared/crm/admin/server/web）typecheck 綠；server 68/68（+27 新：admin 17、suspension 4、meter-userid 2、pricing 4）、CRM 46/46（+3：migration 2、userId 1）全綠，既有測試零回歸。本機起 server（:8789，PLATFORM_ADMIN_EMAILS 經 .env override）實測：admin email 登入→10 端點全 200 且形狀對、一般 token 全 403、無 token 401；停權 e2e（suspend→login 403+crm 403、health/ready 200、restore→200）。migration 012 空庫＋既有庫升級（001..011→012 ALTER）雙路徑實測資料完好。未 commit（硬規則 6）。
+  - **導覽收斂（nav.live 群組）**: AppShell NAV_GROUPS 與 HomeDashboard LIVE 卡由三個 external 連結（present/copilot/hud）收斂為兩個角色入口——簡報舞台→/present（帳號A）、會中副駕·HUD→/copilot（帳號B），移除頂層 hud 連結；labelKey 改 nav.present/nav.copilot；/hud 路由保留只降級（第二裝置用）。
+  - **cockpit 外殼（CockpitView）**: header 加「私人帳號B、副駕＋HUD 同畫面」說明（copilot.cockpitAccountB）；<header> 與 grid 間加可收折 <details>「在另一台裝置看 HUD」affordance——creds 非空時顯示 buildHudUrl(creds) 唯讀連結＋複製鈕＋inline-SVG QR 佔位（無 QR 相依，複製連結為實際交接路徑），creds 為空顯示提示；單 <main>／雙欄 grid／雙 WS／CopilotInner·HudInner 掛載全未動。
+  - **收音摩擦（CopilotView 中度）**: 起始卡內嵌同意勾選（copilot.consentInline，沿用既有 consentGranted state＝useState(false) 非預設勾）＋內嵌 TabShareTutorial 於 getDisplayMedia 前顯示分頁音訊三步引導＋ZeroTrackGuard 一鍵重試（onRetry=start）。相位機／CopilotInner export 介面不變；getDisplayMedia 仍在同一 user-activation 同步堆疊、前面不 await createMeeting（createMeeting 留在 SetupPanel）。
+  - **帳號A 一鍵開簡報（SlideEditor）**: 工具列加「開始簡報」——靜態預覽（deckId-only /present）＋連線會議播放（先同步開空白分頁→createMeeting→buildPresentUrl(deckId,creds)→導向，帶 present-role token）；不動 present/page.tsx·PresentStage.tsx。
+  - **helpers（meeting-session）**: buildPresentUrl(deckId,creds)→locale 前綴絕對 /present?deckId&meetingId&token(=wsToken)；buildHudUrl(creds)→locale 前綴絕對 /hud?meetingId&wsToken；currentLocale() 讀 pathname。i18n 兩語系 lockstep 加 25 鍵、移除 hud.title（保留 hud.desc）。
+- **為什麼**: 使用者反映「會中進行三個介面太複雜」。/copilot 其實早已融合副駕＋HUD；本輪只收斂產品外殼（導覽＋收音引導＋帳號A launcher），不重建 pane、不動 server 契約。
+- **不變量**: I3 靠 PresentStage import 白名單＋server 角色切流保證，非靠路由分開，收斂導覽不削弱；present 仍零-HUD 只 render deck_update。I1 未動 deck-patch／SuggestionQueue（append-tail）。I2 批准 gate 原封不動；inline consent 只 gate PCM→ASR，不 gate 頁面批准。launcher 鑄 present-role token（單一 wsToken、角色為連線期 query param）。
+- **驗證**: apps/web `tsc --noEmit` exit 0 零診斷；fresh-context 走查（導覽兩入口無 hud/兩檔一致、affordance/雙WS、consent 非預設＋一鍵重試＋無 await createMeeting、launcher present URL、25 鍵兩語系齊全無殘留 removed key）PASS；不變量＋authz 攻擊者視角（誤帶/跨 org token 仍漏不出 HUD）PASS。未 commit（硬規則 10）。
 
-### 2026-07-09 13:20 | 簡報線（DeckWizard/studio）審測 P1×3＋精選 P2 修正
-- **工作區**: apps/web, apps/server
-- **類型**: fix
-- **檔案**: `apps/web/components/studio/DeckWizard.tsx`, `apps/web/components/studio/SlideEditor.tsx`, `apps/web/app/studio-present.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`, `apps/server/src/decks-routes/index.ts`
-- **改了什麼**:
-  - **P1 objective 靜默丟值**：DeckWizard「目標」自由 `<input>` → `<select>`（5 後端 enum pitch/introduce/fundraise/report/training，本地化標籤 提案/介紹/募資/報告/培訓 ＋選中一行說明）。只可能送 enum 值或空，杜絕「中文自由字→後端 isOneOf 靜默丟值」。
-  - **P1 生成中無回饋**：step3 生成 modal 從單一 spinner+「別關閉」升級為 階段提示（分析輸入→產生每頁內容→排版配色，誠實假階段依耗時推進封頂）＋三段進度條＋「已耗時 N 秒」計時＋「約需 15–60 秒，頁數越多越久」預估＋誠實說明「單次作業無法中途取消」（後端本無取消）。
-  - **P1 AI 生圖零預警**：SlideEditor「生成背景圖/整頁生圖」點擊前先出確認 dialog（説明「呼叫外部付費 API、約 10–80 秒、每張約 US$0.04、完成自動套上」，確認才 launchJob）＋按鈕區常駐一行成本/時間說明。取消＝不排 job、零花費。
-  - **P2 網址匯入錯誤人話化（server 錯誤映射）**：`decks-routes/index.ts` `/extract-url` catch 新增 `classifyExtractError`：來源限流(429)/內網·拒絕存取(422)/逾時(504)/格式不符(422)/來源5xx(502) 分案回可行動中文，去掉外露的 `url import failed:` 開發前綴；空文字分支也改中文。Before＝`url import failed: ${err.message}`（英中混）→ After＝「無法匯入：…（分案）」。
-  - **P2 跨步殘留錯誤 banner**：DeckWizard 換步驟（上一步/下一步）統一走 `goToStep` 先 `setError(null)` → step1 匯入失敗的 banner 不再跟到 step2/3。
-  - **P2 欄位標籤英文變數名**：DeckWizard 全字串抽進 `deckWizard` i18n 命名空間（zh-TW＋en）；可見標籤只剩中文（目標/要點/數據/來源文字…），英文提示移到欄位下方 `.mc-field__hint`；/en 顯示英文標籤。
-  - **P2 stats/image-full CSS 小修**（只動該兩模板樣式段）：stats 卡片加高＋垂直置中＋數字整體放大（消「上聚下空」）；image-full 用 `:has()` 區分——有圖滿版無留白（原行為）、無圖時保留 padding＋柔和漸層底（消「大標貼頂像壞頁」）。
-- **為什麼**: Audit-B 簡報線 P1×3＋精選 P2（生圖零預警、objective 靜默丟值、生成中無回饋、錯誤混語言、標籤露英文變數名、stats/image-full 醜點）。**未動** `apps/server/src/index.ts`、生成 prompt 與 schema 本體。
-- **驗證**: web typecheck 綠；server typecheck 我方檔案（decks-routes/extract）零錯——唯一紅在平行 admin agent 進行中的測試檔（admin.test.ts、config.ts 新增 AppConfig 欄位），非本批。Playwright（channel msedge）full wizard flow 12/13 PASS：objective 下拉 6 選項、標籤零英文變數名、生成中三段進度+計時+預估、確認 dialog 含 $0.04/10–80s、banner 換步清空、stats/image-full render、/en 英文標籤、零 next-intl missing-message；截圖存 `C:\tmp\meetcopilot-audit\shots\b-after\`。item4 humanized 文案另以直打 API 4 案驗證（private/format/metadata/baddomain 全回正確中文、無 dev 前綴）——因平行 agent 同時改 auth/i18n 使 web `/register` 暫時 500，該項截圖以 API 佐證。未 commit。
-
-### 2026-07-09 12:49 | 邀請流程死路修復（P0-1）＋團隊/設定入口（P1-2）＋auth 錯誤中文化（P1-4）
-- **工作區**: apps/web, apps/server
-- **類型**: fix
-- **檔案**: 新 `apps/web/app/[locale]/invite/page.tsx`、`apps/web/components/invite/InviteAcceptView.tsx`、`apps/web/app/[locale]/settings/page.tsx`、`apps/web/lib/error-i18n.ts`；改 `apps/web/components/auth/AuthForm.tsx`、`apps/web/app/[locale]/(auth)/login/page.tsx`、`apps/web/app/[locale]/(auth)/register/page.tsx`、`apps/web/components/AppShell.tsx`、`apps/web/app/globals.css`、`apps/web/messages/zh-TW.json`、`apps/web/messages/en.json`、`apps/server/src/org-routes/index.ts`
-- **改了什麼**:
-  - **P0-1 邀請接受頁**：新增 `[locale]/invite`（server page 從 `searchParams` 讀 `?token=`→ 傳給 client `InviteAcceptView`，免 Suspense）。刻意在 AppShell/AuthGuard 之外，未登入者也可落地：未登入→引導登入/註冊並用 `?next=/invite?token=…` 保留 token 回跳；已登入→顯示 `authedLead` ＋「接受邀請」→ `acceptOrgInvite(token)`→ 成功導向 `/crm`；token 缺失/伺服器錯誤→ 用 `inviteErrorKey` 映射成 zh-TW/en 人話（notFound/expired/emailMismatch/alreadyMember…）＋返回鈕。i18n 鍵在 `org.invite` 命名空間。
-  - **acceptUrl 修正（server）**：`org-routes/index.ts:84` Before＝`${WEB_ORIGIN}/invite?token=`（無此路由＋缺 locale）→ After＝`${WEB_ORIGIN}/zh-TW/invite?token=`（指向實存路由、帶預設 locale，`localePrefix:"always"`）。
-  - **AuthForm `?next=` 支援**：login/register page 從 `searchParams` 讀 `next` 傳入 `AuthForm`；成功後 `router.replace(redirectTarget(next))`——`redirectTarget` 僅接受同源絕對路徑（防 open-redirect），並把 query（邀請 token）拆成 `{pathname,query}` 讓 next-intl 保留 query＋補 locale。
-  - **P1-2 導覽入口**：AppShell 頂欄 nav 對 owner/admin 加「團隊設定」連結（`t("org.nav.team")`，指向 `/settings/team`）；新增 `[locale]/settings/page.tsx` 於 `/settings` 直接 `redirect(/${locale}/settings/team)`（原本掉進 Next 預設 404）。
-  - **P1-4 auth 錯誤中文化**：新增 `lib/error-i18n.ts`（`authErrorKey`/`inviteErrorKey`：依 `ApiError.status`＋英文訊息子字串→回 i18n leaf key，未知→generic）；AuthForm catch Before＝直接吐 `ApiError.message`（英文）→ After＝`t(\`errors.${authErrorKey(err)}\`)`。**不改 server 錯誤契約**（仍回英文 `{error}`），純 web 端映射。messages 加 `auth.errors` 命名空間。
-  - CSS 加 `.mc-authcard__actions`（邀請頁按鈕縱向排列）。
-- **為什麼**: Audit-A P0-1（受邀者點連結 404、邀請制形同虛設）、P1-2（團隊/設定頁無入口、`/settings` 404）、P1-4（登入/註冊英文錯誤混在中文 UI）。**驗收**：server typecheck 綠；web typecheck 我方檔案零錯（既有 2 錯在 `components/copilot/CopilotView.tsx`＝平行 agent 進行中的改動，非本批）。Playwright（channel msedge）實跑 e2e 全 PASS：owner UI 發邀請→ acceptUrl 為 `/zh-TW/invite?token=`→ 無痕 context 開連結（不再 404、顯示引導）→ 註冊（next 保留 token）→ 回跳接受→ 進 /crm → 出現在 owner 成員列表；`/settings`→`/settings/team` 重導；頂欄團隊連結存在；wrong-pw login 顯示「Email 或密碼錯誤…」（非英文）。I1/I2/I3 未觸及；未改 `apps/server/src/index.ts`；未 commit。
-
-### 2026-07-09 12:30 | 研究（Enrich）UX P1/P2 修正：三模式選擇＋完成卡持久＋人名不被覆寫
-- **工作區**: apps/web, apps/server
-- **類型**: fix
-- **檔案**: `apps/web/components/crm/EnrichPanel.tsx`, `apps/web/components/crm/CompanyDetailView.tsx`, `apps/web/components/ui/JobProgressCard.tsx`, `apps/web/app/globals.css`, `apps/server/src/research/orchestrator.ts`, `apps/server/src/research/name-guard.test.ts`(新)
-- **改了什麼**:
-  - **EnrichPanel（P1-3）**: 移除寫死的 `const mode = "deep"`，恢復 quick/detailed/deep 三選（`useState<CrawlMode>("quick")`，預設 quick）。每模式附一行說明＋成本/時間量級（quick=官網快掃・約1分內；detailed=官網深掃・數分鐘；deep=全網研究・數分鐘・費用較高）。deep 二次確認（首點顯示警告＋改鈕文案「確認開始（費用較高）」，再點才送）。二次確認以「實際會跑 deep」為準＝選 deep 或（company 且無 URL，後端強制走 name-based 全網研究）→ 關掉「選 quick 但無 URL 卻靜默跑昂貴 deep」的成本驚嚇缺口。無 URL 時顯示「將以公司名稱做全網深度研究」提示。複用既有 CSS `.mc-enrich__mode/.is-on`（前次 deep-only 重構留下的孤兒樣式）。
-  - **CompanyDetailView（P2-7）**: `load` 加 `opts.silent`——研究完成後的 `onEnriched` 改 `load({ silent: true })`，不進 `setLoading(true)` → StateBoundary 不換整頁 DetailSkeleton → EnrichPanel 不被卸載 → JobProgressCard 的 done 完成卡（填入 N 欄位＋來源清單）持久顯示到使用者關閉。Before：`onEnriched={load}`（非 silent）→ 整頁閃骨架＋卡永不顯示。
-  - **JobProgressCard（P2-9 對齊）**: MODE_LABEL 三模式名對齊 EnrichPanel（quick=快速掃描、detailed=官網深掃、deep=全網深度研究）。
-  - **orchestrator（P2-8，server 覆蓋修正）**: 新增 `guardHumanCompanyName(payload, existingName, nameProvenance)`＋私有 `protectHumanCompanyName`。runStandard（company 分支）與 runDeep 落庫前呼叫：既有 name 非空且**非爬蟲來源**（無 name provenance＝建檔人工輸入／filled_by=human／verified=1）→ 從 payload 移除 `company.name` 與其 name provenance，upsertFromCrawl 保留原名。只有 name 明確來自爬蟲且未人驗才允許重爬更新。fieldsFilled 改用 `payload.provenance.length`（守則後計數正確）。
-- **為什麼**: Audit-A P1-3（研究入口寫死昂貴 deep、無成本提示）、P2-7（完成卡永不顯示＋整頁閃骨架，根因＝onDone→load 整頁進 loading 卸載 EnrichPanel）、P2-8（研究把人工中文公司名覆蓋成爬到英文名，根因＝company.create 不寫 name provenance → trustedFieldsOf 漏掉 name → upsertFromCrawl 覆寫）。補上 create 未寫 provenance 的缺口、對齊既有 human>crawler supersede 慣例。未動爬蟲抓取本體、未動 index.ts。
-- **驗證**: server+web typecheck 綠；server 全測試 41/41 綠（含新 name-guard 5/5；因 node_modules/@meetcopilot/* symlink 指向已刪的 _v2 路徑，需用 alias 指向現 repo dist 才能跑 runtime import 的既有測試——環境問題，非本次改動）。live Playwright 受同一 symlink 斷鏈＋無 GEMINI_API_KEY 阻擋，未實跑。
-
-### 2026-07-08 23:20 | P2/P3 部署前審查修正（3 項）
+### 2026-07-19 16:35 | code-review 修復：照片獵取拉丁短段誤中＋補查軟 deadline 早於硬逾時
 - **工作區**: apps/server
 - **類型**: fix
-- **檔案**: `src/gemini.ts`, `src/decks-routes/index.ts`, `src/asr/gemini-asr.ts`
+- **檔案**: `apps/server/src/research/photo-hunt.ts`, `apps/server/src/research/photo-hunt.test.ts`, `apps/server/src/research/orchestrator.ts`
 - **改了什麼**:
-  - **gemini.ts `normalizeCallError`**: abort/逾時分支原地改寫 `e.message`——但真實 client timeout 的 caught error 是 `DOMException{name:"AbortError", message:"This operation was aborted"}`、其 `.message` 是唯讀 getter，賦值丟 TypeError → 吞掉 `retryable=false` → withRetry 不短路、白跑第二次 ~120s（共 ~240s）且逾時被誤標一般錯誤。改：回傳**全新可寫 Error**帶 `retryable=false`（保留逾時 token）；abort 偵測靠既有 `isAbortOrTimeout`（比對 `err.name`）。
-  - **decks-routes/index.ts**: catch-all `/MAX_TOKENS|finishReason/i` 會把 `finishReason=OTHER`/`MALFORMED_FUNCTION_CALL` 誤標「輸出過長」；收窄成 `/MAX_TOKENS/i`，殘餘 `/finishReason/i` 另給中性 422「生成未正常結束，請調整輸入後再試」；429、SAFETY/RECITATION 順序不變。
-  - **asr/gemini-asr.ts**: 併發 fire-and-forget transcribe 共用單一 `unavailableSignaled` 旗標，恢復後 straggler 失敗會重放 `asr_unavailable`（presenter HUD 雜訊）。加單調序號 `dispatchSeq`/`lastSuccessSeq`，失敗只在 `seq > lastSuccessSeq && !unavailableSignaled` 才 signal → 過期 straggler 不重放；空白音訊仍不報。
-- **為什麼**: 部署前用內建多 agent 對抗式審查（0 critical／1 warning／2 info、4 駁回）抓到——warning 的 gemini 逾時路徑崩是 P2 引入的真 bug（會讓逾時變 240s＋誤標）。typecheck 4ws 綠、server 36/36＋CRM 43/43 綠、fresh-context read-back（含 DOMException 實測）PASS。
+  - **photo-hunt 拉丁短段子字串誤中（confirmed medium）**: `textHasName` 舊版一律 `t.includes(tok)` 子字串比對；羅馬拼音 2 字母段（Li/Wu/Yu/An/Xu/Su/Mo…）是 Quality/reliable/click/application 的子字串→`findPersonPhotoInHtml` 回第一張命中 alt 的 <img>，導致版面裝飾/導覽/廣告圖被誤指派為某主管頭像（confidence 0.5＋寫 provenance）。改為 **CJK token 走子字串、拉丁 token 走詞界 `\b…\b`**（`escapeRegExp` 轉義後動態建 RegExp，`i` flag）；`nameTokens` 的拉丁「切段」token 提高門檻至 ≥3 字（CJK 段維持 ≥2；整名 token 維持 ≥2 由詞界承載），雙重防線。新增 hasCjk（沿用 repo `/[㐀-鿿豈-﫿]/` 慣例）。Before: alt「Reliable application, click」含「li」→誤中；After: 僅 alt 含獨立詞「Li Wei」/「Wei」才命中真照片。加 2 條 regression 測（拉丁短段不誤中裝飾圖、純裝飾頁→undefined）。
+  - **補查軟 deadline 形同虛設（confirmed medium）**: runDeep(:718)/runStandard(:579) 舊版 `runDeadlineAt = Date.now() + jobTimeoutMs()`，與外層 `withTimeout(work, jobTimeoutMs())`（:551）同值、且軟 deadline 在數個 await 後才算（t1>t0）→ 逐項前檢查 `Date.now()>deadlineAt` 永遠追不上硬 kill；長跑 job 直接 markFailed，增量落庫資料不被 reindex（reindexAfterJob 只在 markDone 後跑）。新增 `softDeadlineMs()`＝`jobTimeoutMs() - clamp(jobTimeoutMs()/6, 60s, 600s)`（預設 90 分→軟 80 分、留 10 分緩衝落庫/markDone/reindex）；兩處 runDeadlineAt 改用之。
+- **為什麼**: 對抗式 code-review 兩筆 confirmed medium。純研究/落庫路徑，不動 deck patch/approval/HUD，不違反 I1/I2/I3。低嚴重度兩筆（contact-merge 同名合併資料遺失風險、meeting_signals.entity_ref_json 未 re-point）屬凍結契約既定設計/契約範圍外，此輪不修（見回報誤報說明）。
+- **驗證**: `apps/server npx tsc --noEmit` 綠；`npx vitest run` 35 檔 179 測全綠（photo-hunt 由 5→7 測）。未動 web/crm；未 commit（硬規則 10）。
 
-### 2026-07-08 22:40 | extract-url 加固後續 P2/P3：gemini 韌性＋pptx 串流/worker 隔離＋ASR asr_unavailable＋webp 匯出排除
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `src/gemini.ts`, `src/import/pptx-parser.ts`, `src/import/run-in-worker.ts`(新), `src/import/parse-worker.ts`(新), `src/asr/gemini-asr.ts`, `src/realtime/hub.ts`, `src/generation/pptx-render.ts`, `src/decks-routes/index.ts`
+### 2026-07-19 15:45 | WS-B 引擎：more 模式全套＋deep 不丟官網 contacts＋dedupe＋照片獵取＋social 結構化落庫＋techStack noteZh＋記債四項
+- **工作區**: apps/server（＋packages/shared 一行：CrawlMode 加 more，凍結契約「mode 集合 quick|detailed|deep|more」）
+- **類型**: feat
+- **檔案**: `packages/shared/src/crm-types.ts`(CrawlMode+more)；`apps/server/src/research/orchestrator.ts`, `routes.ts`, `deep-research.ts`, `extractor.ts`, `deep-extractor.ts`, `extract-shared.ts`, `crawler.ts`, `more-mode.ts`(新), `photo-hunt.ts`(新), `social/{types,youtube,threads,index}.ts`, `social.test.ts`；`apps/server/src/crm-routes/companies.ts`；`apps/server/src/research/{more-mode,clean-url,semaphore-settle,photo-hunt}.test.ts`(新)；`.env.example`
 - **改了什麼**:
-  - **P2 gemini（gemini.ts）**: generateContent 加 per-call 逾時（client 預設 30s、generateJson 120s——非串流大簡報可能 >30s）；generateJson 偵測 finishReason≠STOP → 丟含「finishReason=<REASON>」的可行動 zh-TW 錯誤＋設 `err.retryable=false`；withRetry 加退避（衍生 jitter、非 Math.random）＋honor Retry-After（數值＋message 內 `retryDelay:"Ns"` 字串）＋`retryable===false` 立即短路。ASR 不走此共用 client（v2 ASR 自有 GoogleGenAI）；maxOutputTokens 已存在未重加。
-  - **P3 pptx 串流上限（pptx-parser.ts）**: 原 post-decompress 檢查（`MAX_IMAGE_BASE64_CHARS`，可被謊報宣告大小繞過）→ 改 `entry.nodeStream()` 邊解壓邊累計位元組、超標即 destroy+reject；圖片與 slide-XML 路徑都走；加投影片數上限。周邊 entry（rels/theme/layout）超標由既有 try/catch 吞（graceful，記憶體仍因 stream destroy 有界）。
-  - **P3 worker 隔離（run-in-worker.ts＋parse-worker.ts 新）**: `runInWorker<T>(task,buf,timeoutMs)` 把 parse 丟進可 terminate 的 worker_thread，逾時 `worker.terminate()`+reject「匯入解析逾時」。載入用 `__filename` 副檔名判斷＋workerData 傳 ext＋**dynamic import 帶副檔名**（Node 22.18 原生 strip-types 會頂掉 worker 內 tsx、靜態 import 會 ERR_MODULE_NOT_FOUND）。dev(tsx)＋prod(dist node) 兩模式實測 parse 正確＋1ms 逾時真 terminate。
-  - **P3 ASR（asr/gemini-asr.ts＋realtime/hub.ts）**: 真失敗 vs 靜音區分；真失敗經 hub 廣播既有 ServerMessage error（code `asr_unavailable`）一次（per-provider 去重旗標、instance-per-session＝等同 per-runtime，成功即清）；空白音訊仍不廣播。I3 保留（只傳可用性通知、無內容、presenter-private）。
-  - **P3 webp（generation/pptx-render.ts）**: 匯出 addImage 三個 sink（safeImage、cover renderImageFull、addLogo 經 resolveLogo）排除 `image/webp`；**shared `isRasterImageDataUri` 不動**（畫面預覽仍可顯示 webp）——舊版 PowerPoint 無法渲染 webp。
-  - **P2/P3 decks（decks-routes/index.ts）**: /decks/generate catch 依 `err.status`/訊息映射（429/quota→429、SAFETY/RECITATION→422、MAX_TOKENS/finishReason→422、其餘 502 不外洩 raw、一律 server-side `console.error`）；/decks/import、/extract-pdf 改走 `runInWorker`，逾時→408，保留掃描/空白→422；GenerationEmptyError→422。
-- **為什麼**: extract-url（P1）上線後續，把 v1 稽核＋審查在 v2 也複發的同類問題補上（P2 LLM 韌性、P3 上傳 DoS／ASR 觀測性／webp 相容）。使用者「1 3修一修」。全 workspace typecheck 綠；server 36/36＋CRM 43/43 測試全 pass；逐 cluster fresh-context read-back PASS。I1/I2/I3 未削弱、SSRF 未動。凍結契約平行派工（v2 rule 6）。
+  - **more 模式全套**: routes MODES 加 `more`＋gemini 未設時 502；`CrawlMode` 加 `more`（shared）；orchestrator dispatch `mode∈{deep,more}`→runDeep。runDeep 變體(isMore)：(1) `buildMoreGapSeeds` 讀 DB 空欄（公司 scalar 欄/products 缺 pricing·specs·model/contacts 缺 background·photo/social 缺平台）→ `buildMoreGapQueries`（more-mode.ts 純函式，cap 12）當 follow-up round 種子（只發一次）；基礎角度縮為 overview+news（`baseAngleKeys`，deep-research.buildQueries 新增支援）、關社群模板。(2) 公司非受信任欄 fill-empty（既有非空從 mergedCompany 移除、其 provenance 也不寫）。(3) `decideEvidenceBoost`（純函式）：既有非空＋正規化相等＋新 sourceUrl 網域≠既有 provenance 網域＋非人工/已驗證→補一筆 supersede provenance（confidence=min(0.9,舊+0.15)、保留既有值、不動 verified）。(4) 完成後 dedupe＋照片獵取（與 deep 共用）。
+  - **Task 1 deep 不丟官網 contacts**: runDeep `payload.contacts` 由 `[]` 改為 `siteExtract.contacts`（先 site 後 deep.people，靠 CONTACT_SPEC full_name_zh fallback＋mergeTitle 收斂）；落庫完成後（deep/more 皆）呼叫 WS-A 的 `dedupeCompanyContacts(core.db,...)`（best-effort，刪 stale 卡→runJob reindex 重建）。
+  - **Task 2 照片獵取**: `photo-hunt.ts` 純函式 `findPersonPhotoInHtml`（<img> alt 含人名 token≥2 取 src；og:image 僅 title 含人名才收；過絕對 http(s)＋svg/ico＋追蹤像素）；enrichKeyPeople 內對仍無 photoUrl 者取 grounding citation 前 2 URL `crawler.fetchRaw` 解析、confidence 0.5＋provenance sourceUrl=該頁；目標篩選加「或缺 photoUrl」。
+  - **Task 3 crawler CSS 背景圖**: 瀏覽器內 evaluate 補抓 inline style `backgroundImage`＋`<style>` 塊 `url(...)`（每頁≤10，w/h=0）concat 進 images，下游 `sanitizeCrawledImages` 同既有過濾。
+  - **Task 5 social 結構化落庫**: `SocialFetcher.fetch` 回 `{sources,posts}`（youtube channel/video、threads profile→NewSocialPost，youtube metrics 存 views/subscribers/videoCount/likes/comments、publishedAt epoch）；orchestrator `core.companySocial.bulkUpsert`；`GET /api/crm/companies/:id/social`→`{links:(social_links JSON＋六個 social_* 單欄整併), posts}`（org-scoped，公司不存在→空）。
+  - **Task 6 techStack noteZh**: extractor＋deep-extractor techStack schema/interface/mapper/SYSTEM prompt 各加 `noteZh`（一句 zh-TW，來源沒有就省略）。
+  - **Task 7 記債四項**: (a) deep-research `createSemaphore`/`runWithSemaphoreTimeout` 匯出＋renderWithLimits 改「名額佔位到底層 fetchRaw settle 才釋放」（逾時仍回 null，release 掛 underlying settle 兩臂防死鎖）。(b) `enrichKeyPeople`/`enrichProductDetails` 收 `deadlineAt` 逐項前檢查、超時停剩餘＋log。(c) `cleanUrl` 移入 extract-shared 並「只接受絕對 http(s)」（extractor 改 import）。(d) `DEFAULT_BUDGET_MS`/`BUDGET_CEIL_MS` 1_200_000→3_600_000、orchestrator `jobTimeoutMs` 預設 3_600_000→5_400_000＋`.env.example` 同步（與 prod env 對齊）。
+- **為什麼**: RESEARCH_UPGRADE v2 WS-B 引擎層（消費 WS-A 資料層）。沿用雙語不變量（主要欄留來源語言、*Zh gloss）＋provenance「值/來源同一 tx 不漂移」；純研究/落庫，不動 deck patch/approval/HUD，不違反 I1/I2/I3。
+- **驗證**: `apps/server npx tsc --noEmit` 綠、`packages/{shared,crm}`＋`apps/web` tsc 綠；重建 packages/shared＋crm dist（vitest 走 dist；WS-A src 已改但 dist 舊→dedupe runtime 缺函式，rebuild 後消失）；`apps/server npx vitest run` 35 檔 177 測全綠（新增 more-mode 12／clean-url 4／semaphore-settle 4／photo-hunt 5＝25 測）。未 commit（硬規則 10）。
 
-### 2026-07-08 21:52 | 從網址匯入：瀏覽器 UA 修 429 ＋ 非 UTF-8 頁面編碼修亂碼（移植 v1 6 項）
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `src/import/extract.ts`
-- **改了什麼**: 把 v1 已加固的 6 項移植進 v2 的 `extractFromUrl`/`extractFromPdf`（v2 較強的 SSRF/DNS-pin 區塊逐字保留，未回退）：
-  1. **瀏覽器 UA（headline 429 修）**: `safeFetch` 標頭 Before＝bot UA `MeetCopilot/0.1 (research-import)`＋`accept:text/html,application/xhtml+xml` → After＝新增常數 `BROWSER_HEADERS`（extract.ts:34，真實桌面 Chrome UA＋完整 accept＋`accept-language: zh-TW,zh;q=0.9,en;q=0.8`），`safeFetch` 改 `headers: BROWSER_HEADERS`（extract.ts:137）。實站對 bot UA 直接回 429。
-  2. **編碼感知解碼（修 Big5/GBK 亂碼）**: 新增 `resolveCharset()`（extract.ts:151，Content-Type charset → 前 2KB 嗅探 `<meta charset>` → 預設 utf-8）＋`decodeBody()`（extract.ts:163，`new TextDecoder(label)`，未知/錯誤退回 utf-8）。`extractFromUrl` body 讀取 Before＝`Buffer.concat(chunks).toString("utf8")` → After＝先讀成 `Buffer` 再 `decodeBody(buf, ctype)`（extract.ts:285）；`!reader` 分支改 `res.arrayBuffer()`（原為 `res.text()`）。
-  3. **十六進位實體＋防崩**: `decodeEntities` 新增 `&#x[hex];` 處理，並把 `String.fromCodePoint(Number(n))` 換成 `codePoint()` 守衛（extract.ts:191，非有限/<0/>0x10FFFF 回 ""），越界實體不再丟 RangeError 崩掉整頁抽取。
-  4. **429/503 有界重試**: `extractFromUrl` 對 429/503 做 1 次有界重試（`RETRY_STATUSES`/`MAX_FETCH_ATTEMPTS=2`/`MAX_RETRY_WAIT_MS=2500`），尊重 `Retry-After`（秒數＋HTTP-date 兩式、上限 ~2.5s）；sleep 可被既有 `AbortController` 中止、abort 即 break；重試走 `safeFetch` 讓 SSRF 逐跳重驗（extract.ts:218-247）；仍 429/503 丟 zh-TW「暫時限流」。
-  5. **DNS lookup 逾時**: 新增 `lookupAll()`（extract.ts:76，`dns.lookup` 對 `DNS_TIMEOUT_MS≈5s` race），在 `resolveAndValidate` 內把 `dns.lookup(...)` 換成 `lookupAll(...)`（extract.ts:94）——**只在 lookup 呼叫內加 race，未動 `resolveAndValidate`/`isPrivateIp` 匯出簽章**（crawler.ts 共用）。黑洞 nameserver 不再拖過 10s 總預算。
-  6. **PDF 頁數上限**: `extractFromPdf` Before＝`pdfParse(buffer)` → After＝`pdfParse(buffer, { max: 50 })`（extract.ts:294）。
-- **為什麼**: 使用者面向的「從網址匯入」（POST /api/extract-url）送 bot UA 被實站回 429、且對非 UTF-8（Big5/GBK/Shift-JIS）頁面硬解 utf8 變亂碼。移植 v1 `apps/server/src/import/extract.ts` 的已加固版。**SSRF / DNS-pin 區塊（isPrivateIp、resolveAndValidate 的公網/雲端 metadata 檢查、pinnedAgent IP-pin、逐跳重驗、error 路徑 body cancel）逐字保留未改**；v2 特有的 `finalUrl` 亦保留。typecheck `tsc -p tsconfig.json --noEmit` 綠。真網重現：`http://www.zol.com.cn/`（charset=gbk）標題「中关村在线 - 大中华区专业IT网站…」正確中文、**無 U+FFFD**；`https://example.com/`（utf-8）標題「Example Domain」無回退。I1/I2/I3 未觸及。
+### 2026-07-19 15:05 | WS-A 資料層：migration 016（note_zh＋company_social_posts）＋social 型別/mappers/repo＋contacts fullNameZh fallback＋dedupeCompanyContacts
+- **工作區**: packages/shared, packages/crm
+- **類型**: feat
+- **檔案**: `packages/crm/migrations/016_social_tech.sql`(新), `packages/crm/migrations-pg/016_social_tech.sql`(新), `packages/shared/src/crm-types.ts`, `packages/crm/src/mappers.ts`, `packages/crm/src/contact-merge.ts`(新), `packages/crm/src/child-upsert.ts`, `packages/crm/src/repos-prospect.ts`, `packages/crm/src/repos-social.ts`(新), `packages/crm/src/ports.ts`, `packages/crm/src/core.ts`, `packages/crm/src/index.ts`, `packages/crm/src/contact-merge.test.ts`(新)
+- **改了什麼**:
+  - **migration 016 雙套**: SQLite `company_tech ADD COLUMN note_zh TEXT`＋新表 `company_social_posts(id PK, org_id, company_id, platform, url, title, content, published_at, metrics_json, created_at, UNIQUE(org_id,company_id,platform,url))`＋org_company index；PG 版同義（`ADD COLUMN IF NOT EXISTS`、epoch 欄 BIGINT、`CREATE TABLE IF NOT EXISTS`）。
+  - **crm-types**: `CompanyTech.noteZh?`；`Company.socialLinks?: CompanySocialLinks`（新介面：youtube/facebook/instagram/threads 具名可選＋index signature，映射 companies.social_links JSON）；`SocialPost`/`NewSocialPost`。ContactSummary 不動。
+  - **mappers**: COMPANY_DEFS 加 `social_links`(J)；COMPANY_TECH_DEFS 加 `note_zh`；新 `SOCIAL_POST_DEFS`。
+  - **contact-merge.ts（新）**: `mergeTitle(existing,incoming)`（[、·／/] 切段、trim＋收斂空白、大小寫不敏感去重、existing 先、「 · 」串接、上限 4 段）；`isEmptyVal`；`accumulateAndFillEmpty`（累加欄 mergeTitle＋fallback 命中時 fill-empty，就地調整 snake_case rec）；`dedupeCompanyContacts(db,orgId,companyId)`（按 trim 後非空 full_name_zh 分組≥2；survivor＝唯一 human-verified 否則 created_at 最舊；群內 ≥2 human-verified→console.warn 跳過；合併＝scalar fill-empty＋title/title_zh mergeTitle＋field_provenance 併入 survivor＋re-point company_product_people/contacts.reports_to/company_departments.head/deals.primary/economic_buyer/champion/deal_contacts(PK 撞先刪)/meeting_attendees/transcript.speaker/activities/training_sessions/notes(contact)＋刪 contact_card embeddings/profile_cards 讓 indexer 重建＋刪冗餘列；單群一交易）。
+  - **child-upsert.ts**: ChildUpsertSpec 加 `fallbackMatchCols?`/`accumulateCols?`；`matchRow` 改 SELECT *；命中時 accumulate＋（fallback 時）fill-empty。CONTACT_SPEC 加 `fallbackMatchCols:["full_name_zh"]`、`accumulateCols:["title","title_zh"]`。
+  - **repos-prospect.ts 深度路徑（SqliteContactRepository.upsertFromCrawl）**: full_name 精配落空且 incoming fullNameZh 非空→full_name_zh 再配一次（matchedByFallback）；命中→title/title_zh 累加＋fallback 時 fill-empty；**provenance 只寫實際落庫的欄**（fill-empty 略過者不寫，避免值/來源漂移）、title/title_zh 快照對齊合併後值。
+  - **repos-social.ts（新）＋wiring**: `SqliteCompanySocialRepository`（`listByCompany` published_at DESC＋`bulkUpsert` 走 upsertChild matchCols[platform,url]）；ports.ts 加 `CompanySocialRepository` 介面＋CrmCore.companySocial；core.ts 組裝；index.ts 匯出 repo＋mergeTitle/isEmptyVal/dedupeCompanyContacts/DedupeResult。
+- **為什麼**: RESEARCH_UPGRADE v2 social+tech 契約 WS-A 資料層：技術棧 zh 說明、社群貼文結構化落庫、雙語主管去重收斂（爬蟲重複/官網＋deep.people 收斂靠 full_name_zh fallback 鍵）。沿用雙語不變量（主要欄留來源語言、*Zh gloss）與 provenance「值與來源同一 tx 不漂移」；純 CRM 資料層，不動 deck patch/approval/HUD，不違反 I1/I2/I3。
+- **驗證**: `npm run typecheck -w @meetcopilot/shared` 綠、`-w @meetcopilot/crm` 綠；`packages/crm` `npx vitest run` 8 檔 57 測全綠（含新 contact-merge.test.ts 8 測：mergeTitle／company-crawl fallback 命中+不命中／深度路徑 fallback+provenance 對齊／dedupe join re-point+deal_contacts PK 撞+provenance 併入+fill-empty／verified 保護跳過／survivor 最舊+唯一 verified）。未 commit（硬規則 10）。
 
-### 2026-07-08 21:00 | 研究面板一律全網深度（移除輕量/會前建檔選項）＋修 job 卡片誤標「輕量研究」
+### 2026-07-19 14:20 | WS-C web：Social tab 新元件＋TechTab 分類分組改版＋EnrichPanel「研究更多」(more)＋頭像 referrerPolicy＋i18n parity
 - **工作區**: apps/web
-- **類型**: fix/ux
-- **檔案**: `crm/EnrichPanel.tsx`（移除 quick/detailed/deep 模式選單，mode 固定 'deep'；URL 欄永遠顯示為可選起點；加 mc-enrich__lead 說明）＋`ui/JobProgressCard.tsx`（MODE_LABEL map：deep→「全網深度研究」/detailed→「會前建檔」/quick→「輕量研究」，修掉原本 `mode==='detailed'?'會前建檔':'輕量研究'` 二分法把 deep 誤標成輕量；進度文字 deep 改「正在全網研究…」）＋`globals.css`（.mc-enrich__lead）
-- **改了什麼**: (1) 修顯示 bug——JobProgressCard 用二分法判斷模式，deep 落入 else 被標成「輕量研究」、進度文字硬寫「爬取官網」；改為 mode-aware 正確顯示。(2) 依使用者要求移除模式選擇，手動「研究此公司」一律跑最重的全網深度研究（deep），只留可選 URL 起點。
-- **為什麼**: 使用者選深度卻顯示「輕量研究」，且「不需要有輕度研究，一律都是最重的」。註：會中副駕的 auto-research 仍用 quick（現場需快，屬不同情境，未動）。typecheck 4ws 綠。I1/I2/I3 未觸及。
-
-### 2026-07-08 20:30 | 研究：無 URL→以公司名稱做全網深度研究 ＋ job 逾時保護（不再永遠「研究中」）
-- **工作區**: apps/server＋apps/web
-- **類型**: fix
-- **檔案**: server `research/orchestrator.ts`（createJob company 無 url 不再 throw、改帶 companyName；runJob 分派 nameBased=(company&&!url)→useDeep；runDeep url 改 optional、無 url 跳過官網 crawl 只跑 DeepResearcher by name；新增 withTimeout()＋jobTimeoutMs() env RESEARCH_JOB_TIMEOUT_MS 預設 360s）＋`research/routes.ts`（created.url optional、傳 companyName）；web `crm/EnrichPanel.tsx`＋`globals.css`（URL 欄提示「留空則以公司名稱做全網深度研究（不需官網）」）
-- **改了什麼**: (1) 修邏輯 bug——原 orchestrator:196 對**所有模式含 deep** 硬要 URL，導致沒官網的公司留空 URL 就無法研究；現改為 company 無可爬 url 時**一律以公司名稱走全網 grounding 深度研究**（DeepResearcher 本就以 name 為種子、不需 url）。(2) 修掛死——整個 job 包 Promise.race 硬逾時，卡住會 markFailed 記「研究逾時」，不再永遠「研究中」。
-- **為什麼**: 使用者反映「研究此公司」對無官網公司（CyP）留空 URL 跑很久沒結果——「URL 說可選，那好歹要藉由公司名稱去做深度研究才對」。有 url 的三條原路徑行為不變。typecheck 4ws 綠／server 36/36／CRM 43/43。I1/I2/I3 未觸及。
-
-### 2026-07-08 19:30 | CRM 原文＋zh-TW 簡介並排 ＋ 技術棧/部門擷取寫入（補孤兒表）
-- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
 - **類型**: feat
-- **檔案**: crm `migrations/011_i18n_children.sql`＋`migrations-pg/011`（company_news+title_zh/summary_zh、company_products+one_liner_zh/description_zh、companies+description_zh、contacts+title_zh/background_summary_zh）＋`mappers.ts`（6 新欄 FieldDef，讀寫雙向）；shared crm-types（CompanyNews/CompanyProduct/Company/Contact 加 *Zh；CrawlPayload 加 techStack/departments，型別 NewCompanyTech[]/NewCompanyDepartment[]）；server `research/extractor.ts`＋`deep-extractor.ts`（schema 加 descriptionZh/techStack/departments/*Zh，SYSTEM 改雙語規則：原文逐字＋*Zh 產 zh-TW 簡介 ≤2 句，techStack/departments 直接 zh-TW、專有名保留；MAX_TECH=12/MAX_DEPARTMENTS=10）＋`orchestrator.ts`（runStandard/runDeep 落庫後呼叫 bulkUpsertTech/bulkUpsertDepartments，接上孤兒表）；web `ChildTabs.tsx`（NewsTab 原文+🌐中文簡介）＋`ProductsTab.tsx`（product description/oneLiner 中文簡介）＋`CompanyDetailView.tsx`（OverviewTab descriptionZh）＋`globals.css`（.mc-i18n-sum 等）；test `crm-core.test.ts`（idempotency 斷言改連續 1..N 不硬編碼）
-- **改了什麼**: 三件——(1) 對方情報顯示「原文＋zh-TW 簡介」並排（locale===zh-TW 且 *Zh 有值時顯示中文簡介框）；(2) 擷取器產出並在地化（不再只逐字英文）；(3) 技術棧 company_tech／部門 company_departments 兩張「有表有 repo 有讀路由有 UI、卻從無寫入」的孤兒表——補上擷取 schema＋orchestrator bulkUpsert 寫入路徑。
-- **為什麼**: 使用者反映「表現形式應該原文+i18n 簡介、爬出來全英文沒翻、技術棧與部門沒爬出來」。範圍＝只影響新研究結果（重跑「研究此公司」即現）；不回填既有資料。typecheck 4 workspace 綠/server 36/36/CRM 43/43。I1/I2/I3 未觸及（只動 CRM 資料/擷取/顯示）。
-
-### 2026-07-08 18:00 | 全網深度研究 enrich 模式（deep）— 不鎖公司網域、多來源、標真出處
-- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
-- **類型**: feat
-- **檔案**: shared crm-types（CrawlMode 加 'deep'、ProvenanceInput.sourceType）；crm `migrations/010_deep_mode.sql`＋`migrations-pg/010`（crawl_jobs.mode CHECK 加 deep）＋`repos-prospect.ts`（provenance 帶外部 sourceType）；server 新 `research/deep-research.ts`（DeepResearcher：6-9 組雙語 grounding 查詢+排序引用+深讀 top6 外部來源，跳過公司網域，SSRF-safe）＋`research/deep-extractor.ts`（逐事實 [S#] 來源標記→provenance source_url）＋`import/extract.ts`（回 finalUrl 解 redirect 到真發布者）＋`orchestrator.ts`（deep：DeepResearcher∥網站爬蟲→news/funding/people/competitors 寫入）＋routes（MODES 加 deep）；web EnrichPanel 第三選項「深度（全網研究）」
-- **改了什麼**: enrich 從「只爬公司網站」→ 新增 **deep 模式：全網研究**。以公司名/網址為起點，Gemini Google Search 多角度查（概況/新聞/募資/主管/競爭對手/產品，中英雙語）→深讀新聞/維基等外部來源→綜合填 CRM，**每欄 provenance.source_url 指向真實外部網址**（FT/Wikipedia/cnyes…非公司網域）。有界（DEEP_RESEARCH_BUDGET_MS 150s∥網站爬 ≤5min）、不幻想、成本記帳。
-- **為什麼**: 使用者要「不被鎖死在公司網址、要能去報導/wiki 等全網找」。**碩天科技實測：從 FT/Wikipedia/cnyes/digitimes/businesswire 撈到 11 概況+5 新聞+6 主管+10 競爭對手，附真實出處**。誠實：共用品牌名跨實體消歧不完美（CyberPower TW vs 美國 PC）。typecheck 綠/server 36/36/CRM 43/43/SSRF 仍擋內網。
-
-### 2026-07-08 16:30 | 深度爬取大幅強化（2 層 BFS+平行+雙語評分+單產品抽取，5 分內）
-- **工作區**: apps/server
-- **類型**: feat
-- **檔案**: `research/crawler.ts`（BFS+平行 pool+雙語評分+normalizeUrl+env MAX_CRAWL_PAGES/CRAWL_CONCURRENCY+softDeadline）、`research/extractor.ts`（per-product schema+多頁聚合+temp 0.3）、`gemini.ts`（temperature 傳遞）、`.env.example`
-- **改了什麼**: detailed 從「1 層/5 頁/循序/英文評分」→ **2 層 BFS＋有界平行（CRAWL_CONCURRENCY 預設 5）＋雙語連結評分（中英，看 pathname+連結文字）＋逐產品抽取**。總頁數 MAX_CRAWL_PAGES 預設 28（clamp 2-40）；softDeadline=硬 deadline-15s（回 partial+teardown 在 5 分硬上限前收尾）；normalizeUrl 去重（#/追蹤參數/尾斜線+redirect final）。extractor 聚合多頁（標來源 URL、每頁 6k、總 180k）逐產品填 category/pricing/specs/targetMarket/keyFeatures。
-- **為什麼**: 使用者反映爬取效果要加強、要像 EZpage 點連結往下追。**CyberPower 實測：6 產品全空→33-35 產品/100% 有類別，28 頁 2 層 ~80s（遠低於 5 分）**。誠實：定價/功能多空是真的（B2B 硬體不公開、不幻想）、規格量跑動（JS 比較表）。typecheck 綠、ssrf 5/5、server 36/36、fresh-context 審查 PASS（SSRF/SIGKILL/300s/BFS race-safe/quick 不變）。
-
-### 2026-07-08 14:30 | 共用 EZpage 帳號＝Google 登入＋爬蟲逾時放寬
-- **工作區**: apps/server＋apps/web
-- **類型**: feat
-- **檔案**: server 新 `auth/provision.ts`＋`auth/google-auth.test.ts`；改 `auth/routes.ts`（POST /api/auth/google）＋`config.ts`（GOOGLE_CLIENT_ID）＋`auth/index.ts`＋`index.ts`＋package.json（google-auth-library）；web 新 `components/auth/GoogleSignInButton.tsx`＋改 `AuthForm.tsx`/`lib/api.ts`/`next.config.mjs`（CSP 放行 accounts.google.com）/globals.css；`research/crawler.ts`（逾時/deadline）＋`.env.example`
-- **改了什麼**: (1) **Google 登入**：後端驗 Google ID token（audience＝EZpage 同一個 client id）→取 email→provisionUser find-or-create 本地 user+個人 org+owner→發 MeetCopilot JWT。與 EZpage 同 Google email 即同身分、無密碼。feature flag（GOOGLE_CLIENT_ID 未設→維持本地登入、測試不壞）。前端 GIS 按鈕＋CSP。(2) **爬蟲**：nav 逾時 20s→60s（env CRAWL_NAV_TIMEOUT_MS，clamp 5–120s）、逾時不硬敗改 waitUntil:"commit" 搶救部分內容、剝 #fragment；整場 deadline 放寬 quick 120s/detailed 300s（env 可覆寫、仍有界，L13）——使用者「慢慢爬沒事」。
-- **為什麼**: 使用者要跟 EZpage 帳號互通＋嫌密碼複雜（EZpage 純 Google 登入無密碼）；爬 CyberPower 產品頁 domcontentloaded 20s 硬敗。typecheck 綠、server 36/36。
-
-### 2026-07-08 11:30 | Postgres 移植（雙驅動；為 Cloud Run + Cloud SQL，4 agent；指揮官代記）
-- **工作區**: packages/crm＋apps/server
-- **類型**: feat
-- **檔案**: 新 `packages/crm/src/pg-db.ts`（PgDbPort＋`?`→`$n` 轉換＋AsyncLocalStorage tx＋int8→Number＋runMigrationsPg）＋`migrations-pg/001-009`＋`test-helpers.ts`；改 `core.ts`（driver 選擇工廠＋back-compat overload）、`index.ts`、5 個 repo 的方言 SQL、`apps/server/src/crm.ts`（DB_DRIVER=pg 支援）、5 個測試檔（driver 切換）
-- **改了什麼**: 加 Postgres 持久層路徑、**不破壞 SQLite**（env `DB_DRIVER`＋`DATABASE_URL` 選）。repo 完全 DbPort-agnostic → 同一份 `Sqlite*Repository` 在 pg 上跑，**免寫 Pg 版**。方言修正：`INSERT OR IGNORE`→`ON CONFLICT DO NOTHING`、`MAX(a,b)`→JS Math.max、`LIKE`→`LOWER() LIKE LOWER()`（大小寫 parity）、pg 版 DDL 全 epoch 欄 `INTEGER`→`BIGINT`（int4 溢位）、bool 保持 integer 0/1、JSON 保持 TEXT。
-- **為什麼**: 使用者選 Cloud Run scale-to-zero → 需 Cloud SQL Postgres（SQLite 在 Cloud Run 短暫檔案系統會掉資料）。**驗證：crm 43/43 在 SQLite＋Postgres 皆綠、server 32/32、真 server 在 pg 端到端（含真爬蟲、bigint 持久化）、SQLite 本機不破**。app 已 Postgres-ready for Cloud SQL。
-
-### 2026-07-08 09:40 | 訊號→CRM 批准回寫端點（M5 flywheel 收尾，關閉唯一 PARTIAL）
-- **工作區**: apps/server＋packages/crm＋apps/web
-- **類型**: feat
-- **檔案**: 新 `apps/server/src/realtime/writeback-service.ts`＋`writeback.test.ts`；改 `packages/crm/src/ports.ts`(ByUser 加 optional sourceType/sourceDetail)＋`update-apply.ts`(§7 provenance)＋`realtime/meeting-store.ts`(findSignal)＋`meetings-routes.ts`(路由)＋`index.ts`＋`apps/web/lib/api.ts`＋`docs/API_CONTRACT.md §5`
-- **改了什麼**: `POST /api/meetings/:meetingId/signals/:signalId/writeback {targetType,targetId,field,value}`——會後把批准的訊號寫回 contact/deal。array 欄 append、scalar set，欄位白名單（非清單 400）；signal 須屬該 meeting+org、target 同 org（否則 404）。provenance 走既有 update 路徑但覆寫 `source_type='meeting'`＋`source_detail=meetingId`＋`filled_by='human'`＋`verified=1`（CRM_SCHEMA §7）。ByUser 加**兩個 optional 欄**（向後相容：舊呼叫者 undefined→回退 'manual'，既有細填測試不變）。
-- **為什麼**: M5 整合驗收唯一 PARTIAL（訊號 review-only、缺回寫端點）→ PRODUCT_SPEC 的「會後回寫 CRM」flywheel 現在接起來。typecheck 綠、writeback 3/3＋crm 43＋realtime 20 測試無回歸。**至此 M5 9/9、整個產品 M0–M5 完成。**
-
-### 2026-07-08 09:00 | M5 整合／隱私／生產強化／邀請／部署產物（7 agent；指揮官代記）
-- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web＋repo 根（部署）
-- **類型**: feat
-- **檔案**: crm `migrations/009_ops.sql`＋repos(usage/invites/members)；shared `ops-types.ts`/`redact.ts`；server `ops/`(meter/rate-limiter/pricing/log/health)＋`realtime/transcript-privacy.ts`/`transcript-retention.ts`＋`org-routes/`＋隱私 gate 改 hub/session-runtime/meeting-store／限流+log+安全標頭+優雅關機 in index.ts／刪孤兒 ws.ts；web `next.config.mjs`(CSP)＋`/settings/team`；根 `Dockerfile.server`/`Dockerfile.web`/`docker-compose.yml`/`Caddyfile`/`.env.production.example`/`scripts/backup.sh`＋`docs/DEPLOY.md`
-- **改了什麼**: (A 隱私) 同意閘（未同意不分析/不落）、逐字稿預設記憶體即棄（persist=0 不寫 DB）、PII 遮蔽（送 LLM＋落 DB 前，實測 `請聯絡我 *** 或電話 ***`）、TTL purge、CSP。(B 成本) usage_events 冪等＋meter 包裝＋/api/usage rollup。(C 強化) 限流 429、結構化 log（0 洩漏）、/ready、安全標頭、優雅關機、刪死碼。(D 邀請) invites/members 路由＋last-owner guard＋/settings/team。(E 部署) Docker/compose/Caddy/DEPLOY runbook（不跑 gcloud）。
-- **為什麼**: M5 里程碑。全鏈路整合驗收 8/9 PASS（typecheck 綠、crm 43/43＋server 29/29 測試、next build 13 路由）。1 PARTIAL：訊號→CRM 批准回寫端點未做（見下筆補）。詳見 ROM 2026-07-08 09:05。
-
-### 2026-07-08 06:00 | /code-review 修 7 個確認 findings（含 1 critical 跨租戶）
-- **工作區**: apps/server＋apps/web
-- **類型**: fix
-- **檔案**: `apps/server/src/realtime/hub.ts`＋`realtime/hub-endmeeting-authz.test.ts`(新)、`research/crawler.ts`＋`research/crawler-ssrf.test.ts`(新)、`train/routes.ts`、`index.ts`；`apps/web/lib/train/liveClient.ts`、`components/present/PresentStage.tsx`、`components/train/TrainCall.tsx`、`components/studio/DeckWizard.tsx`
+- **檔案**: `apps/web/lib/api.ts`, `apps/web/components/crm/SocialTab.tsx`(新), `apps/web/components/crm/CompanyDetailView.tsx`, `apps/web/components/crm/ChildTabs.tsx`, `apps/web/components/crm/EnrichPanel.tsx`, `apps/web/components/crm/ContactsTab.tsx`, `apps/web/components/crm/PersonaCard.tsx`, `apps/web/components/ui/JobProgressCard.tsx`, `apps/web/app/globals.css`, `apps/web/messages/en.json`, `apps/web/messages/zh-TW.json`
 - **改了什麼**:
-  - **F1 critical**：hub.endMeeting 破壞動作（disposeSession+關 socket）改成**擁有權 `ok` 通過才執行**（否則 org A 知道 meetingId 就能掐斷 org B 會議）。加跨租戶回歸測試（無防護則失敗、有則過）。
-  - F2：liveClient 重連失敗時重設 `reconnecting`＋指數退避重排（原本一次失敗就卡死 60 分）。
-  - F3：PresentStage 接真 ws open/close callback＋重連時 re-fetch deck＋狀態燈反映真連線（原註解騙人、斷線漏 append）。
-  - **F4 SSRF＋回歸修正**：Chromium `--host-resolver-rules=MAP host ip` pin 目標 host（關 DNS-rebinding TOCTOU）；**曾加 `MAP * ~NOTFOUND` fail-close 但實測弄壞 www→apex 跨 host 重導（ghost.org 掛）→ 改回只 pin 目標**，其餘 host 由 context.route 逐請求擋私網。CyberPower＋Ghost 重跑皆 done、SSRF 仍擋內網。
-  - F5：train routes 的 sendTrainError 不再 re-throw（Express4 async 拋錯會 hang）→ 未知錯一律回 500 {error}。
-  - F6：TrainCall 計時改 Date.now()-startedAt（原 state-keyed interval 漏 tick）。
-  - F7：/decks/generate JSON 上限 25mb（其餘維持 2mb）＋wizard 圖片 canvas 縮圖(≤1280px)＋參考圖上限 4（原真實照片會 413）。
-- **為什麼**: 多鏡頭對抗式 /code-review（12 raw→對抗 verify→7 confirmed）。typecheck 綠、server vitest 15 過（含 F1+F4 新測試）、crm 31、crawler-ssrf 5/5。SSRF fail-closed 回歸經真站重驗抓到並修正（見 L16）。
-
-### 2026-07-08 03:30 | M2 DynamicSlide＋M3 會中副駕＋M4 語音模擬（三線並行，11 agent；指揮官代記）
-- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
-- **類型**: feat
-- **檔案**: shared `deck.ts`/`train.ts`/`protocol.ts`（Suggestion）；crm `migrations/007_decks.sql`/`008_training.sql`＋`repos-decks.ts`/`repos-training.ts`＋ports/core；server `generation/`＋`decks/`＋`decks-routes/`（M2）、`realtime/`＋`asr/`＋`analysis/`＋`meetings-routes`（M3）、`train/`（M4）；web `studio`/`present`/`copilot`/`hud`/`train` 路由＋`components/{studio,present,copilot,hud,train}`＋`lib/{api,ws,train/liveClient}`
-- **改了什麼**: 三產品線。M2＝deck 生成（借 v1 生成器+QA，分析用 3.5-flash）+append-only 改造引擎（I1）+生圖 job（gpt-image-2 pre-meeting+refused fallback）+pptx 匯出+/studio wizard+/present 零 HUD 舞台（I3）。M3＝WS 三角色（capture/hud/present，音訊 binary）+SessionRuntime（含清理）+ASR/分析/檢索白名單/patch-service（I2 presenter-only+I1 append）+/copilot 擷取端（zero-track 守衛）+/hud 第二裝置。M4＝Gemini Live ephemeral token 直連（persona 逐欄過 verified 閘）+課後四維評分+/train 語音對練（有界 socket）。
-- **為什麼**: M2/M3/M4 里程碑。三線 fresh-context 驗收**全 PASS**（M2 live 測生成+pptx+生圖；M3 9/9 含 presenter 攻擊測+I1/I3;M4 真 token mint+per-field 閘+評分）。詳見 ROM 2026-07-08 03:35。
-
-### 2026-07-08 01:30 | 修爬蟲抽取品質＋去重＋抽取模型升級（S4 關閉）
-- **工作區**: apps/server＋packages/crm
-- **類型**: fix
-- **檔案**: `apps/server/src/research/{extractor,orchestrator}.ts`、`apps/server/src/{gemini,config}.ts`、`packages/crm/src/{ports,repos-prospect}.ts`、`.env.example`
-- **改了什麼**: (1) **去重**：`upsertFromCrawl` 加 `CrawlUpsertOptions{targetId?}`，repo 改「先按 id 解析→domain fallback（domain 空則跳過）→insert」＋回填 target 的 domain（防 UNIQUE 撞）；orchestrator 傳 targetId。(2) **抽取品質**：extractor prompt 指令化（hero/feature 文案即 description、tagline 只放短標語、語言忠實 zh-TW）、schema 移除 websiteUrl/domain（爬蟲自己有）、`required:[name,description,industry]` 逼填、`cleanUrl()` 去尾標點（修逗號）。(3) **模型**：新增 `GEMINI_EXTRACT_MODEL`（預設 `gemini-3.5-flash`）只給抽取用；gemini.ts 加 `maxOutputTokens` 上限（runaway fail-fast）＋`stripJsonFences`。
-- **為什麼**: B5/DB 揪出「爬完只填 name+websiteUrl、還重複建公司」。根因＝flash-lite 對此抽取不穩（JSON 坍縮/runaway/偷懶，見 L15），非爬文字或 prompt 問題。**重驗 CyberPower 台灣站（zh-TW）：一筆公司（domain 回填 cyberpower.com）、8 欄 crawler 值（industry「不斷電系統與電源管理」/description/legalName 碩天科技）＋5 產品，繁中乾淨無幻覺**。typecheck 綠、crm 23/23（加 targetId 去重回歸測試）。
-
-### 2026-07-07 23:35 | M1 CRM 核心＋研究引擎＋CRM 成品前端（工作流 6 agent；指揮官代記一組）
-- **工作區**: packages/shared＋packages/crm＋apps/server＋apps/web
-- **類型**: feat
-- **檔案**: `packages/shared/src/crm-types.ts`（全 domain 實體＋輸入型別）；`packages/crm/src/{ports,core,mappers,provenance-write,update-apply,child-upsert,repos-prospect,repos-pipeline,repos-retrieval}.ts`＋`migrations/002-006*.sql`＋`tsconfig.build.json`＋測試；`apps/server/src/crm-routes/*`（8 檔）＋`research/*`（7 檔：extract SSRF/crawler Playwright/extractor/grounding/jobs/routes）＋auth shim 移除；`apps/web` `/crm`＋`/crm/[id]`＋`(auth)` 登入註冊＋`components/crm/*`（11 tsx）＋lib/api CRM client
-- **改了什麼**: M1 全量。CRM 15+ 表（含對方產品深檔）＋11 repository（org-scoped、upsertFromCrawl 值+provenance 同 tx、cosine 白名單檢索、細填/確認 provenance 語意）；研究引擎（SSRF-safe 抽取＋Playwright 渲染爬蟲＋Gemini 結構化抽取＋grounding＋crawl_job 編排）；CRM 成品前端（清單/詳情八 tabs/provenance 徽章+確認+細填/persona 卡/enrich 進度/登入）。crm build 拆 typecheck/emit 兩 tsconfig。
-- **為什麼**: M1 里程碑。B5 fresh-context 驗收 6/7 PASS（詳見 ROM 2026-07-07 23:30）；1 項 crawler 懸掛已修（見下筆）。
-
-### 2026-07-07 23:55 | 修 crawler browser.close() 懸掛＋有界 teardown
-- **工作區**: apps/server
-- **類型**: fix
-- **檔案**: `apps/server/src/research/crawler.ts`
-- **改了什麼**: 改 `chromium.launchServer()`+`connect()`（`Browser` 無 public `process()`，`BrowserServer` 才有可強殺 handle）。teardown：`browser.close()` race 5s → `server.kill()` 強殺底層 Chromium；`crawl()` 整場包 deadline race（quick 45s／detailed 90s）throw 明確錯。**保證 crawl() 一定 settle、永不 hang**。deals `?companyId=` 確認早已支援（route+DealFilter+repo），未改。
-- **為什麼**: B5 揪出 `browser.close()` 此機永久卡→enrich job 卡 `running`（L13）；外部子進程關閉必須有逾時+強殺兜底。typecheck 全綠。
-
-### 2026-07-07 21:40 | M0 地基全量落地（工作流 5 agent；指揮官代記一組）
-- **工作區**: repo 根＋packages/shared＋packages/crm＋apps/server＋apps/web
-- **類型**: feat
-- **檔案**: 根 `package.json`/`tsconfig.base.json`/`.env.example`/`.gitignore`（補 `*.db-wal`/`*.db-shm`）；`packages/shared/src/{slide-spec,protocol,signals,crm-types,trust,index}.ts`；`packages/crm/src/{ports,sqlite-db,migrate,repos,core,uuid,index}.ts`＋`migrations/001_tenancy.sql`＋`test/crm-core.test.ts`；`apps/server/src/{config,crm,index,gemini,ws}.ts`＋`auth/{jwt,routes,index}.ts`＋`providers/image.ts`＋`scripts/smoke-auth.mjs`＋jwt 測試；`apps/web` Next15+next-intl 骨架（六路由佔位、lib/{api,ws}.ts、messages）
-- **改了什麼**: monorepo 骨架＋凍結契約實作。關鍵設計：slide-spec 的 PatchOp 改 **append-only**（`APPEND`/`REORDER`，`patchMinIndex(op, deckLength)` 簽名變更）；DbPort async-first、tx 用手動 `BEGIN IMMEDIATE`（不用 better-sqlite3 的 sync transaction）；auth 全流程過 crm repos（僅 login 的 findPrimaryMembership 留一處明標 direct-SQL shim，M1 升級 ports 後移除）；ws 只掛 hello/ping（M3 補全）；OpenAIImageProvider 編譯就緒未掛路由（M2）。
-- **為什麼**: M0 里程碑（ARCHITECTURE_PLAN §6）。A5 fresh-context 驗收 6/6 PASS（typecheck 全綠、crm 7/7 測試、真 server 冒煙含跨 org 隔離與 dup-409、JWT fail-fast exit 1、契約零漂移、/present 無副駕詞彙）。
-
-### 2026-07-07 17:20 | capture-test 加 Brave 偵測
-- **工作區**: tools
-- **類型**: fix
-- **檔案**: `tools/capture-test.html`
-- **改了什麼**: `runEnvCheck()` 在 UA 嗅探後加 `navigator.brave.isBrave()`（async）判別——Brave 時把瀏覽器標記更正為「Brave x.y（Chromium，UA 顯示 Chrome）」並更新畫面/JSON/日誌。Before：UA 嗅探把 Brave 誤判成 Chrome。After：矩陣記到真實瀏覽器。改後重抽 `<script>` 跑 `node --check` PASS。
-- **為什麼**: 使用者第一筆實測（2026-07-07，9 項全 PASS）實際用的是 Brave，但工具記成 Chrome 150——Brave 的 UA 偽裝成 Chrome，會讓相容性矩陣把 Brave 的結果誤記到 Chrome 帳上。
+  - **api.ts（型別鏡像＋getSocial getter）**: 新增 `EnrichMode = CrawlMode | "more"`（`more` 尚未進 shared CrawlMode，本地聯集鏡像避免 tsc 因 shared 未就緒而紅；shared 補上後仍相容）；`ResearchJob.mode` 與 `enrich()` 的 `mode` 由 `CrawlMode` 放寬為 `EnrichMode`。新增社群型別 `SocialPostMetrics`/`SocialPost`/`SocialLinks`/`CompanySocial` 與 `getSocial(id)` → `GET /api/crm/companies/:id/social` 回 `{links,posts}`（server 端點由另一工程師平行實作，按契約鏡像）。
+  - **SocialTab.tsx（新元件）**: 帳號卡（links 物件非空值 → 依平台偏好排序的外開連結膠囊）＋每平台貼文分組（posts 按 platform 分組、組內 publishedAt 由新到舊）；每則貼文顯示 標題（url 外開）/日期(fmtDate)/觀看數(metrics.views, fmtNumber)/內文（標題≠內文才另列）。空態＝無 links 且無 posts。掛進 CompanyDetailView TabKey/TABS（「社群」置於「技術棧」後）＋ tabpanel render。
+  - **ChildTabs.tsx TechTab（分類分組改版）**: 棄 `mc-techgrid` 擠壓卡片→新 `mc-techstack` 分類分組列表：`useMemo` 依 `category`（trim 空→「其他」）分組、分類名字母序；每列 名稱粗體（`mc-techstack__name`）＋`noteZh` 副行（`mc-techstack__note`）＋`ConfidenceBadge` 靠右＋`title` 屬性 tooltip 顯示「偵測來源：<detectedFrom>」。本地型別 `TechRow = CompanyTech & { noteZh?: string }`（shared 補 noteZh 前避免 tsc 紅）。
+  - **EnrichPanel.tsx（第二動作 more＋STALE_MS）**: `STALE_MS` 65→95 分（deep 逾時 3.6M→5.4M ms，逃生口須大於伺服器逾時避免長跑誤判中斷）；新增 `MORE_MODE: EnrichMode = "more"` 與頂列「研究更多」ghost 按鈕（`mc-enrich__buttons` 包兩顆），`submit()` 重構為 `submit(mode: EnrichMode)`（deep 走面板、more 直接發起）；moreDesc tooltip。
+  - **JobProgressCard.tsx**: `MODE_LABEL` 加 `more:"補充研究（補缺＋驗證）"`＋running hint 加 more 分支（否則落 deep/detailed 文案不精確）。
+  - **頭像 referrerPolicy**: ContactsTab／PersonaCard 的 `<img>` 加 `referrerPolicy="no-referrer"`（避免熱連結被擋；既有無 photoUrl→initials fallback 保留不動）。
+  - **globals.css**: 新增 `.mc-techstack*`（取代 dead `.mc-techgrid/.mc-techitem`）、`.mc-social__*`（帳號卡＋貼文）、`.mc-enrich__buttons`。
+  - **messages 兩檔**: `enrichPanel` 加 `moreLabel`/`moreDesc`（en「Research more」/「Fill gaps and verify on top of existing data — faster.」；zh「研究更多」/「在既有資料上補缺＋驗證，較快。」），enrichPanel 與 top-level 鍵集 parity 驗證通過。
+- **為什麼**: RESEARCH_UPGRADE / social+tech 契約 WS-C 前端實作：社群落庫可視化、技術棧改讀友善分組、研究單一入口外再提供較快的 more 補缺驗證路徑。沿用雙語不變量（主要欄留來源語言、*Zh gloss）與 provenance 慣例；純 CRM 展示＋研究觸發，不動 deck patch/approval/HUD，不違反 I1/I2/I3。server 端點與 shared 型別（socialLinks/CompanyTech.noteZh/CrawlMode more）由平行工程師實作，web 端以本地鏡像型別對接。
+- **驗證**: `cd apps/web; npx tsc --noEmit` 綠（EXIT=0，連跑兩次穩定；期間 shared 被平行工程師編輯一度短暫紅於 crm-types.ts CompanySocialLinks，其settle 後即綠，非本工作區檔案）；en/zh-TW JSON parse OK＋enrichPanel/top-level 鍵 parity true。未 commit（硬規則 10）。

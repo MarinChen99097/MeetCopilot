@@ -28,6 +28,24 @@ export function cleanStr(v: unknown): string | undefined {
 export const MAX_UNCATEGORIZED = 25;
 
 /**
+ * 清 URL 尾端污染（逗號/分號/引號/括號/空白，防「websiteUrl 帶尾逗號」等模型/join 污染）後，
+ * **只接受絕對 http(s)**——相對、mailto:/data:/javascript:、非法一律 undefined。
+ * 落庫前的 URL 欄正規化（websiteUrl/logoUrl/productUrl/docsUrl…）杜絕模型臆造的非 http 連結入庫。純函式，供單測。
+ */
+export function cleanUrl(u: unknown): string | undefined {
+  if (typeof u !== "string") return undefined;
+  const trimmed = u.trim().replace(/[\s,;'"’“”)\]}]+$/u, "");
+  if (!trimmed) return undefined;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return trimmed; // 保留原字串形（避免 URL.toString 加尾斜線等正規化意外）
+  } catch {
+    return undefined; // 相對/非法 → 非絕對 http(s)
+  }
+}
+
+/**
  * 圖片白名單驗證（防幻覺；契約三）：只保留「確實存在於爬到的圖片清單（whitelist）」的 URL。
  * 模型憑空捏造、清單中沒有的 URL 一律丟棄。trim → 去空/非字串 → 白名單過濾 → 保序去重。純函式，供單測。
  */

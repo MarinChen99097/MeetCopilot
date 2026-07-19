@@ -10,8 +10,51 @@
  */
 import type { Router, Request } from "express";
 import type { CrmCore } from "@meetcopilot/crm";
-import type { Company, NewCompany } from "@meetcopilot/shared";
+import type { Company, NewCompany, SocialPost } from "@meetcopilot/shared";
 import { asyncHandler, orgId, userId, str, parsePage, notFound, badRequest, sanitize, param } from "./helpers.js";
+import { cleanUrl } from "../research/extract-shared.js";
+
+/**
+ * 帳號連結白名單化（XSS 縱深，契約三）：social_links JSON ＋ 六個 social_* 單欄整併，每個值過 cleanUrl——
+ * **只收絕對 http(s)**（javascript:/data:/相對路徑/非法一律略過，不進 links）；curated 單欄勝（後 put 覆蓋）。
+ * 前端另有 scheme 驗證（SocialTab）＋React sanitizeURL，此為 server 側第一道；純函式，供單測。
+ */
+export function buildSocialLinks(company: {
+  socialLinks?: Record<string, string | undefined> | null;
+  socialLinkedin?: string;
+  socialTwitter?: string;
+  socialFacebook?: string;
+  socialYoutube?: string;
+  socialCrunchbase?: string;
+  socialGithub?: string;
+}): Record<string, string> {
+  const links: Record<string, string> = {};
+  const put = (key: string, val: string | undefined): void => {
+    const clean = cleanUrl(val); // 絕對 http(s) 才回值；非法 → undefined → 略過
+    if (clean) links[key] = clean;
+  };
+  if (company.socialLinks && typeof company.socialLinks === "object") {
+    for (const [k, v] of Object.entries(company.socialLinks)) put(k, v as string | undefined);
+  }
+  put("linkedin", company.socialLinkedin);
+  put("twitter", company.socialTwitter);
+  put("facebook", company.socialFacebook);
+  put("youtube", company.socialYoutube);
+  put("crunchbase", company.socialCrunchbase);
+  put("github", company.socialGithub);
+  return links;
+}
+
+/**
+ * 貼文 URL 白名單化（XSS 縱深，契約三）：非絕對 http(s) 的 url → 剝除（設 undefined），其餘欄原樣保留。
+ * 前端渲染時另驗 scheme（無 href 時純文字顯示）。純函式，供單測。
+ */
+export function sanitizeSocialPosts(posts: SocialPost[]): SocialPost[] {
+  return posts.map((p) => {
+    const clean = cleanUrl(p.url);
+    return clean === p.url ? p : { ...p, url: clean };
+  });
+}
 
 export function registerCompanyRoutes(router: Router, core: CrmCore): void {
   // ── list ──
@@ -116,6 +159,26 @@ export function registerCompanyRoutes(router: Router, core: CrmCore): void {
     "/companies/:id/departments",
     asyncHandler(async (req, res) => {
       res.json(await core.companyChildren.listDepartments(orgId(req), cid(req)));
+    }),
+  );
+
+  // ── social：帳號連結（social_links JSON ＋ 六個 social_* 單欄整併）＋ 貼文/影片（company_social_posts）──
+  // authz 同其它 child 路由：org-scoped；公司不存在/非本 org → { links:{}, posts:[] }（不洩漏）。
+  router.get(
+    "/companies/:id/social",
+    asyncHandler(async (req, res) => {
+      const oid = orgId(req);
+      const id = cid(req);
+      const company = await core.companies.findById(oid, id);
+      if (!company) {
+        res.json({ links: {}, posts: [] });
+        return;
+      }
+      // 先鋪 social_links JSON（可帶 instagram/threads 等），再以六個 social_* 單欄覆蓋（curated 勝）；
+      // 每值過 cleanUrl 白名單（只收絕對 http(s)，擋 javascript:/data:/相對路徑——XSS 縱深契約三）。
+      const links = buildSocialLinks(company);
+      const posts = sanitizeSocialPosts(await core.companySocial.listByCompany(oid, id));
+      res.json({ links, posts });
     }),
   );
 }

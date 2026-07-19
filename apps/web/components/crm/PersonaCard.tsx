@@ -69,7 +69,11 @@ export function PersonaCard({
     <div className="mc-persona">
       <div className="mc-persona__head">
         <span className="mc-persona__avatar" aria-hidden="true">
-          {contact.photoUrl ? <img src={contact.photoUrl} alt="" /> : initials(displayName)}
+          {contact.photoUrl ? (
+            <img src={contact.photoUrl} alt="" referrerPolicy="no-referrer" />
+          ) : (
+            initials(displayName)
+          )}
         </span>
         <div className="mc-persona__id">
           <span className="mc-persona__name">{displayName}</span>

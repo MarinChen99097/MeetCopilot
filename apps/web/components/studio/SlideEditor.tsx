@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import type { DeckRef, ImageKind, SlideSpec, SlideTheme } from "@meetcopilot/shared";
-import { ApiError, exportDeckPptx, getDeck, patchSlide } from "@/lib/api";
+import { ApiError, createMeeting, exportDeckPptx, getDeck, patchSlide } from "@/lib/api";
+import { buildPresentUrl, buildStaticPresentUrl, type MeetingCreds } from "@/lib/meeting-session";
 import { useRouter } from "@/i18n/navigation";
 import { useToast } from "@/components/ui/Toast";
 import { StateBoundary } from "@/components/ui/StateBoundary";
@@ -29,6 +31,7 @@ function gradientFallback(theme: SlideTheme | undefined): string {
 export function SlideEditor({ deckId }: { deckId: string }) {
   const router = useRouter();
   const toast = useToast();
+  const tLaunch = useTranslations("studio");
 
   const [deck, setDeck] = useState<DeckRef | null>(null);
   const [slides, setSlides] = useState<SlideSpec[]>([]);
@@ -44,6 +47,8 @@ export function SlideEditor({ deckId }: { deckId: string }) {
   const [prompt, setPrompt] = useState("");
   // AI 生圖預警：點「生成背景圖 / 整頁生圖」後先跳確認（付費外部 API + 耗時），確認才真的排入 job。
   const [confirmKind, setConfirmKind] = useState<ImageKind | null>(null);
+  // 開始簡報 launcher：連線會議播放建 session 中的 pending 態。
+  const [launching, setLaunching] = useState(false);
 
   const load = useCallback(() => {
     let alive = true;
@@ -170,6 +175,37 @@ export function SlideEditor({ deckId }: { deckId: string }) {
     }
   }, [deckId, deck, toast]);
 
+  /**
+   * 靜態預覽：不建 session，直接開 /present?deckId=…（PresentStage 無 meetingId/token 時只在本機翻頁）。
+   * URL 需帶 /{locale} 前綴（routing.localePrefix="always"）；同步開分頁，不受 popup blocker 影響。
+   */
+  const openStaticPreview = useCallback(() => {
+    window.open(buildStaticPresentUrl(deckId), "_blank", "noopener,noreferrer");
+  }, [deckId]);
+
+  /**
+   * 連線會議播放：createMeeting（帳號 A 已登入）→ 以 CreateMeetingResult 組出 present-role creds →
+   * buildPresentUrl 帶 present token 開 /present。先同步開空白分頁再導向，避免 await 後被 popup blocker 擋。
+   */
+  const openLivePlay = useCallback(async () => {
+    if (launching) return;
+    setLaunching(true);
+    const win = window.open("", "_blank");
+    if (win) win.opener = null; // 斷開 opener 參照（等同 noopener）；present 分頁不依賴回連。
+    try {
+      const res = await createMeeting({ title: deck?.title ?? "簡報", deckId });
+      const creds: MeetingCreds = { meetingId: res.meeting.id, wsToken: res.wsToken, wsUrl: res.wsUrl };
+      const url = buildPresentUrl(deckId, creds);
+      if (win) win.location.href = url;
+      else window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      if (win) win.close();
+      toast.push({ kind: "error", message: err instanceof ApiError ? err.message : tLaunch("launchError") });
+    } finally {
+      setLaunching(false);
+    }
+  }, [deck, deckId, launching, tLaunch, toast]);
+
   return (
     <main className="mc-editor">
       <div className="mc-editor__bar">
@@ -180,6 +216,28 @@ export function SlideEditor({ deckId }: { deckId: string }) {
         <div className="mc-editor__baractions">
           <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={doExport} disabled={exporting || loading}>
             {exporting ? <Spinner size={13} /> : "⬇"} 匯出 .pptx
+          </button>
+          {/* 開始簡報 launcher：靜態預覽（本機翻頁）vs 連線會議播放（建 session，HUD 批准頁即時接尾）。 */}
+          <span className="mc-editor__launchlabel" title={tLaunch("launchHint")}>
+            {tLaunch("launchTitle")}
+          </span>
+          <button
+            type="button"
+            className="mc-btn mc-btn--ghost mc-btn--sm"
+            onClick={openStaticPreview}
+            disabled={loading || slides.length === 0}
+            title={tLaunch("launchHint")}
+          >
+            ▶ {tLaunch("launchStaticPreview")}
+          </button>
+          <button
+            type="button"
+            className="mc-btn mc-btn--primary mc-btn--sm"
+            onClick={openLivePlay}
+            disabled={launching || loading || slides.length === 0}
+            title={tLaunch("launchHint")}
+          >
+            {launching ? <Spinner size={13} /> : "🎥"} {launching ? tLaunch("launchOpening") : tLaunch("launchLivePlay")}
           </button>
         </div>
       </div>

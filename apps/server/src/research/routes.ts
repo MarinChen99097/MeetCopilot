@@ -29,7 +29,7 @@ import {
 type Json = Record<string, unknown>;
 
 const TARGET_TYPES: CrawlTargetType[] = ["company", "contact"];
-const MODES: CrawlMode[] = ["quick", "detailed", "deep"];
+const MODES: CrawlMode[] = ["quick", "detailed", "deep", "more"];
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
@@ -95,12 +95,12 @@ export function createResearchRouter(
       return;
     }
     if (!MODES.includes(mode)) {
-      res.status(400).json({ error: "mode must be 'quick', 'detailed', or 'deep'" });
+      res.status(400).json({ error: "mode must be 'quick', 'detailed', 'deep', or 'more'" });
       return;
     }
-    // deep（全網研究）靠 grounding + LLM 合成；Gemini 未設就無法跑 → 直接擋（與 /ground 的 502 一致）。
-    if (mode === "deep" && !gemini.isConfigured()) {
-      res.status(502).json({ error: "deep research unavailable: GEMINI_API_KEY not configured" });
+    // deep/more（全網研究/補缺變體）靠 grounding + LLM 合成；Gemini 未設就無法跑 → 直接擋（與 /ground 的 502 一致）。
+    if ((mode === "deep" || mode === "more") && !gemini.isConfigured()) {
+      res.status(502).json({ error: `${mode} research unavailable: GEMINI_API_KEY not configured` });
       return;
     }
 

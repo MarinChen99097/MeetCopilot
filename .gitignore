@@ -33,3 +33,6 @@ Thumbs.db
 
 # TS incremental build info
 *.tsbuildinfo
+
+# git worktrees (harness-created, transient)
+.claude/worktrees/

@@ -826,10 +826,32 @@ img {
 .mc-newsitem__title { font-weight: 600; }
 .mc-newsitem__meta { font-size: 12px; color: var(--mc-text-muted); margin-top: 4px; }
 .mc-newsitem__sum { margin: 8px 0 0; font-size: 13px; color: var(--mc-text); }
-.mc-techgrid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
-.mc-techitem { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); }
-.mc-techitem__cat { font-size: 11px; color: var(--mc-text-muted); }
-.mc-techitem__name { font-weight: 600; flex: 1; }
+/* 技術棧：分類分組列表（棄舊 mc-techgrid 擠壓卡片）。名稱粗體＋noteZh 副行＋ConfidenceBadge 靠右。 */
+.mc-techstack { display: flex; flex-direction: column; gap: 16px; }
+.mc-techstack__group { display: flex; flex-direction: column; gap: 6px; }
+.mc-techstack__cat { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--mc-text-muted); }
+.mc-techstack__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mc-techstack__item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); }
+.mc-techstack__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mc-techstack__name { font-weight: 600; }
+.mc-techstack__note { font-size: 12px; line-height: 1.5; color: var(--mc-text-muted); }
+.mc-techstack__item .mc-conf { flex: none; }
+
+/* 社群：帳號卡（links 整併）＋ 每平台貼文/影片（標題、日期、觀看數、外開連結）。 */
+.mc-social__accounts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.mc-social__account { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--mc-text); text-decoration: none; }
+.mc-social__account:hover { border-color: var(--mc-accent); }
+.mc-social__account-open { color: var(--mc-text-muted); font-size: 12px; }
+.mc-social__group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.mc-social__group-head { display: flex; align-items: baseline; gap: 8px; }
+.mc-social__group-plat { font-size: 13px; font-weight: 700; }
+.mc-social__group-count { font-size: 12px; color: var(--mc-text-muted); }
+.mc-social__posts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mc-social__post { padding: 12px 14px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); }
+.mc-social__post-title { font-weight: 600; }
+.mc-social__post-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--mc-text-muted); }
+.mc-social__post-views { font-variant-numeric: tabular-nums; }
+.mc-social__post-body { margin: 8px 0 0; font-size: 13px; line-height: 1.55; color: var(--mc-text); white-space: pre-wrap; }
 .mc-deptitem, .mc-dealitem { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mc-deptitem__name, .mc-dealitem__name { font-weight: 600; }
 .mc-deptitem__focus { font-size: 13px; color: var(--mc-text-muted); flex: 1; }
@@ -850,6 +872,7 @@ img {
 
 /* ── enrich ─────────────────────────────────────────────────── */
 .mc-enrich { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; width: 100%; }
+.mc-enrich__buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .mc-enrich__panel { width: 100%; padding: 14px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); display: flex; flex-direction: column; gap: 12px; }
 .mc-enrich__lead { display: flex; flex-direction: column; gap: 3px; padding: 10px; border: 1px solid var(--mc-accent); border-radius: var(--mc-radius); background: rgba(139, 92, 246, 0.1); }
 .mc-enrich__lead small { color: var(--mc-text-muted); font-size: 11px; }
@@ -1370,6 +1393,21 @@ kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-ra
 .mc-cockpit__bar { display: flex; flex-direction: column; gap: 6px; }
 .mc-cockpit__title { margin: 0; font-size: 22px; }
 .mc-cockpit__lead { margin: 0; color: var(--mc-text-muted); font-size: 14px; max-width: 62ch; }
+.mc-cockpit__accountb { margin: 2px 0 0; color: var(--mc-text-muted); font-size: 12.5px; max-width: 62ch; }
+
+/* Collapsible second-device HUD handoff (copyable link + placeholder QR frame). Additive, outer-shell only. */
+.mc-cockpit__second { border: 1px solid var(--mc-border); border-radius: var(--mc-r-lg); background: var(--mc-panel); padding: 0 14px; }
+.mc-cockpit__second-toggle { cursor: pointer; padding: 12px 0; font-size: 13px; font-weight: 600; color: var(--mc-text); list-style: none; }
+.mc-cockpit__second-toggle::-webkit-details-marker { display: none; }
+.mc-cockpit__second-toggle::before { content: "▸ "; color: var(--mc-text-muted); }
+.mc-cockpit__second[open] .mc-cockpit__second-toggle::before { content: "▾ "; }
+.mc-cockpit__second-body { display: flex; flex-direction: column; gap: 12px; padding: 0 0 16px; }
+.mc-cockpit__second-desc { margin: 0; color: var(--mc-text-muted); font-size: 13px; max-width: 62ch; }
+.mc-cockpit__second-empty { margin: 0; color: var(--mc-text-muted); font-size: 13px; font-style: italic; }
+.mc-cockpit__second-share { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.mc-cockpit__second-qr { display: grid; place-items: center; width: 104px; height: 104px; padding: 8px; border: 1px solid var(--mc-border); border-radius: var(--mc-r-md); background: var(--mc-elev); color: var(--mc-text-muted); flex: 0 0 auto; }
+.mc-cockpit__second-linkrow { display: flex; gap: 8px; align-items: center; flex: 1 1 260px; min-width: 0; }
+.mc-cockpit__second-link { flex: 1 1 auto; min-width: 0; font-family: var(--mc-font-mono); font-size: 12px; padding: 8px 10px; border: 1px solid var(--mc-border); border-radius: var(--mc-r-md); background: var(--mc-elev); color: var(--mc-text); }
 
 .mc-cockpit__grid { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 18px; align-items: start; }
 

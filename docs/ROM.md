@@ -36,6 +36,98 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-19 | DynamicSlide 重構實作完成＋migration 018 決策＋審查/E2E 結果
+- **誰決定**: Fable（實作裁決）＋ 對抗式審查證據
+- **實作**: 依前述契約在獨立 worktree 分支 `worktree-dynamicslide-preserve-original`（從 HEAD 585a077 分）完成——Phase 2 foundation（migration/型別/資料層/簽章/asset 端點/路由骨架）＋平行 build（IMPORT/EXPORT/WEB/DOCKER）＋整合，typecheck 5ws 全綠、crm 50/server 163 測綠。
+- **決策：migration 編號 018（非 016/017）**。整合 agent 初版為過 crm-core 冪等測試（要求版本連續）改成 016，但對抗式審查（critical）揪出：主樹 research 工作已佔 **016_social_tech＋017_more_mode**，016 會撞號→部署時 deck_assets/import_jobs schema 永不建立或開機 PK 衝突。**裁決＝改 018**，並把 crm-core 冪等測試改 **gap-tolerant**（斷言改「二次 migrate 版本集不變＋唯一＋嚴格遞增＋每檔恰對一版本」，不再硬性 1..N 連續）——理由：平行分支合法產生版本間隙，真正不變量是版本唯一＋重跑穩定，且仍擋真正重複套用。**merge 注意**：merge 回主樹前確認 018 不與屆時主樹最高 migration 號相撞（目前主樹 research WIP 最高 017，018 安全）。
+- **Phase 3 對抗式審查（5 維×find→雙反駁）**: 4 相異 confirmed→全修：①migration 撞號(critical)→018＋gap-tolerant 測試；②匯入中斷 deck 卡 processing(high，reaper 只收 job 不對帳 deck＋前端無 job 輪詢)→開機 failInterruptedImports 對帳＋前端 5 分逃生口；③補充頁尺寸寫死 10×5.625(medium，非 16:9-標準原檔破版)→canvas-size 讀原檔 sldSz/pdf 頁尺寸產同尺寸補充頁；④簽章 URL TTL 3600s 不續簽(medium)→TTL→8h＋前端每 30 分續簽。
+- **/code-review**（使用者指示）: 五維重審修正後狀態，≥80 信心 confirmed **0**。
+- **/simplify**（使用者指示）: 14 建議套 6（去重 soffice/contentDisposition、刪 import-job by-id 與 listPageImages 死碼、mergePptx 就地嫁接、PNG 並行讀）；跳過 5＋回退 1（會 mutate 呼叫端陣列害測試爆／動凍結契約 schema／過度抽象）。仍全綠。
+- **Docker 真檔 E2E**: 對齊 Dockerfile.server 工具鏈容器內用真 soffice/pdftoppm 跑實際新函式——PDF（真 19頁→19 PNG 中文像素忠實→合併 21頁 pdfinfo 960×540pt）、PPTX（真 16頁→18 slide unzip -t 無錯）、寬螢幕尺寸修正（13.333×7.5 補充頁橫向鋪滿、最寬 shape 到 95.5% 畫布佐證）全綠、無 bug。
+- **狀態**: 全部未 commit（硬規則 10）。待使用者開 E2E 產物確認＋核准 commit-to-branch／merge-to-main／部署。docs 在主樹補、code 在 worktree 分支。
+
+### 2026-07-19 | E2E 後契約擴充：dedup 分組鍵補兩招＋照片佔位圖黑名單（Fable 裁決）
+- **誰決定**: Fable（依 more 模式 E2E 實測證據；契約由 Fable 凍結故有權擴充）
+- **決策**:
+  1. **dedup 分組鍵擴充**：(a) full_name 字串內嵌 CJK 段（≥2 字）抽出當分組鍵並回填 survivor 的 full_name_zh——治「Cheng Chun-hung (程峻宏)」型漏併；(b) 第二遍羅馬拼音正規化**全等**分組（去括號/lowercase/去連字號標點後完全相等才併）——治「Cheng Chun-Hung vs Cheng Chun-hung」大小寫變體；嚴禁部分/模糊匹配（David Chen ≠ David Cheng）。
+  2. **照片獵取黑名單**：URL path 含 default/placeholder/blank/noimage/avatar-default/fb_default/fallback/dummy/sprite/spacer 等關鍵字一律拒收（實測抓到 niea.org.tw 的 FB_default_image.jpg 佔位圖填進 photo_url）；本地既填的該垃圾值清掉。
+  3. **驗收＝實資料**：直接對本地 dev DB 的 Connact AI 殘餘 3 列程峻宏跑修復後 dedup（先 log 合併計畫再執行），不再跑 10 分鐘全量研究。
+- **脈絡**: more 模式 E2E 其餘全過（dedupe merged=4 removed=5 零誤併、頭銜累加、tech note_zh 落地、公司欄 fill-empty 與佐證 +0.15 全實證、migration 017 開機自動套、social 端點 200）；唯程峻宏 5→3 未達標與一張佔位圖照片。
+- **考慮過的替代**: 羅馬拼音 token-set/模糊匹配（否——誤併風險；只做全等）；照片改白名單制（否——來源多樣，黑名單＋既有 alt/title 匹配已足）。
+- **影響**: packages/crm/contact-merge.ts＋apps/server photo-hunt.ts＋兩測試檔；本地 dev DB 測試資料實改（程峻宏 3→1）。
+
+### 2026-07-19 17:20 | 會中進行收斂——三介面訴求＝導覽問題，融合頁已存在
+- **誰決定**: 使用者（AskUserQuestion 三問拍板）＋ Fable（設計 pass 收斂）
+- **緣起**: 使用者看「會中進行」側欄三連結（簡報舞台／會中副駕／HUD）截圖，指「過於複雜、應同一頁同時打開、不需給連結；一個人開 Google Meet 按允許就拿到聲音；副駕/HUD 要同一介面，分三個絕對不行」。澄清：簡報會分享給對方，但報告者開兩帳號（A 報告、B 看額外內容）互不干擾。
+- **關鍵發現（設計 pass：3 讀檔→3 方案→3 視角評審→收斂）**: 使用者要的「一頁 cockpit」其實已存在於 /copilot（CockpitView 左 CopilotInner 收音＋右 HudInner 完整 HUD＋I2 gate，同 <main>／雙 WS）。真正缺的是三件事：(a) 導覽把 present/copilot/hud 平列三 external，使用者不知 cockpit 已含 HUD；(b) 頂層 /hud 與 cockpit 右半重複；(c) 收音遠非「一鍵允許」（登入＋setup＋隱藏第四關：分享後還要勾同意 PCM 才進 ASR）。
+- **決策（使用者三拍板，皆採 Fable 建議預設）**:
+  1. **動工範圍＝全套照建議做**：導覽收斂成兩入口＋收音中度精簡＋帳號A 一鍵開簡報＋/hud 降級。
+  2. **/hud＝保留但從導覽移除**：留給第二裝置/雙螢幕貼連結或掃 QR；cockpit 內給收合的「在另一台看 HUD」入口。（否決「完全移除」＝會斷第二裝置故事；否決「維持現狀」＝不解決抱怨。）
+  3. **收音＝中度精簡**：建會＋開始併輕量一步、同意內嵌起始卡、忘勾分頁音訊一鍵重試；不自動建會、不把 createMeeting 併進分享手勢按鈕（避免 user-activation 掉失與空會議）。（否決「積極壓單鍵」＝activation 風險；否決「只加提示」＝不夠。）
+- **誠實邊界（已對齊使用者訴求）**: 「按一下允許就拿到聲音」技術上不可能——getDisplayMedia 一定跳系統選單、app 不能替使用者選 Meet 分頁或勾分頁音訊；能做的是把站內點擊從 ~6 壓到 1–2 並拔掉隱形陷阱。帳號 A↔B 跨帳號 live-sync 仍需一次連結/QR 交付（物理上非零），但帳號 B 自身三連結收斂為一＝使用者主訴已滿足。
+- **考慮過的替代（評審敗方）**: 單一 /live hub（Design 3，選角色再路由）——三視角皆墊底，多一個會 render cockpit 的容器＝離 I3-破面一次粗心 refactor＋新 server 端點；引導式 stepper 自動建會（Design 2）——只贏 user-intent 鏡頭，其 stepper 狀態機＋mount 自動 createMeeting 動到 live-critical 邏輯（回歸面＋空會議），只採其檔案清單與 launcher、明確棄 stepper。
+- **影響**: apps/web 七檔（見 CHANGE_TRACKER 2026-07-19 17:20）；無新頁、無 migration、無 server 契約變更。**待使用者**: 核准 commit（見終報 message）；核准後部署只需重建 web（純 apps/web）；帳號 A↔B 免貼連結的跨帳號 live-sync（需 Design 3 的 join-as-present 端點，工作量 L）此輪不做、記債待需求明確。
+
+### 2026-07-19 | DynamicSlide 重構最終定案——來源＝pptx 主力／PDF 次要，雙路徑（Phase 0 spike 通過後）
+- **誰決定**: 使用者（AskUserQuestion 三連確認）＋ Fable（Phase 0 spike 審證據）
+- **Phase 0 spike 結果（皆有真證據，見 WORKLOG／scratchpad）**:
+  - **Spike A（LibreOffice 轉檔）PASS**：Debian 容器（node:22-bookworm）實測 `libreoffice-impress+poppler-utils+fonts-noto-cjk` 可裝、image +~1GB；4 頁 pptx→PDF→PNG 約 3.2s、峰值 ~152MiB；中文正常（反向測試證 `fonts-noto-cjk` 為硬需求）；Cloud Run 唯讀 FS 要把 LO profile／fontconfig cache 導 /tmp、併發用唯一目錄。
+  - **Spike B（jszip 可編合併）PASS**：把真檔（16 頁 pptxgenjs 產物）＋2 補充頁嫁接→18 頁，18 項結構 assert 全過、原始 16 頁逐位元組不變、ZIP 無錯、自家 parser 反讀 18 頁；**使用者實機用 PowerPoint 開 merged.pptx＝正常開、18 頁、末兩頁正是補充頁（零修復提示）**——關掉最大缺口。信心提升。殘餘：docProps/app.xml 頁數未更新（Phase 2 補）、真人手作 pptx（多 master/多 layout/內嵌字型）未實證（Phase 2 拿真檔回歸）。
+- **PDF 岔路與釐清**: 使用者提供的「真檔」實為 `AI金融商品應用v1.pdf`（**19 頁** Keynote 匯出、960×540pt 16:9、PingFangTC 嵌入、非掃描）。分析證 `pdftoppm` 轉檔忠實度極佳（Fable 親眼比對封面 PNG＝與原簡報像素一致）、`pdf-lib` 加頁實測可行。**但使用者澄清：真正原檔其實都是 pptx，這份 PDF 只是這次剛好**。
+- **最終決策（雙路徑，皆完整建）**:
+  1. **來源型別**：支援 **pptx（主力）＋PDF（次要）**。
+  2. **pptx 來源**：存原始 pptx bytes → 背景 job `soffice pptx→pdf` → `pdftoppm pdf→png` 逐頁 → 原始鎖定圖片頁；匯出＝補充頁 pptxgenjs 產小 pptx → **jszip 嫁接**回原始 pptx ＝**可在 PowerPoint 繼續編**的 pptx（Spike B 路）。
+  3. **PDF 來源**：存原始 pdf bytes → 背景 job `pdftoppm pdf→png`（**不需 LibreOffice**）→ 原始鎖定圖片頁；匯出＝補充頁 → PDF（pptxgenjs→LibreOffice→pdf，或 chromium 列印）→ `pdf-lib` 接原 PDF 尾端 ＝ PDF（原頁忠實不可編、補充頁可編）。
+  4. **顯示**：兩來源皆逐頁 PNG，存 **Postgres bytea**（使用者選定，無新物件儲存），前端 `<img>` 走 **authed 短效簽章 URL** 串流端點；重用既有 `image-full` 渲染。每份 deck 量級 ~16MB 原檔＋~16MB PNG（bytea，量少可接受）。
+  5. **鎖定**：新增 slide `kind='original'`（非濫用 committedIndex）；server PATCH guard 對 original 一律拒；前端納入現成唯讀面板＋縮圖鎖。append 仍只加尾端（天然 I1）。
+  6. **物理限制已對齊使用者**：PDF 原始頁無法忠實變回可編 PowerPoint 物件（要可編＝拆頁重畫＝使用者不要的失真）；故 PDF 來源匯出為 PDF，僅 pptx 來源能可編 pptx 匯出。
+- **考慮過的替代**: 純 PDF-centric（更簡單、不需 LibreOffice/jszip，但使用者主力是 pptx 且要可編匯出，故不夠）；pptx 也統一轉 PDF 匯出（省 jszip，但失去可編性＝違反使用者需求，否）。
+- **新依賴/infra**: apt：libreoffice-impress、poppler-utils、fonts-noto-cjk（image +~1GB）；npm：pdf-lib（現無，需裝；jszip/pptxgenjs/fast-xml-parser 已有；chromium 已有）。轉檔一律走**背景 job**（複用 image_jobs enqueue/poll，因同步匯入 30s 逾時不夠）。Cloud Run 記憶體評估（4Gi 目前單轉檔峰值 ~152MiB＋PNG 進 tmpfs 計入，需觀察是否上調）。
+- **影響**: migration 017（pg+sqlite）：deck_assets 表（bytea）＋decks 加 original_pptx/pdf asset ref/original_count/import_status＋deck_slides 加 kind；server 匯入改寫＋轉檔 job＋asset 簽章串流端點＋PATCH guard＋匯出雙路（jszip merge／pdf-lib merge）；前端渲染/鎖定/匯入進度；Dockerfile.server apt 層＋DEPLOY 記憶體節。**下一步：Fable 凍結 Phase 1 契約→Phase 2 平行派工→Phase 3 對抗式＋真檔 E2E 驗證。**
+
+### 2026-07-19 | DynamicSlide 匯入徹底重構——「保留原始 .pptx、尾端 append」四項拍板
+- **誰決定**: 使用者（AskUserQuestion 逐項拍板）＋ Fable（釐清顯示相依）
+- **緣起**: 使用者匯入設計精美的 .pptx（金融商品AI導入計畫，深色漸層封面＋CONNACT logo），發現匯入後**不是原簡報**，而是「另外一份純文字簡報」：標題亂碼、每頁 heading 變「Page」、bullets 夾雜「CONNACT」logo 字與頁碼「13」、原視覺全失。指示：檢查整個 DynamicSlide 類似錯誤並更改，逐項確認目的。
+- **調查定調（Opus 一路，全 檔案:行號）**: 這不是單一 bug，是**整條匯入管線的設計本質**＝把 .pptx 拆成純文字 SlideSpec → 建一份**全新 deck** → 用平台深色模板重畫；原始 .pptx 解析完即丟、不落地。三個疊加缺陷：①標題亂碼＝multer 未設 `defParamCharset`（預設 latin1，`decks-routes/index.ts:46`），且標題永遠取檔名不讀簡報真標題；②heading 掉/垃圾 bullet＝`pptx-parser.ts:361-379` `extractSlideBlocks` 只認 title placeholder 當 heading、**未過濾頁尾/頁碼 placeholder**（同檔 notes 版 line 97/404 有過濾、slide 版漏）——「Page」非硬編碼是抽進來的頁碼字；③視覺全失＝資料模型（`slide-spec.ts:103-119`、`007_decks.sql:23-31`）只存 SlideSpec、無欄位承載原始頁。append 本身正確（`patch-service.ts:91-101` 加同一 deck 尾端、符合 I1），問題在「被 append 的 deck 從匯入起就是重畫版」。
+- **決策（四項）**:
+  1. **核心方向＝保留原簡報、只在尾端加頁**（否決「維持重畫、只修 bug」）。原始每頁視覺原封不動、DynamicSlide 只在尾端 append 補充頁。
+  2. **儲存/匯出＝以原始 .pptx 檔為準**（否決「每頁轉圖當唯一保存」）。匯入存下原檔位元組；匯出＝原簡報＋尾端新頁，在 PowerPoint 可編。
+  3. **顯示/會中播放＝匯入時 server 用 LibreOffice 把原 .pptx 每頁轉成圖片，只供顯示**（否決「純前端渲染」與「只給低忠實縮圖」）。Fable 補釐清：規格（`PRODUCT_SPEC.md:16`）報告者是透過我們的播放視圖分享簡報分頁，故瀏覽器必須能畫出原始頁，而 .pptx 本身瀏覽器不能直接顯示→「儲存用 .pptx（可編匯出）」與「顯示用圖片（忠實播放）」分離，兩者並存＝業界標準做法。原始圖片頁在 app 內鎖定唯讀。
+  4. **範圍＝這一輪直接做完整重構**（否決「先快修明顯 bug、重構另排」）。
+- **考慮過的替代**: 重畫路線只修 bug（快、無新 infra，但永遠非原簡報本尊，被否）；原頁純轉圖當唯一保存（匯出變圖片、失去可編，被否）；純前端 pptx 渲染（無新 infra，但複雜設計頁忠實度不保證＋會中效能風險，被否）；低忠實縮圖（最省，但會中投影原頁畫質受限，被否）。
+- **影響（待三路調查回報後 Fable 凍結契約再細化）**: 需新增 (a) LibreOffice 打進 server Docker image＋Cloud Run 資源評估；(b) 原始 .pptx 位元組與每頁圖片的 blob 儲存（GCS vs Cloud SQL bytea 待定）；(c) migration：deck/slide schema 加「原始頁」型別（kind=original：圖片 URL＋locked）與原檔 ref；(d) server 匯入改寫（存原檔＋轉圖＋建原始頁 deck，修檔名編碼/讀真標題）；(e) server 匯出改為「載入既有 pptx＋尾端 append 補充頁」（現用產生器多半不支援載入既有檔，可能要換工具）；(f) 前端 SlideRenderer 加原始圖片頁分支、編輯器鎖定原始頁（不可編/刪/reorder）、播放視圖/縮圖/HUD 消費新型別；(g) I1/I2：原始頁視為已提交 committed、guard 天然擋修改，需驗 committedIndex 初值。**待調查回報**：現況匯出函式庫能否 append 既有 pptx、committedIndex 邏輯、Docker/blob 現況。
+
+### 2026-07-19 | 五項指令的修法拍板（兩路調查後 Fable 凍結契約）
+- **誰決定**: Fable（依兩路 Opus 調查證據）
+- **決策**:
+  1. **人物去重**＝四件套：(a) 止血——contacts 兩條 upsert 路徑在 full_name 精配落空且 fullNameZh 非空時 fallback 以 (org,company,full_name_zh) 命中同一人；(b) 頭銜累加——共用 mergeTitle（「 · 」串接、正規化去重、上限 4 段）用於 title/titleZh，兩路徑都接；(c) 研究後自動合併 pass——按 normalized fullNameZh 分組（≥2 列），survivor＝唯一 human-verified 列否則最舊列，scalar fill-empty＋頭銜累加＋provenance 併集＋約 10 個引用欄 re-point（deal_contacts PK 撞→刪重複列）＋刪冗餘＋re-index；群內 ≥2 verified 列→跳過並 log；(d) **deep 模式不再丟棄官網 contacts**（payload.contacts=[] 改為併入落庫）——官網 team 頁拼音統一＋帶照片，一石二鳥。
+  2. **照片**：crawler 補抓 CSS background-image URL（team 頁常用）；enrichKeyPeople 加照片獵取（每人 ≤2 次 fetchRaw 其 citation 頁，<img> 需 alt 含中文名或拼音、og:image 需頁 title 含人名，信心 0.5 帶 provenance）；UI 頭像加 referrerpolicy=no-referrer（繞多數防盜鏈）；圖片代理/落地儲存記債。
+  3. **社群專區兩階段一次做**：階段一免 migration——social_links 欄補進 COMPANY_DEFS 映射＋Company.socialLinks 型別＋web 新「社群」tab（四平台＋既有六單欄帳號卡）；階段二——新表 company_social_posts（UNIQUE(org,company,platform,url)）落 YT 影片/Threads 貼文（原本合成後即丟），GET /companies/:id/social 回 {links,posts}，SocialTab 分平台列出。FB/IG 無直抓路徑→只有帳號卡（誠實呈現）。
+  4. **研究更多**＝新 mode 'more'：複用 runDeep 但 (a) buildFollowUps 換成「DB 空欄種子」變體（讀公司＋子表空缺→定向查詢）；(b) 非受信任公司欄改 fill-empty（只補缺不覆寫）；(c) 佐證升信心——同值異源（不同網域）→ supersede provenance、confidence +0.15 cap 0.9（機器佐證不動 verified 旗標，verified 仍專屬人工）；(d) 跑完接人物合併 pass＋照片獵取。UI＝EnrichPanel 第二顆按鈕。
+  5. **技術棧**：migration 016（雙套）company_tech 加 note_zh；抽取器每項產一句 zh-TW「這是什麼＋該公司怎麼用」；TechTab 改分類分組列表（名稱粗體＋說明副行＋信心靠右），棄現行擠壓卡片。
+  6. **記債六項同輪打包**：render semaphore 改底層 settle 才釋放（20s 仍回 null 但佔位到收尾）；enrichKeyPeople/enrichProductDetails 逐項前查 deadline；cleanUrl 只收 http(s)；DEEP_RESEARCH_BUDGET_MS/RESEARCH_JOB_TIMEOUT_MS 程式預設 3.6M/5.4M＋.env.example；EnrichPanel STALE 65→95 分。
+- **考慮過的替代**: 去重只做止血不清舊列（否——使用者看的就是既有重複）；照片走 grounding 要 URL（否——幻覺 hotlink）；社群只做帳號卡（否——使用者要「資訊整理」，YT/Threads 內容管線已存在只差落庫）；研究更多做成獨立引擎（否——注入式回呼＋fill-empty 地基已足）。
+- **影響**: migration 016×2；packages/crm（upsert×2、mergeTitle、dedup pass、social posts repo）；packages/shared；apps/server research 多檔；apps/web（SocialTab 新、TechTab 改版、EnrichPanel、頭像）；E2E 用低預算 env 對 Connact 跑 'more' 驗去重/社群/技術棧說明。
+
+### 2026-07-19 | CRM 研究五項新指令（使用者看 ConnactAI 擴編版結果截圖後下令）
+- **誰決定**: 使用者（人物清單×9、人物卡、技術棧、部門四張截圖）
+- **決策**:
+  1. **人物名稱重複要合併**：同一人因拼音不同被建成多列（高全德=Chuan-Te Kao/Quan-De Gao、李光斌=Bill Li/Kuang-Pin Li、廖柏維、程峻宏=Troy/Chun-Hung 各×2）；合併後**不同頭銜應累加在後面**（如「創辦人、董事長暨執行長 · 法人代表董事」），不是各留一列。
+  2. **還是沒有照片**：上輪 photoUrl 管線 best-effort 落空，要真的把照片弄出來。
+  3. **新增社群媒體專區**：把 FB/IG/Threads/YT 等帳號與資訊「專門整理」在一個獨立欄位/分頁。
+  4. **新增「研究更多」功能**：AI 在既有資料基礎上增量研究——驗證現有資訊＋特別去補缺乏的資訊（gap 導向），不是從頭重跑。
+  5. **技術棧前端不利閱讀**：卡片排版難讀（信心 badge 擠壓、無說明）；改善可讀性＋每項加說明文字（不然看不懂項目意思與內容）。
+- **脈絡與理由**: 擴編版（rev 00013/00011）上線後使用者實跑 ConnactAI 60 分預算版，資料量已達標但暴露資料品質（重複人物）、呈現（技術棧）、與產品缺口（社群專區、增量研究、照片）。
+- **考慮過的替代**: 無（使用者直接指示）。
+- **影響**: 待兩路 Opus 調查（contacts upsert/合併鍵＋照片管線；social/tech schema＋UI＋gap 機制）後凍契約。本輪同時打包既有記債：render semaphore settle 釋放、尾段 deadline 檢查、cleanUrl http(s) 白名單、DEEP_RESEARCH_BUDGET_MS/RESEARCH_JOB_TIMEOUT_MS 程式預設值與 .env.example 對齊、EnrichPanel 逃生口閾值 65→95 分。
+
+### 2026-07-18 | 深度研究預算上限 20 分→1 小時（使用者實跑撞牆後拍板）
+- **誰決定**: 使用者（擴編版上線後實跑深度研究，撞到 20 分軟預算上限；指示「上限應該設為 1 小時才對」）
+- **決策**: `DEEP_RESEARCH_BUDGET_MS` 1,200,000→**3,600,000（60 分）**；連動 `RESEARCH_JOB_TIMEOUT_MS` 3,600,000→**5,400,000（90 分）**（Fable 連動取捨：job 總逾時必須高於研究預算，否則研究跑滿 60 分後的抽取/落庫/尾段補查會被 withTimeout 誤殺成「研究逾時」，已落庫資料還會被標失敗）。
+- **執行**: 兩值皆 env 旋鈕，免重建——`gcloud run services update --update-env-vars`（保留其他 env）→ server rev **00014-2gx**，health/ready 200。程式碼預設值（deep-research.ts:21、orchestrator.ts:144-147）與 .env.example 的對齊留待下一輪 commit（prod 已由 env 蓋掉，僅影響本地 dev 預設）。
+- **考慮過的替代**: 改 code 預設值再重建部署（否——env 即時生效、零風險；code 對齊併下輪）。
+- **影響**: 單次深度研究最長可跑 60 分（成本上限同步放大）；EnrichPanel 的 65 分鐘前端逃生口閾值仍高於研究預算、低於 90 分 job 上限，語意不變但邊界變緊——若未來再調高預算需連動檢視逃生口閾值。UI 文案「可能需要 30–60 分鐘」現在名實相符。
+
 ### 2026-07-18 | 研究引擎擴編的修法拍板（兩路調查回報後 Fable 凍結契約）
 - **誰決定**: Fable（依兩路 Opus 調查證據）
 - **決策**（廣度包 S1＋產品包 S2＋web 包，S1→S2 依序、web 平行——S1/S2 共用 orchestrator/deep-extractor 檔案故不平行）：

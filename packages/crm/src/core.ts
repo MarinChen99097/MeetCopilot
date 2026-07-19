@@ -24,6 +24,7 @@ import {
   SqliteCompanyProductRepository,
   SqliteCompanyChildRepository,
 } from "./repos-prospect.js";
+import { SqliteCompanySocialRepository } from "./repos-social.js";
 import { SqliteDealRepository, SqliteNoteRepository } from "./repos-pipeline.js";
 import {
   SqliteProvenanceRepository,
@@ -66,6 +67,7 @@ function assemble(
     contacts: new SqliteContactRepository(port),
     companyProducts: new SqliteCompanyProductRepository(port),
     companyChildren: new SqliteCompanyChildRepository(port),
+    companySocial: new SqliteCompanySocialRepository(port),
     deals: new SqliteDealRepository(port),
     notes: new SqliteNoteRepository(port),
     provenance: new SqliteProvenanceRepository(port),

@@ -65,6 +65,7 @@ import {
 import { applyHumanUpdate } from "./update-apply.js";
 import { recordProvenanceRows, trustedFieldsOf } from "./provenance-write.js";
 import { upsertChild, type ChildUpsertSpec } from "./child-upsert.js";
+import { accumulateAndFillEmpty, CONTACT_KEY_TO_COL } from "./contact-merge.js";
 
 // ── child upsert specs（自然鍵 dedupe；見 child-upsert.ts）──
 const CONTACT_SPEC: ChildUpsertSpec = {
@@ -73,6 +74,9 @@ const CONTACT_SPEC: ChildUpsertSpec = {
   matchCols: ["full_name"],
   hasUpdatedAt: true,
   sysOnInsert: { verified_status: "none", source: "crawler" },
+  // full_name 落空 → 以 full_name_zh 再配一次（fill-empty 合併）；title/title_zh 累加。
+  fallbackMatchCols: ["full_name_zh"],
+  accumulateCols: ["title", "title_zh"],
 };
 const PRODUCT_SPEC: ChildUpsertSpec = {
   table: "company_products",
@@ -396,15 +400,28 @@ export class SqliteContactRepository implements ContactRepository {
     const contactId = await this.db.tx(async () => {
       const now = Date.now();
       const fullName = crawled.contact.fullName;
-      const existing = fullName
-        ? await this.db.get<{ id: string }>(
-            "SELECT id FROM contacts WHERE org_id = ? AND company_id = ? AND full_name = ?",
-            [orgId, companyId, fullName],
-          )
-        : undefined;
+      const fullNameZh = crawled.contact.fullNameZh;
+
+      // primary：full_name 精配；落空且 incoming fullNameZh 非空 → full_name_zh 再配一次（同一人，fill-empty）。
+      let existingRow: Record<string, unknown> | undefined;
+      let matchedByFallback = false;
+      if (fullName) {
+        existingRow = await this.db.get<Record<string, unknown>>(
+          "SELECT * FROM contacts WHERE org_id = ? AND company_id = ? AND full_name = ?",
+          [orgId, companyId, fullName],
+        );
+      }
+      if (!existingRow && typeof fullNameZh === "string" && fullNameZh.trim() !== "") {
+        existingRow = await this.db.get<Record<string, unknown>>(
+          "SELECT * FROM contacts WHERE org_id = ? AND company_id = ? AND full_name_zh = ?",
+          [orgId, companyId, fullNameZh],
+        );
+        if (existingRow) matchedByFallback = true;
+      }
+
       let id: string;
-      if (existing) {
-        id = existing.id;
+      if (existingRow) {
+        id = existingRow.id as string;
       } else {
         id = uuidv7();
         await this.db.run(
@@ -421,6 +438,13 @@ export class SqliteContactRepository implements ContactRepository {
         patch[k] = v;
       }
       const rec = patchToRecord(patch, CONTACT_DEFS);
+      // 命中既有列：title/title_zh 累加；fallback 命中則 fill-empty（不覆寫既有非空欄）。
+      if (existingRow) {
+        accumulateAndFillEmpty(rec, existingRow, {
+          accumulateCols: ["title", "title_zh"],
+          fillEmpty: matchedByFallback,
+        });
+      }
       rec.last_crawled_at = now;
       rec.updated_at = now;
       const cols = Object.keys(rec);
@@ -431,20 +455,31 @@ export class SqliteContactRepository implements ContactRepository {
         );
       }
 
+      // provenance 只寫實際落庫的欄（fill-empty 略過者不寫，避免值/來源漂移）；title/title_zh 快照對齊合併後值。
       const provRows: NewProvenance[] = crawled.provenance
-        .filter((p) => !trusted.has(p.fieldName))
-        .map((p) => ({
-          entityType: "contact",
-          entityId: id,
-          fieldName: p.fieldName,
-          valueSnapshot: p.value,
-          filledBy: "crawler" as const,
-          // deep 研究的主管來自新聞/維基/公開檔 → 帶真實 sourceType；detailed/quick 不帶 → 預設 'linkedin'。
-          sourceType: p.sourceType ?? "linkedin",
-          sourceUrl: p.sourceUrl,
-          confidence: p.confidence,
-          verified: 0 as const,
-        }));
+        .filter((p) => {
+          if (trusted.has(p.fieldName)) return false;
+          if (!existingRow) return true; // 新建：patch 全數落庫。
+          const col = CONTACT_KEY_TO_COL.get(p.fieldName);
+          return col !== undefined && col in rec; // 命中：只保留 rec 仍帶（實際寫入）的欄。
+        })
+        .map((p) => {
+          const col = CONTACT_KEY_TO_COL.get(p.fieldName);
+          const isAcc = existingRow !== undefined && (col === "title" || col === "title_zh");
+          return {
+            entityType: "contact",
+            entityId: id,
+            fieldName: p.fieldName,
+            // 累加欄用合併後的值當快照（與欄位一致）；其餘沿用爬蟲原值。
+            valueSnapshot: isAcc && col !== undefined && rec[col] != null ? String(rec[col]) : p.value,
+            filledBy: "crawler" as const,
+            // deep 研究的主管來自新聞/維基/公開檔 → 帶真實 sourceType；detailed/quick 不帶 → 預設 'linkedin'。
+            sourceType: p.sourceType ?? "linkedin",
+            sourceUrl: p.sourceUrl,
+            confidence: p.confidence,
+            verified: 0 as const,
+          };
+        });
       await recordProvenanceRows(this.db, orgId, provRows);
       return id;
     });

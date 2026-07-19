@@ -107,8 +107,10 @@ export type CrawlTargetType = "company" | "contact";
  * 爬蟲/研究模式（crawl_jobs.mode，CRM_SCHEMA §8）：
  *  - quick＝會中單頁；detailed＝會前爬官網＋子頁；
  *  - deep＝全網深度研究（Google-Search grounding 扇出 + 讀取新聞/維基/公開檔 + 官網爬蟲），不鎖官網。
+ *  - more＝「研究更多」（RESEARCH_UPGRADE v2）：在既有資料上補缺＋佐證，較快——runDeep 變體，
+ *    以 DB 空欄種子做定向查詢、公司非受信任欄改 fill-empty（既有非空不覆寫）、佐證升信心。
  */
-export type CrawlMode = "quick" | "detailed" | "deep";
+export type CrawlMode = "quick" | "detailed" | "deep" | "more";
 
 /** enrichment job 狀態（crawl_jobs.status，CRM_SCHEMA §8；同 API_CONTRACT §3）。 */
 export type CrawlJobStatus = "queued" | "running" | "done" | "failed";
@@ -148,6 +150,18 @@ export interface ObjectionRaised {
 // ─────────────────────────────────────────────────────────────
 // 對方公司 — companies（CRM_SCHEMA §4）
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * 社群帳號連結（companies.social_links JSON 欄，013 migration）。
+ * 已知平台為可選具名鍵；index signature 容納社群 fetcher 未來新增的平台。值一律為完整 URL。
+ */
+export interface CompanySocialLinks {
+  youtube?: string;
+  facebook?: string;
+  instagram?: string;
+  threads?: string;
+  [platform: string]: string | undefined;
+}
 
 export interface Company {
   id: string;
@@ -205,6 +219,11 @@ export interface Company {
   socialYoutube?: string;
   socialCrunchbase?: string;
   socialGithub?: string;
+  /**
+   * 官網/grounding 發現的社群帳號（companies.social_links JSON 欄，013 migration）。
+   * 值＝完整 URL；平台鍵含 youtube/facebook/instagram/threads（社群 fetcher 依此展開）。
+   */
+  socialLinks?: CompanySocialLinks;
   languages?: string[];
   // ── 副駕會浮出的公開情報 ──
   productsOffered?: string[];
@@ -304,8 +323,31 @@ export interface CompanyTech {
   confidence?: number;
   firstSeenAt?: number;
   lastSeenAt?: number;
+  /** 繁中(zh-TW)一句話說明：這是什麼＋該公司怎麼用（擷取時另產；來源沒有就省略）。 */
+  noteZh?: string;
   createdAt: number;
 }
+
+/**
+ * company_social_posts（016 migration）：社群 fetcher 產出的結構化頻道統計/影片/貼文。
+ * 自然鍵＝(orgId, companyId, platform, url)；metrics 各平台不同（youtube：views/subscribers…）。
+ */
+export interface SocialPost {
+  id: string;
+  orgId: string;
+  companyId: string;
+  platform?: string;
+  url?: string;
+  title?: string;
+  content?: string;
+  publishedAt?: number;
+  /** JSON 物件：views/subscribers/likes/… 各平台語義不同。 */
+  metrics?: JsonObject;
+  createdAt: number;
+}
+
+/** 建立社群貼文（companyId 由方法參數帶入；id/orgId/createdAt 由 repo 生成）。 */
+export type NewSocialPost = Partial<Omit<SocialPost, "id" | "orgId" | "companyId" | "createdAt">>;
 
 /** company_products（CRM_SCHEMA §4；crawler-heavy 對方產品深檔）。 */
 export interface CompanyProduct {

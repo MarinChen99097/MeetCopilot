@@ -14,7 +14,7 @@ describe("YouTube fetcher — missing key", () => {
       { companyName: "Acme", handles: {} },
       { signal: new AbortController().signal, budgetMs: 5000, log: (m) => logs.push(m) },
     );
-    expect(out).toEqual([]);
+    expect(out).toEqual({ sources: [], posts: [] });
     expect(logs.some((l) => l.includes("YOUTUBE_API_KEY not set"))).toBe(true);
   });
 });

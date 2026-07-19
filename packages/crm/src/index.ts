@@ -15,6 +15,13 @@ export {
   SqliteCompanyProductRepository,
   SqliteCompanyChildRepository,
 } from "./repos-prospect.js";
+export { SqliteCompanySocialRepository } from "./repos-social.js";
+export {
+  mergeTitle,
+  isEmptyVal,
+  dedupeCompanyContacts,
+  type DedupeResult,
+} from "./contact-merge.js";
 export { SqliteDealRepository, SqliteNoteRepository } from "./repos-pipeline.js";
 export {
   SqliteProvenanceRepository,

@@ -24,9 +24,8 @@ const PRE: Surface[] = [
   { key: "studio", href: "/studio", titleKey: "studio.title", descKey: "home.studioDesc", icon: "slides" },
 ];
 const LIVE: Surface[] = [
-  { key: "present", href: "/present", titleKey: "present.title", descKey: "home.presentDesc", icon: "stage", external: true },
-  { key: "copilot", href: "/copilot", titleKey: "copilot.title", descKey: "home.copilotDesc", icon: "headset", external: true },
-  { key: "hud", href: "/hud", titleKey: "hud.title", descKey: "home.hudDesc", icon: "gauge", external: true },
+  { key: "present", href: "/present", titleKey: "nav.present", descKey: "home.presentDesc", icon: "stage", external: true },
+  { key: "copilot", href: "/copilot", titleKey: "nav.copilot", descKey: "home.copilotDesc", icon: "headset", external: true },
 ];
 const DRILL: Surface[] = [
   { key: "train", href: "/train", titleKey: "train.title", descKey: "home.trainDesc", icon: "mic" },

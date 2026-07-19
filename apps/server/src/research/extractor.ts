@@ -23,6 +23,7 @@ import type {
 import type { RawCrawl, CrawledPage } from "./crawler.js";
 import {
   cleanStr,
+  cleanUrl,
   dedupUncat,
   filterToImageWhitelist,
   validatePhotoUrl,
@@ -113,6 +114,8 @@ interface ExtractedTech {
   vendor?: string;
   product?: string;
   detectedFrom?: string;
+  /** 一句 zh-TW 說明：這是什麼＋該公司怎麼用（來源沒講就省略）。 */
+  noteZh?: string;
 }
 
 /** 模型輸出的部門單筆（zh-TW）。摺成 NewCompanyDepartment（name 必填）。 */
@@ -213,6 +216,8 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
               vendor: { type: S.STRING },
               product: { type: S.STRING },
               detectedFrom: { type: S.STRING },
+              // 一句 zh-TW：這是什麼＋該公司怎麼用（來源沒講就省略）。
+              noteZh: { type: S.STRING },
             },
           },
         },
@@ -373,7 +378,7 @@ const SYSTEM = [
   "- `specs[]`: technical spec rows from a spec/comparison table as {name,value} pairs, e.g. {name:'容量', value:'1500VA/900W'}, {name:'輸出電壓', value:'110V'}, {name:'外型架構', value:'直立式'}. Product-detail AND product-comparison pages list models by attribute columns (capacity/architecture/form-factor/voltage/runtime) — attach those attribute values as specs[] on the matching product. If a product's page contains such a table you MUST populate `specs[]` for that product from it.",
   "Also include, only when the text states them: HQ location, founded year, social links, key customers, and named people (as `contacts[]`).",
   "PEOPLE (contacts[]) — for each named person: `fullNameZh` = the person's Chinese name ONLY if it literally appears in the source text (official site/bio). NEVER transliterate a romanized name into Chinese or fabricate a Chinese name — leave it empty if the source has no Chinese name. `photoUrl` = the person's photo, picked ONLY from the `PAGE IMAGES` list VERBATIM; never invent one.",
-  "TECH & DEPARTMENTS (only when the text states them): `company.techStack[]` = technologies/vendors/products the company itself uses or is built on ({category, vendor, product, detectedFrom = where on the page you saw it}); `company.departments[]` = the company's internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns in their original form (e.g. AWS, React, Kubernetes, SAP). Cap: at most 12 techStack items and at most 10 departments.",
+  "TECH & DEPARTMENTS (only when the text states them): `company.techStack[]` = technologies/vendors/products the company itself uses or is built on ({category, vendor, product, detectedFrom = where on the page you saw it, noteZh = ONE Traditional-Chinese sentence explaining what it is AND how this company uses it — OMIT noteZh when the source does not support it, never invent}); `company.departments[]` = the company's internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns in their original form (e.g. AWS, React, Kubernetes, SAP). Cap: at most 12 techStack items and at most 10 departments.",
   "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the page's own source language (e.g. Traditional Chinese if the page is Chinese; do NOT translate the primary fields; quote the company's own wording). IN ADDITION, for each `*Zh` field — company.descriptionZh, company.taglineZh, company.industryZh, company.businessModelZh, products[].oneLinerZh, products[].descriptionZh, contacts[].titleZh, contacts[].backgroundSummaryZh, news[].titleZh, news[].summaryZh — emit a concise Traditional-Chinese (zh-TW, Taiwan usage) gloss of that item's corresponding primary field, each at most 2 sentences. company.industryZh is the Traditional-Chinese TRANSLATION of the industry label. If the source is already zh-TW you may condense it. (fullNameZh is NOT a gloss — see PEOPLE: only fill it from a Chinese name actually present in the source.) Field NAMES stay as in the schema (English keys).",
   "narrativeZh: write a Traditional-Chinese (zh-TW), plain-language narrative of 8-20 sentences synthesizing the company's type, business model, current situation, and (if visible) social presence. Keep proper nouns original; a readable briefing, NOT a bullet list.",
   "uncategorized: EVERY important fact in the text that does NOT fit the structured fields above (company/contacts/products/news) MUST be captured here as {text, sourceIndex} — DO NOT discard it (e.g. partnerships, awards, certifications context, notable customers, events). At most 25 items; each `text` one concise sentence. sourceIndex may be 0 (single-site source).",
@@ -445,16 +450,6 @@ function buildPrompt(raw: RawCrawl): string {
   const perPage = computePerPageChars(frames.map((f) => f.text.length), miscChars);
   const bodies = frames.map((f) => `${f.prefix}${f.text.slice(0, perPage)}${f.images}`).join("\n");
   return (task + header + bodies).slice(0, MAX_PROMPT_CHARS);
-}
-
-/**
- * 清掉 URL 尾端的污染（逗號/分號/引號/括號/空白）。防「websiteUrl 帶尾逗號」這類 join/format 或模型污染
- * （M1 verify 觀察到 "https://ghost.org/,"）。只動 URL 類欄位，不碰 description 等可含標點的自由文字。
- */
-function cleanUrl(u: unknown): string | undefined {
-  if (typeof u !== "string") return undefined;
-  const trimmed = u.trim().replace(/[\s,;'"’“”)\]}]+$/u, "");
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /** 由「站上原樣顯示的價格字串」best-effort 解析出數值＋幣別。解析不出就回 undefined（原文仍留 pricingNotes）。 */
@@ -756,6 +751,8 @@ export async function enrichProductDetails(
   extractModel: string | undefined,
   products: Partial<CompanyProduct>[],
   raw: RawCrawl,
+  /** 記債：逐項前檢查的軟 deadline（epoch ms）。超時即停止剩餘產品並 log；缺→不設限（沿用原行為）。 */
+  deadlineAt?: number,
 ): Promise<Partial<CompanyProduct>[]> {
   if (!gemini.isConfigured() || !Array.isArray(products) || products.length === 0) return products;
   if (!raw?.pages || raw.pages.length === 0) return products;
@@ -767,6 +764,11 @@ export async function enrichProductDetails(
     for (;;) {
       const i = idx++;
       if (i >= matches.length) return;
+      // 記債：逐項前檢查 deadline——超時即停止剩餘產品（log 一次），避免補抽把整場預算吃穿。
+      if (deadlineAt !== undefined && Date.now() > deadlineAt) {
+        console.warn(`[extract:product-detail] deadline exceeded — skipping remaining ${matches.length - i} product(s)`);
+        return;
+      }
       const m = matches[i]!;
       const base = out[m.productIndex]!;
       const name = cleanStr(base.name);
@@ -793,12 +795,14 @@ function toTechStack(items: ExtractedTech[] | undefined): NewCompanyTech[] {
     const vendor = typeof t?.vendor === "string" ? t.vendor.trim() : "";
     const product = typeof t?.product === "string" ? t.product.trim() : "";
     const detectedFrom = typeof t?.detectedFrom === "string" ? t.detectedFrom.trim() : "";
+    const noteZh = typeof t?.noteZh === "string" ? t.noteZh.trim() : "";
     if (!category && !vendor && !product) continue; // 純 detectedFrom 無資訊 → 跳過
     const row: NewCompanyTech = { confidence: CRAWL_CONFIDENCE };
     if (category) row.category = category;
     if (vendor) row.vendor = vendor;
     if (product) row.product = product;
     if (detectedFrom) row.detectedFrom = detectedFrom;
+    if (noteZh) row.noteZh = noteZh;
     out.push(row);
     if (out.length >= MAX_TECH) break;
   }

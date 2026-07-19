@@ -214,6 +214,8 @@ const TECH_SCHEMA: Record<string, unknown> = {
       vendor: { type: S.STRING },
       product: { type: S.STRING },
       detectedFrom: { type: S.STRING },
+      // 一句 zh-TW：這是什麼＋該公司怎麼用（來源沒講就省略）。
+      noteZh: { type: S.STRING },
     },
   },
 };
@@ -356,7 +358,7 @@ const SYSTEM = [
   "people: named executives/leaders with their title and seniority. `fullNameZh` = the person's Chinese name ONLY if a source explicitly gives it; NEVER transliterate a romanized name into Chinese or fabricate one — leave empty otherwise. (Do NOT emit person photos in deep mode.)",
   "competitors: named competitor companies.",
   "socialLinks (OPTIONAL): the company's OFFICIAL social-media account URLs — youtube, facebook, instagram, threads. For each platform, give the FULL https URL of the account/page ONLY when a source explicitly confirms it is THIS company's own official account. If you are unsure, or cannot confirm the official account from the provided sources, OMIT that platform entirely — do NOT guess or fabricate handles.",
-  "company.techStack[] (only when stated): technologies/vendors/products the company uses or is built on ({category, vendor, product, detectedFrom}); company.departments[] (only when stated): internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns original (e.g. AWS, React, Kubernetes). Cap: at most 12 techStack items and at most 10 departments.",
+  "company.techStack[] (only when stated): technologies/vendors/products the company uses or is built on ({category, vendor, product, detectedFrom, noteZh = ONE Traditional-Chinese sentence on what it is AND how this company uses it — OMIT when the sources do not support it, never invent}); company.departments[] (only when stated): internal teams/divisions ({name, focus, headcountEstimate}). Write these DIRECTLY in Traditional Chinese (zh-TW), but keep technical/product proper nouns original (e.g. AWS, React, Kubernetes). Cap: at most 12 techStack items and at most 10 departments.",
   "opportunities[] (only when the sources state a concrete buying/sales signal): each {title (a short zh-TW label), detail (one zh-TW sentence), signalType, sourceIndex}. signalType is ONE of: hiring (they are hiring / expanding a team), expansion (new office/market/product-line expansion), funding (raised or seeking capital), project (a named initiative/RFP/deployment), partnership (a new alliance/channel), procurement (a purchase/tender/vendor-selection), other. Only real signals present in the sources — do NOT invent. At most 15.",
   "products[] (external view; only products the sources actually attribute to THIS company): each {name (the product's own name, verbatim), differentiators[] (zh-TW), competitors[] (competing products/companies named), notableCustomers[] (named customers/logos), sourceIndex}. This is the OUTSIDE-IN view of the company's products from news/reviews/case-studies — used to enrich the official-site product list; do NOT fabricate names. At most 20.",
   "LANGUAGE — bilingual output. Keep every PRIMARY text field verbatim in the language of the sources (Traditional Chinese for zh sources; do NOT translate the primary fields; keep values concise; never repeat text). IN ADDITION, emit a concise Traditional-Chinese (zh-TW, Taiwan usage) gloss in each `*Zh` field: company.descriptionZh (of description), company.industryZh (the Traditional-Chinese TRANSLATION of the industry label), company.businessModelZh (of businessModel), company.taglineZh (a concise Traditional-Chinese positioning line for the company), news[].titleZh/summaryZh (of that item's title/summary), and people[].titleZh (of that person's title) — each at most 2 sentences; if the source is already zh-TW you may condense it. (fullNameZh is NOT a gloss — only fill it from a Chinese name actually present in the sources.)",
@@ -472,12 +474,14 @@ function toDeepTech(v: unknown): NewCompanyTech[] {
     const vendor = cleanStr(t.vendor);
     const product = cleanStr(t.product);
     const detectedFrom = cleanStr(t.detectedFrom);
+    const noteZh = cleanStr(t.noteZh);
     if (!category && !vendor && !product) continue;
     const row: NewCompanyTech = { confidence: DEEP_CONFIDENCE };
     if (category) row.category = category;
     if (vendor) row.vendor = vendor;
     if (product) row.product = product;
     if (detectedFrom) row.detectedFrom = detectedFrom;
+    if (noteZh) row.noteZh = noteZh;
     out.push(row);
     if (out.length >= MAX_TECH) break;
   }
