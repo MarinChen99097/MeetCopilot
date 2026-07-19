@@ -46,7 +46,18 @@ RUN npm run build --workspace @meetcopilot/shared \
 # 5) Chromium + system deps for the research crawler (Playwright).
 RUN npx playwright install --with-deps chromium
 
-# 6) Persistent SQLite lives on a mounted volume (see docker-compose.yml + DB_PATH).
+# 6) DynamicSlide import→render toolchain (deck rasterize + supplement→pdf):
+#    - libreoffice-impress: soffice --convert-to pdf (pptx→pdf)
+#    - poppler-utils:       pdftoppm (pdf→png @150dpi)
+#    - fonts-noto-cjk:      CJK (incl. Traditional Chinese) glyph rendering — REQUIRED
+#      so rasterized slides don't show tofu; fonts-noto-cjk-extra not needed for zh-TW.
+#    Adds ~1GB to the image. Kept as its own apt layer (own cache key) after the
+#    Playwright deps so a toolchain change doesn't invalidate the chromium layer.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-impress poppler-utils fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/*
+
+# 7) Persistent SQLite lives on a mounted volume (see docker-compose.yml + DB_PATH).
 VOLUME ["/data"]
 
 EXPOSE 8787

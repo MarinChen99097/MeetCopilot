@@ -60,6 +60,11 @@ import type {
   NewImageJob,
   ImageJobUpdate,
   SlideSpec,
+  // ── 018 DynamicSlide 匯入重構（deck_assets / import_jobs）──
+  DeckAssetKind,
+  DeckSlideKind,
+  DeckImportStatus,
+  ImportJobStatus,
   // ── M4 語音模擬訓練（B0 凍結；TrainingRepository 實作＝M4 build agent）──
   TrainSession,
   NewTrainSession,
@@ -358,12 +363,92 @@ export interface DeckRepository {
   /** present 的 page_commit 推進 committed_index（單調遞增；I1 guard 依它）。 */
   setCommittedIndex(orgId: string, deckId: string, index: number): Promise<void>;
   // ── slides（append-only I1）──
-  appendSlide(orgId: string, deckId: string, spec: SlideSpec): Promise<DeckSlide>; // idx = max(idx)+1
-  updateSlide(orgId: string, deckId: string, idx: number, spec: SlideSpec): Promise<DeckSlide>; // 會前/pending 編輯
+  /** idx = max(idx)+1。018：opts.kind/assetId 供匯入逐頁建原始頁；省略＝一般 spec 頁（DEFAULT 語意不變）。 */
+  appendSlide(
+    orgId: string,
+    deckId: string,
+    spec: SlideSpec,
+    opts?: { kind?: DeckSlideKind; assetId?: string },
+  ): Promise<DeckSlide>;
+  /** 會前/pending 編輯。018：idx<original_count → OriginalSlideLockedError；idx≤committedIndex → I1ViolationError。 */
+  updateSlide(orgId: string, deckId: string, idx: number, spec: SlideSpec): Promise<DeckSlide>;
+  // ── 018 匯入 setters（deckId 為 PK；route/worker 已持有歸屬，故不收 orgId）──
+  /** 設 import_status（+failed 時 import_error）。轉檔 job 進度回寫。 */
+  setImportStatus(deckId: string, status: DeckImportStatus, error?: string): Promise<void>;
+  /** 設 original_count（前段鎖定原始頁數）。轉檔完成回填 N。 */
+  setOriginalCount(deckId: string, n: number): Promise<void>;
+  /**
+   * boot reconcile：把所有 import_status='processing' 的 deck 標成 failed（+人話 import_error）。回被改筆數。
+   * processing deck 依定義都是被中斷的（轉檔為同進程 in-process job，server 重啟後永不會再收尾），
+   * 與 import_jobs reaper 對帳並行——job 標 failed 但 deck.import_status 未同步 → 前端只看 deck 會永久卡「轉檔中」。
+   * 跨 org（開機清系統級殘留，無 org 過濾）。
+   */
+  failInterruptedImports(): Promise<number>;
   // ── image_jobs（pre-meeting AI 生圖）──
   createImageJob(orgId: string, input: NewImageJob): Promise<ImageJob>;
   findImageJob(orgId: string, id: string): Promise<ImageJob | null>;
   updateImageJob(orgId: string, id: string, patch: ImageJobUpdate): Promise<ImageJob>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 018 DynamicSlide 匯入重構：deck_assets / import_jobs 存取（migration 018；契約 §1）
+// deck_assets 存原檔 pptx/pdf bytes 與逐頁 page_image PNG bytes；bytes 型別為 Node Buffer
+//   （crm 為 server-only；bytea/BLOB ↔ Buffer 由兩驅動天然對映）。故此二型別不進 shared（wire/browser 契約層）。
+// org-scoping：insert 帶 org_id；getAsset/getSourceAsset 以 asset/deck 主鍵查（route/簽章層做租戶驗證）。
+// ─────────────────────────────────────────────────────────────
+
+/** insertAsset 輸入（bytes 為原始二進位；byteSize 由 repo 以 bytes.length 落庫）。 */
+export interface NewDeckAsset {
+  deckId: string;
+  orgId: string;
+  kind: DeckAssetKind;
+  /** kind=page_image 時 0-based 頁序；原檔（source_*）省略。 */
+  pageIndex?: number;
+  mime: string;
+  bytes: Buffer;
+}
+
+/** getAsset 回傳：串流端點所需的最小欄位（含 deckId/orgId 供縱深防禦驗證）。 */
+export interface DeckAssetRef {
+  deckId: string;
+  orgId: string;
+  kind: DeckAssetKind;
+  mime: string;
+  bytes: Buffer;
+}
+
+/** getSourceAsset 回傳：原檔（source_pptx/source_pdf）的 assetId/mime/bytes。 */
+export interface DeckSourceAsset {
+  assetId: string;
+  mime: string;
+  bytes: Buffer;
+}
+
+/**
+ * deck_assets 存取（018）。實作＝WP-FOUNDATION（SqliteDeckAssetRepository，port-agnostic 跑兩驅動）。
+ * 授權模型：串流端點純簽章授權（<img> 帶不了 Bearer），故 getAsset 不收 orgId；route 層以簽章＋asset.deckId/orgId 縱深防禦。
+ */
+export interface DeckAssetRepository {
+  /** 插入一筆 asset（原檔或單頁圖），回新 assetId（uuid）。 */
+  insertAsset(input: NewDeckAsset): Promise<string>;
+  /** 依 assetId 取單筆（含 bytes）；未命中回 null。串流端點用。 */
+  getAsset(assetId: string): Promise<DeckAssetRef | null>;
+  /** 取某 deck 的原檔 asset（source_pptx | source_pdf）；未命中回 null。匯出原封合併用。 */
+  getSourceAsset(deckId: string): Promise<DeckSourceAsset | null>;
+}
+
+/**
+ * import_jobs 存取（018；pptx/pdf → PNG 轉檔背景 job）。實作＝WP-FOUNDATION（port-agnostic）。
+ * 契約 §5：boot reaper 把殘留 queued/running 標 failed（比照 research reaper）。
+ * setJobStatus 以 jobId 主鍵操作（不收 orgId；jobId 為全域唯一 uuid）。
+ */
+export interface ImportJobRepository {
+  /** 建立 queued job，回新 jobId（uuid）。 */
+  enqueue(deckId: string, orgId: string): Promise<string>;
+  /** 更新 job 狀態（+error，failed 時）；一併更新 updated_at。 */
+  setJobStatus(jobId: string, status: ImportJobStatus, error?: string): Promise<void>;
+  /** 開機 reaper：跨 org 把殘留 queued/running 標 failed，回被標記筆數（供 boot log）。 */
+  failInterruptedJobs(): Promise<number>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -451,6 +536,10 @@ export interface CrmCore {
   profileCards: ProfileCardRepository;
   // ── M2/M4（B0 凍結介面；core.ts 目前為 throwing stub，build agent 實作）──
   decks: DeckRepository;
+  /** 018 匯入重構：deck_assets（原檔＋逐頁圖 bytes）存取。 */
+  deckAssets: DeckAssetRepository;
+  /** 018 匯入重構：import_jobs（轉檔背景 job）存取。 */
+  importJobs: ImportJobRepository;
   training: TrainingRepository;
   // ── M5（本檔凍結介面；core.ts 目前為 throwing stub，M5 build agent 實作）──
   usage: UsageRepository;

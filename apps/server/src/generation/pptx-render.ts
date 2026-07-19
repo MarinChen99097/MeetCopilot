@@ -69,14 +69,27 @@ function resolveTheme(theme: SlideTheme | undefined): ResolvedTheme {
   };
 }
 
-const SLIDE_W = 10;
-const SLIDE_H = 5.625;
+/** 預設畫布尺寸（吋）＝ 16:9 的 10×5.625；native（AI 生成/無原檔）路徑沿用。 */
+const DEFAULT_SLIDE_W = 10;
+const DEFAULT_SLIDE_H = 5.625;
 const MARGIN_X = 0.6;
 const MARGIN_Y = 0.5;
-const CONTENT_W = SLIDE_W - MARGIN_X * 2;
-const CONTENT_BOTTOM = SLIDE_H - MARGIN_Y;
 const BLOCK_GAP = 0.2;
 const COL_GAP = 0.4;
+
+/**
+ * 版面幾何（吋）：依實際畫布尺寸算出。補充頁匯出時以**原檔畫布尺寸**產出（不再寫死 10×5.625），
+ * 合併回原檔（原檔常為 13.333×7.5＝寬螢幕預設）才不會只佔左上一角而破版。
+ */
+export interface SlideGeom {
+  W: number;
+  H: number;
+  CONTENT_W: number;
+  CONTENT_BOTTOM: number;
+}
+function makeGeom(w: number, h: number): SlideGeom {
+  return { W: w, H: h, CONTENT_W: w - MARGIN_X * 2, CONTENT_BOTTOM: h - MARGIN_Y };
+}
 
 function findBlock<K extends SlideBlock["type"]>(
   blocks: SlideBlock[],
@@ -118,12 +131,12 @@ function safeImage(slide: PptxGenJS.Slide, opts: PptxGenJS.ImageProps): void {
   }
 }
 
-function addEyebrow(slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme): number {
+function addEyebrow(slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme, geom: SlideGeom): number {
   if (!spec.eyebrow) return MARGIN_Y;
   slide.addText(spec.eyebrow.toUpperCase(), {
     x: MARGIN_X,
     y: MARGIN_Y,
-    w: CONTENT_W,
+    w: geom.CONTENT_W,
     h: 0.3,
     fontFace: theme.bodyFont,
     fontSize: 11,
@@ -137,15 +150,15 @@ function addEyebrow(slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedThem
   return MARGIN_Y + 0.3 + 0.14;
 }
 
-function addLogo(slide: PptxGenJS.Slide, logo: string | undefined): void {
+function addLogo(slide: PptxGenJS.Slide, logo: string | undefined, geom: SlideGeom): void {
   if (!logo) return;
   const w = 0.9;
   const h = 0.5;
   try {
     slide.addImage({
       data: logo,
-      x: SLIDE_W - MARGIN_X - w,
-      y: SLIDE_H - 0.2 - h,
+      x: geom.W - MARGIN_X - w,
+      y: geom.H - 0.2 - h,
       w,
       h,
       sizing: { type: "contain", w, h },
@@ -329,13 +342,14 @@ function layoutBlocks(
   yStart: number,
   w: number,
   theme: ResolvedTheme,
+  geom: SlideGeom,
   inheritedScale?: number,
 ): number {
   let scale: number;
   if (inheritedScale !== undefined) {
     scale = inheritedScale;
   } else {
-    const available = Math.max(0.001, CONTENT_BOTTOM - yStart);
+    const available = Math.max(0.001, geom.CONTENT_BOTTOM - yStart);
     const needed =
       blocks.reduce((sum, b) => sum + estimateHeight(b, w), 0) + Math.max(0, blocks.length - 1) * BLOCK_GAP;
     scale = needed > available ? available / needed : 1;
@@ -468,8 +482,8 @@ function layoutBlocks(
         break;
       case "two-col": {
         const colW = (w - COL_GAP) / 2;
-        layoutBlocks(pptx, slide, block.left, x, y, colW, theme, scale);
-        layoutBlocks(pptx, slide, block.right, x + colW + COL_GAP, y, colW, theme, scale);
+        layoutBlocks(pptx, slide, block.left, x, y, colW, theme, geom, scale);
+        layoutBlocks(pptx, slide, block.right, x + colW + COL_GAP, y, colW, theme, geom, scale);
         break;
       }
     }
@@ -479,8 +493,8 @@ function layoutBlocks(
   return y;
 }
 
-function renderTitle(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme): void {
-  addEyebrow(slide, spec, theme);
+function renderTitle(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme, geom: SlideGeom): void {
+  addEyebrow(slide, spec, theme, geom);
   const heading = findBlock(spec.blocks, "heading");
   const sub = findBlock(spec.blocks, "subheading");
   const heroY = 1.7;
@@ -488,7 +502,7 @@ function renderTitle(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, t
   slide.addText(heading?.text ?? spec.eyebrow ?? "", {
     x: MARGIN_X,
     y: heroY,
-    w: CONTENT_W,
+    w: geom.CONTENT_W,
     h: heroH,
     fontFace: theme.headingFont,
     fontSize: 40,
@@ -504,7 +518,7 @@ function renderTitle(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, t
     slide.addText(sub.text, {
       x: MARGIN_X,
       y: underlineY + 0.2,
-      w: CONTENT_W,
+      w: geom.CONTENT_W,
       h: 0.8,
       fontFace: theme.bodyFont,
       fontSize: 18,
@@ -515,11 +529,11 @@ function renderTitle(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, t
     });
   }
   const rest = spec.blocks.filter((b) => b !== heading && b !== sub);
-  if (rest.length) layoutBlocks(pptx, slide, rest, MARGIN_X, underlineY + 1.05, CONTENT_W, theme);
+  if (rest.length) layoutBlocks(pptx, slide, rest, MARGIN_X, underlineY + 1.05, geom.CONTENT_W, theme, geom);
 }
 
-function renderSection(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme): void {
-  addEyebrow(slide, spec, theme);
+function renderSection(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme, geom: SlideGeom): void {
+  addEyebrow(slide, spec, theme, geom);
   const heading = findBlock(spec.blocks, "heading");
   const sub = findBlock(spec.blocks, "subheading");
   const barX = MARGIN_X;
@@ -528,7 +542,7 @@ function renderSection(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec
   const barH = 1.5;
   addRule(slide, barX, barY, barW, barH, theme.accent);
   const textX = barX + barW + 0.35;
-  const textW = SLIDE_W - textX - MARGIN_X;
+  const textW = geom.W - textX - MARGIN_X;
   slide.addText(heading?.text ?? "", {
     x: textX,
     y: barY,
@@ -558,11 +572,11 @@ function renderSection(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec
   }
 }
 
-function addHeadingChrome(slide: PptxGenJS.Slide, text: string, y: number, theme: ResolvedTheme): number {
+function addHeadingChrome(slide: PptxGenJS.Slide, text: string, y: number, theme: ResolvedTheme, geom: SlideGeom): number {
   slide.addText(text, {
     x: MARGIN_X,
     y,
-    w: CONTENT_W,
+    w: geom.CONTENT_W,
     h: 0.7,
     fontFace: theme.headingFont,
     fontSize: 26,
@@ -577,20 +591,20 @@ function addHeadingChrome(slide: PptxGenJS.Slide, text: string, y: number, theme
   return ruleY + 0.24;
 }
 
-function renderContent(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme): void {
-  const top = addEyebrow(slide, spec, theme);
+function renderContent(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme, geom: SlideGeom): void {
+  const top = addEyebrow(slide, spec, theme, geom);
   const heading = findBlock(spec.blocks, "heading");
   let y = top;
-  if (heading) y = addHeadingChrome(slide, heading.text, top, theme);
+  if (heading) y = addHeadingChrome(slide, heading.text, top, theme, geom);
   const rest = spec.blocks.filter((b) => b !== heading);
-  layoutBlocks(pptx, slide, rest, MARGIN_X, y, CONTENT_W, theme);
+  layoutBlocks(pptx, slide, rest, MARGIN_X, y, geom.CONTENT_W, theme, geom);
 }
 
-function renderStats(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme): void {
-  const top = addEyebrow(slide, spec, theme);
+function renderStats(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme, geom: SlideGeom): void {
+  const top = addEyebrow(slide, spec, theme, geom);
   const heading = findBlock(spec.blocks, "heading");
   let y = top;
-  if (heading) y = addHeadingChrome(slide, heading.text, top, theme);
+  if (heading) y = addHeadingChrome(slide, heading.text, top, theme, geom);
 
   const stats = spec.blocks.filter((b): b is Extract<SlideBlock, { type: "stat" }> => b.type === "stat");
   const others = spec.blocks.filter((b) => b !== heading && b.type !== "stat");
@@ -600,8 +614,8 @@ function renderStats(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, t
     const rows = Math.ceil(stats.length / cols);
     const gap = 0.3;
     const rowGap = 0.25;
-    const cardW = (CONTENT_W - gap * (cols - 1)) / cols;
-    const availH = CONTENT_BOTTOM - y;
+    const cardW = (geom.CONTENT_W - gap * (cols - 1)) / cols;
+    const availH = geom.CONTENT_BOTTOM - y;
     const cardH = Math.min(1.5, (availH - rowGap * (rows - 1)) / rows);
     stats.forEach((s, i) => {
       const c = i % cols;
@@ -638,11 +652,11 @@ function renderStats(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, t
     y += rows * cardH + (rows - 1) * rowGap + 0.25;
   }
 
-  if (others.length) layoutBlocks(pptx, slide, others, MARGIN_X, y, CONTENT_W, theme);
+  if (others.length) layoutBlocks(pptx, slide, others, MARGIN_X, y, geom.CONTENT_W, theme, geom);
 }
 
-function renderClosing(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme): void {
-  addEyebrow(slide, spec, theme);
+function renderClosing(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme, geom: SlideGeom): void {
+  addEyebrow(slide, spec, theme, geom);
   const heading = findBlock(spec.blocks, "heading");
   const para = findBlock(spec.blocks, "paragraph");
   const sub = findBlock(spec.blocks, "subheading");
@@ -650,7 +664,7 @@ function renderClosing(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec
   slide.addText(heading?.text ?? "", {
     x: MARGIN_X,
     y: headY,
-    w: CONTENT_W,
+    w: geom.CONTENT_W,
     h: 1.2,
     fontFace: theme.headingFont,
     fontSize: 36,
@@ -661,13 +675,13 @@ function renderClosing(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec
     fit: "shrink",
   });
   const ruleY = headY + 1.3;
-  addRule(slide, SLIDE_W / 2 - 1.1, ruleY, 2.2, 0.06, theme.accent);
+  addRule(slide, geom.W / 2 - 1.1, ruleY, 2.2, 0.06, theme.accent);
   const bodyText = para?.text ?? sub?.text;
   if (bodyText) {
     slide.addText(bodyText, {
-      x: SLIDE_W * 0.15,
+      x: geom.W * 0.15,
       y: ruleY + 0.22,
-      w: SLIDE_W * 0.7,
+      w: geom.W * 0.7,
       h: 1.0,
       fontFace: theme.bodyFont,
       fontSize: 16,
@@ -679,16 +693,16 @@ function renderClosing(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec
   }
 }
 
-function renderImageFull(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme): void {
+function renderImageFull(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme, geom: SlideGeom): void {
   const img = findBlock(spec.blocks, "image");
   if (img) {
     safeImage(slide, {
       data: img.dataUri,
       x: 0,
       y: 0,
-      w: SLIDE_W,
-      h: SLIDE_H,
-      sizing: { type: "cover", w: SLIDE_W, h: SLIDE_H },
+      w: geom.W,
+      h: geom.H,
+      sizing: { type: "cover", w: geom.W, h: geom.H },
     });
   }
   const heading = findBlock(spec.blocks, "heading");
@@ -696,8 +710,8 @@ function renderImageFull(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSp
     try {
       slide.addShape("rect", {
         x: 0,
-        y: SLIDE_H - 1.25,
-        w: SLIDE_W,
+        y: geom.H - 1.25,
+        w: geom.W,
         h: 1.25,
         fill: { color: "000000", transparency: 35 },
         line: { type: "none" },
@@ -707,8 +721,8 @@ function renderImageFull(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSp
     }
     slide.addText(heading.text, {
       x: MARGIN_X,
-      y: SLIDE_H - 1.15,
-      w: CONTENT_W,
+      y: geom.H - 1.15,
+      w: geom.CONTENT_W,
       h: 0.95,
       fontFace: theme.headingFont,
       fontSize: 28,
@@ -719,41 +733,53 @@ function renderImageFull(_pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSp
       fit: "shrink",
     });
   }
-  addEyebrow(slide, spec, theme);
+  addEyebrow(slide, spec, theme, geom);
 }
 
-function renderSlide(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme): void {
+function renderSlide(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, theme: ResolvedTheme, geom: SlideGeom): void {
   switch (spec.template) {
     case "title":
-      renderTitle(pptx, slide, spec, theme);
+      renderTitle(pptx, slide, spec, theme, geom);
       break;
     case "section":
-      renderSection(pptx, slide, spec, theme);
+      renderSection(pptx, slide, spec, theme, geom);
       break;
     case "stats":
-      renderStats(pptx, slide, spec, theme);
+      renderStats(pptx, slide, spec, theme, geom);
       break;
     case "closing":
-      renderClosing(pptx, slide, spec, theme);
+      renderClosing(pptx, slide, spec, theme, geom);
       break;
     case "image-full":
-      renderImageFull(pptx, slide, spec, theme);
+      renderImageFull(pptx, slide, spec, theme, geom);
       break;
     case "content":
     default:
-      renderContent(pptx, slide, spec, theme);
+      renderContent(pptx, slide, spec, theme, geom);
       break;
   }
 }
 
-/** 產生一份 .pptx 並回傳 Node Buffer；每個 SlideSpec 對應一頁 PptxGenJS slide，依序輸出。 */
+/**
+ * 產生一份 .pptx 並回傳 Node Buffer；每個 SlideSpec 對應一頁 PptxGenJS slide，依序輸出。
+ * `size`（吋）可選——匯入路徑（補充頁）以**原檔畫布尺寸**產出，合併回原檔才不破版；
+ * 省略＝預設 10×5.625（16:9），native/AI 生成路徑沿用。
+ */
 export async function exportDeckToPptx(
   deck: { title: string; language: string },
   slides: SlideSpec[],
+  size?: { widthInches: number; heightInches: number },
 ): Promise<Buffer> {
+  // 防呆：非正數尺寸退回預設，避免 defineLayout 收到 0/NaN。
+  const w = size && size.widthInches > 0 ? size.widthInches : DEFAULT_SLIDE_W;
+  const h = size && size.heightInches > 0 ? size.heightInches : DEFAULT_SLIDE_H;
+  const geom = makeGeom(w, h);
+
   const pptx = new PptxGenJS();
-  pptx.defineLayout({ name: "MC_16x9", width: SLIDE_W, height: SLIDE_H });
-  pptx.layout = "MC_16x9";
+  // 版面名帶尺寸避免不同尺寸間名稱衝突；pptxgenjs 以此 layout 的寬高決定 sldSz。
+  const layoutName = `MC_${w.toFixed(3)}x${h.toFixed(3)}`;
+  pptx.defineLayout({ name: layoutName, width: w, height: h });
+  pptx.layout = layoutName;
   pptx.title = deck.title;
 
   const logoCache = new Map<string, string | undefined>();
@@ -768,11 +794,11 @@ export async function exportDeckToPptx(
     const slide = pptx.addSlide();
     slide.background = { color: theme.bg };
     try {
-      renderSlide(pptx, slide, spec, theme);
+      renderSlide(pptx, slide, spec, theme, geom);
     } catch {
       /* 該頁渲染失敗，保留空白（帶背景）頁 */
     }
-    addLogo(slide, resolveLogo(theme.logo));
+    addLogo(slide, resolveLogo(theme.logo), geom);
   }
 
   const data = await pptx.write({ outputType: "nodebuffer" });

@@ -5,10 +5,28 @@
  *  (c) tx：tx(fn) 內丟例外 → 寫入 rollback。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { makeTestCore, listTableNames } from "../src/test-helpers.js";
 import type { CrmCore } from "../src/ports.js";
 
 let core: CrmCore;
+
+/**
+ * 列出目前驅動對應的 migration 檔版本號（sqlite→migrations/、pg→migrations-pg/），解析 NNN_ 前綴。
+ * 與 migrate runner 的 MIGRATION_FILE_RE 同義，供「每支 migration 檔恰對一個 applied 版本」斷言。
+ */
+function listMigrationFileVersions(): number[] {
+  const driver = process.env.TEST_DB_DRIVER ?? "sqlite";
+  const dirName = driver === "pg" ? "migrations-pg" : "migrations";
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", dirName);
+  return fs
+    .readdirSync(dir)
+    .map((f) => /^(\d+)_.*\.sql$/.exec(f))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => Number(m[1]));
+}
 
 beforeEach(async () => {
   core = await makeTestCore();
@@ -27,16 +45,34 @@ describe("migrate", () => {
     expect(names).toContain("memberships");
   });
 
-  it("is idempotent (re-running applies nothing)", async () => {
-    await core.migrate(); // second run must not throw / re-apply
-    const applied = await core.db.all<{ version: number }>(
-      "SELECT version FROM schema_migrations ORDER BY version",
-      [],
-    );
-    // idempotency＝二次 migrate 不重複套用：版本集為 1..N 連續且無重複（不隨新增 migration 脆裂）。
-    const versions = applied.map((r) => r.version);
-    expect(versions).toEqual(Array.from({ length: versions.length }, (_, i) => i + 1));
-    expect(new Set(versions).size).toBe(versions.length); // 無重複套用
+  it("is idempotent (re-running applies nothing; gap-tolerant)", async () => {
+    // 平行分支合法產生版本間隙：例如主樹先佔用 016/017，本支「deck 匯入」migration 用 018，
+    // 於本 worktree 的版本序即為 …015,018（缺 016/017）。真正的不變量 ＝ 版本唯一 ＋ 嚴格遞增 ＋
+    // 重跑穩定（第二次 migrate 不重複套用），而非「1..N 連續」——後者在平行分支會脆裂誤報。
+    const readVersions = async (): Promise<number[]> =>
+      (
+        await core.db.all<{ version: number }>(
+          "SELECT version FROM schema_migrations ORDER BY version",
+          [],
+        )
+      ).map((r) => r.version);
+
+    const before = await readVersions(); // beforeEach 已 migrate 一次
+    await core.migrate(); // 第二次 migrate 不得 throw / 重複套用
+    const after = await readVersions();
+
+    // 冪等：二次 migrate 後 applied 版本集完全不變（重跑穩定）。
+    expect(after).toEqual(before);
+    // 無重複套用：每個版本至多一列。
+    expect(new Set(after).size).toBe(after.length);
+    // 嚴格遞增（不要求連續；只要求唯一且有序遞增）。
+    for (let i = 1; i < after.length; i++) {
+      expect(after[i]).toBeGreaterThan(after[i - 1]);
+    }
+    // 每支 migration 檔恰對一個 applied 版本（不漏套、不多套），即使版本序有間隙亦然。
+    const fileVersions = listMigrationFileVersions();
+    expect(after.length).toBe(fileVersions.length);
+    expect(new Set(after)).toEqual(new Set(fileVersions));
   });
 });
 

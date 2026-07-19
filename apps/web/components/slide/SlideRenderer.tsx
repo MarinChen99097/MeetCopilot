@@ -1,7 +1,17 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { SlideBlock, SlideSpec, SlideTheme } from "@meetcopilot/shared";
+import { API_BASE } from "@/lib/api";
 import { SlideGlyph } from "./slide-icons";
 import { SlideChart } from "./slide-chart";
+
+/**
+ * 解析 image block 的 src。匯入原簡報頁的 dataUri 現為**相對簽章 URL**（`/api/decks/:id/assets/:assetId?exp=&sig=`）——
+ * 相對 `/api/...` 路徑須對 API base 解析，否則瀏覽器會誤打到 web 前端 origin（跨 origin 部署時破圖）。
+ * `data:` inline 圖與絕對 http(s) URL 原樣返回。
+ */
+function resolveImageSrc(src: string): string {
+  return src.startsWith("/api/") ? `${API_BASE}${src}` : src;
+}
 
 export interface SlideRendererProps {
   slide: SlideSpec;
@@ -132,8 +142,8 @@ function renderBlock(block: SlideBlock, key: number): ReactNode {
     case "image":
       return (
         <div key={key} className="slide-block slide-block--image">
-          {/* eslint-disable-next-line @next/next/no-img-element -- dataUri 來源，非 Next 靜態資產 */}
-          <img src={block.dataUri} alt={block.alt ?? ""} />
+          {/* eslint-disable-next-line @next/next/no-img-element -- dataUri 或簽章 asset URL，非 Next 靜態資產 */}
+          <img src={resolveImageSrc(block.dataUri)} alt={block.alt ?? ""} />
         </div>
       );
 

@@ -35,6 +35,11 @@ const RECONNECT_MAX_MS = 15000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 // getDeck 無內建 timeout：後端久候不回時避免無限 spinner，超過此上限即視同載入失敗。
 const LOAD_TIMEOUT_MS = 12000;
+/**
+ * 原始頁簽章 URL 續簽間隔（缺陷 4）。原始頁 <img> 的簽章有 TTL（server 預設 8h）；長會議若 WS 整場不重連，
+ * 就不會觸發既有的 reconnect refetch → 逾時後原始頁 403 破圖。故 deck 有原始頁時每 30 分鐘（<< TTL）靜默續簽。
+ */
+const ASSET_URL_REFRESH_MS = 30 * 60_000;
 
 export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   const t = useTranslations("present");
@@ -45,6 +50,7 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   const [link, setLink] = useState<LinkState>("off");
   const [reloadKey, setReloadKey] = useState(0); // 重試：bump 後重跑 deck 載入 effect。
   const [wsNonce, setWsNonce] = useState(0); // 連線重試：bump 後重跑 WS effect（重置重連預算）。
+  const [hasOriginals, setHasOriginals] = useState(false); // deck 有原始頁（簽章 URL）→ 啟用週期性續簽。
 
   // committedIndex：本地已播出的最高頁（送 page_commit 用；單調遞增，只增不減）。
   const committed = useRef(-1);
@@ -71,6 +77,7 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
         window.clearTimeout(timer);
         setSlides(view.slides);
         committed.current = view.deck.committedIndex;
+        setHasOriginals(view.deck.originalCount > 0); // 有原始頁才需週期性續簽
         setFailed(false); // 逾時後才回來的成功也能復原
         setLoaded(true);
       })
@@ -92,6 +99,23 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
     setLoaded(false);
     setReloadKey((k) => k + 1);
   }, []);
+
+  // 續簽 backstop（缺陷 4）：deck 有原始頁時，長會議期間每 30 分鐘（<< TTL）靜默 getDeck 換新簽章 URL，
+  // 避免 WS 整場不重連（不觸發既有 reconnect refetch）時原始頁 <img> 逾時 403 破圖。committedIndex 只增不減、不跳頁。
+  useEffect(() => {
+    if (!deckId || !hasOriginals) return;
+    const id = window.setInterval(() => {
+      getDeck(deckId)
+        .then((view) => {
+          setSlides(view.slides); // 服務端為權威全量（含已批准 append）；重抓＝換新簽章，不改頁序
+          if (view.deck.committedIndex > committed.current) committed.current = view.deck.committedIndex;
+        })
+        .catch(() => {
+          // 續簽暫時性失敗：留給下一輪（既有 WS reconnect refetch 亦為後援）。
+        });
+    }, ASSET_URL_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [deckId, hasOriginals]);
 
   const total = slides.length;
 
