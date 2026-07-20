@@ -27,6 +27,7 @@ import { createOrgRouter } from "./org-routes/index.js";
 import { requestLogger, securityHeaders } from "./ops/http-middleware.js";
 import { TokenBucketRateLimiter, rateLimit } from "./ops/token-bucket.js";
 import { createMeter } from "./ops/meter-impl.js";
+import { meteringBoundary } from "./ops/metering-middleware.js";
 import { createUsageRouter } from "./ops/usage-routes.js";
 
 async function main(): Promise<void> {
@@ -135,6 +136,8 @@ async function main(): Promise<void> {
   // Suspension gate (ADMIN_CONTRACT §2): runs after jwtGuard on the protected product routers below; a
   // suspended org or user → 403. Kept out of health/ready/auth (and /api/usage, per §2's router list).
   const activeGuard = activeAccountRequired(core);
+  // 019 安全網：AI-using 路由器掛此，把 request 包進計費脈絡，未經 wrapper 的 raw AI 呼叫也會被補記（見 metering-middleware）。
+  const meterBoundary = meteringBoundary(meter);
   const limit = rateLimit(rateLimiter);
   app.post("/api/decks/generate", jwtGuard, limit);
   app.post("/api/decks/:id/image-jobs", jwtGuard, limit);
@@ -174,14 +177,14 @@ async function main(): Promise<void> {
   app.use("/api/crm", jwtGuard, activeGuard, createCrmRouter(core));
 
   // Research engine (API_CONTRACT §3) — Bearer + active-account gate at the mount (router re-checks auth).
-  app.use("/api/research", jwtGuard, activeGuard, createResearchRouter(core, config, config.jwtSecret, {}, meter));
+  app.use("/api/research", jwtGuard, meterBoundary, activeGuard, createResearchRouter(core, config, config.jwtSecret, {}, meter));
 
   // Usage rollup (M5 §B) — Bearer auth inside the router; org-scoped cost/usage reporting. (§2 omits usage.)
   app.use("/api/usage", createUsageRouter(core, config.jwtSecret));
 
   // Train / voice simulation (API_CONTRACT §7) — Bearer + active-account gate; ephemeral Live token minted here,
   // but voice audio goes browser-direct to Gemini Live (never through this server). meter → gemini_live billing.
-  app.use("/api/train", jwtGuard, activeGuard, createTrainRouter(core, config, config.jwtSecret, {}, meter));
+  app.use("/api/train", jwtGuard, meterBoundary, activeGuard, createTrainRouter(core, config, config.jwtSecret, {}, meter));
 
   // Org / invite-based membership (API_CONTRACT §D) — Bearer + active-account gate; owner/admin gate per-route.
   app.use("/api/org", jwtGuard, activeGuard, createOrgRouter(core, config.jwtSecret));
@@ -194,7 +197,7 @@ async function main(): Promise<void> {
   // Meetings + realtime copilot (API_CONTRACT §5/§6). The RealtimeHub is the per-process orchestration center
   // (session registry, ASR/analysis/orchestrator wiring, I1/I2/I3 enforcement); shared by the HTTP router and WS.
   const realtimeHub = new RealtimeHub(core, config, createGeminiClient(config.gemini), meter);
-  app.use("/api/meetings", jwtGuard, activeGuard, createMeetingsRouter(realtimeHub, core, config.jwtSecret, config.port));
+  app.use("/api/meetings", jwtGuard, meterBoundary, activeGuard, createMeetingsRouter(realtimeHub, core, config.jwtSecret, config.port));
 
   // Asset streaming (DynamicSlide 匯入原始頁圖，契約 §3): GET /api/decks/:id/assets/:assetId?exp=&sig=
   // **純簽章授權、NO Bearer**（<img> 帶不了 Authorization header）——必須掛在 jwtGuard 之前，否則 401。
@@ -203,7 +206,7 @@ async function main(): Promise<void> {
 
   // Decks / DynamicSlide (API_CONTRACT §4): /decks/*, /image-jobs/:id, /extract-url, /extract-pdf.
   // Bearer auth here; tenant scope from req.auth.orgId. Disjoint paths from the routers above.
-  app.use("/api", jwtGuard, activeGuard, createDecksRouter(core, config, meter));
+  app.use("/api", jwtGuard, meterBoundary, activeGuard, createDecksRouter(core, config, meter));
 
   // 404 for unmatched /api routes (keep {error} contract instead of Express default HTML).
   app.use("/api", (_req, res) => {

@@ -23,6 +23,8 @@ function toMeterResult<T>(metered: Metered<T>, meetingId?: string): MeterResult<
     model: usage.model,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
+    reasoningTokens: usage.reasoningTokens, // 019
+    cachedInputTokens: usage.cachedInputTokens, // 019
     meetingId,
   };
 }

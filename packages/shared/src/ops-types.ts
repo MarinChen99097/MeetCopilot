@@ -30,7 +30,13 @@ export interface UsageEvent {
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
+  // 019：ezpage 對齊——token 五桶（input/output/reasoning/cached）＋每列稅率快照。
+  reasoningTokens?: number; // thinking/thoughts tokens（算 output 價）
+  cachedInputTokens?: number; // cached input tokens（較便宜計價）
+  retryCount?: number; // 該邏輯呼叫的重試次數（折進單列）
+  /** est_cost_usd 為**稅前**估算值；含稅＝estCostUsd × costTaxMultiplier（019；預設 1.25）。 */
   estCostUsd: number;
+  costTaxMultiplier?: number; // 每列稅率快照（019；既有列＝1.25）
   meetingId?: string;
   idempotencyKey: string;
   createdAt: number; // epoch ms
@@ -45,7 +51,14 @@ export interface NewUsageEvent {
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
+  // 019：ezpage 對齊。缺省＝既有行為（NULL / retry 0 / 稅率預設）。
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+  retryCount?: number;
+  /** 稅前估算成本（USD）。 */
   estCostUsd: number;
+  /** 每列稅率快照（019；省略 → repo 落預設 1.25）。含稅＝estCostUsd × 此值。 */
+  costTaxMultiplier?: number;
   meetingId?: string;
   userId?: string; // 012_admin：可選使用者歸屬（Meter.meter 擴充後由 request-scoped 寫入點帶入）
   idempotencyKey: string;

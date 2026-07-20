@@ -228,6 +228,7 @@ describe("speakerLabel 選填相容 + 推斷（§4.2）", () => {
         gemini: makeGemini({ json: { speaker: "client", speakerLabel: "客戶-王大明" } }),
         inferenceModel: "m",
         getRuntime: () => runtime,
+        supplementAutoLimitPerMeeting: 0,
       });
       const r1 = await labeled.inferSpeaker("sess", "我們的預算有限");
       expect(r1.speaker).toBe("client");
@@ -239,6 +240,7 @@ describe("speakerLabel 選填相容 + 推斷（§4.2）", () => {
         gemini: makeGemini({ json: { speaker: "unknown", speakerLabel: "客戶-A" } }),
         inferenceModel: "m",
         getRuntime: () => runtime,
+        supplementAutoLimitPerMeeting: 0,
       });
       const r2 = await unknown.inferSpeaker("sess", "嗯……");
       expect(r2.speaker).toBe("unknown");

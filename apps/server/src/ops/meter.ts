@@ -17,7 +17,13 @@ export interface MeterResult<T> {
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
-  /** 若 fn 已知精確成本可帶入；否則實作依 kind/model/token 從定價常數估算。 */
+  /** 019（ezpage 對齊）：reasoning/thinking tokens（差別計價；算 output 價）。 */
+  reasoningTokens?: number;
+  /** 019：cached input tokens（差別計價；較便宜）。 */
+  cachedInputTokens?: number;
+  /** 019：該邏輯呼叫的重試次數（折進單列）。 */
+  retryCount?: number;
+  /** 若 fn 已知精確成本可帶入；否則實作依 kind/model/token 從定價常數估算。此為**稅前**值。 */
   estCostUsd?: number;
   /** 歸屬會議（會中呼叫帶入；非會議情境省略）。 */
   meetingId?: string;

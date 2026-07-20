@@ -23,8 +23,9 @@ export class SqliteUsageRepository implements UsageRepository {
   async record(orgId: string, event: NewUsageEvent): Promise<void> {
     await this.db.run(
       `INSERT INTO usage_events
-         (id, org_id, kind, model, input_tokens, output_tokens, est_cost_usd, meeting_id, user_id, idempotency_key, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, org_id, kind, model, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens,
+          retry_count, est_cost_usd, cost_tax_multiplier, meeting_id, user_id, idempotency_key, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (org_id, idempotency_key) DO NOTHING`,
       [
         uuidv7(),
@@ -33,7 +34,11 @@ export class SqliteUsageRepository implements UsageRepository {
         event.model ?? null,
         event.inputTokens ?? null,
         event.outputTokens ?? null,
-        event.estCostUsd,
+        event.reasoningTokens ?? null, // 019
+        event.cachedInputTokens ?? null, // 019
+        event.retryCount ?? 0, // 019（NOT NULL → 落 0，勿傳 NULL）
+        event.estCostUsd, // 稅前
+        event.costTaxMultiplier ?? 1.25, // 019 每列稅率快照（NOT NULL → 落預設）
         event.meetingId ?? null,
         event.userId ?? null, // 012_admin：發起使用者歸屬（可選 → NULL）
         event.idempotencyKey,

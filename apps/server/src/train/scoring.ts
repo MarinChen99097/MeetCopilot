@@ -22,7 +22,11 @@ export interface ScoreContext {
 }
 
 export interface TrainScorer {
-  score(turns: TrainTurn[], ctx: ScoreContext): Promise<ScoreResult>;
+  /**
+   * @param client 可選 per-call GeminiClient override——finish 時傳入現包的 metered client 以記帳（洞 D）；
+   *   省略則用建構期的 client（行為不變）。
+   */
+  score(turns: TrainTurn[], ctx: ScoreContext, client?: GeminiClient): Promise<ScoreResult>;
 }
 
 const S = Type;
@@ -88,15 +92,16 @@ const VALID_KINDS: TrainHighlightKind[] = ["good", "improve"];
 
 export function createTrainScorer(gemini: GeminiClient, model?: string): TrainScorer {
   return {
-    async score(turns: TrainTurn[], ctx: ScoreContext): Promise<ScoreResult> {
-      if (!gemini.isConfigured()) throw new Error("GEMINI_API_KEY not configured");
+    async score(turns: TrainTurn[], ctx: ScoreContext, client?: GeminiClient): Promise<ScoreResult> {
+      const g = client ?? gemini; // 洞 D：finish 傳 metered client 記帳；省略則用建構期 client。
+      if (!g.isConfigured()) throw new Error("GEMINI_API_KEY not configured");
 
       const prompt =
         `Persona played by CUSTOMER: ${ctx.personaName}, ${ctx.personaTitle} at ${ctx.companyName}.\n\n` +
         `TRANSCRIPT:\n${renderTranscript(turns)}\n\n` +
         "Evaluate the REP per the instructions and return the JSON.";
 
-      const raw = await gemini.generateJson<{
+      const raw = await g.generateJson<{
         scores?: Partial<Record<keyof TrainScores, unknown>>;
         highlights?: { quote?: unknown; comment?: unknown; kind?: unknown }[];
         summary?: unknown;

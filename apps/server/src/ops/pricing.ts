@@ -16,6 +16,10 @@ export interface ModelPrice {
   inputPerM?: number;
   /** USD per 1,000,000 output tokens。 */
   outputPerM?: number;
+  /** 019（ezpage 對齊）：reasoning/thinking tokens 單價（USD/1M；通常≈output，缺則退 output）。 */
+  reasoningPerM?: number;
+  /** 019：cached input tokens 單價（USD/1M；較 input 便宜，缺則退 input＝不打折）。 */
+  cachedInputPerM?: number;
   /** USD per generated image（生圖模型）。 */
   perImage?: number;
 }
@@ -32,10 +36,10 @@ import type { UsageKind } from "@meetcopilot/shared";
  *  - gpt-image-2 medium ≈ $0.04 / 張
  */
 export const PRICING: Record<string, ModelPrice> = {
-  "gemini-3.1-flash-lite": { inputPerM: 0.1, outputPerM: 0.4 },
-  "gemini-3.5-flash": { inputPerM: 0.3, outputPerM: 2.5 },
+  "gemini-3.1-flash-lite": { inputPerM: 0.1, outputPerM: 0.4, reasoningPerM: 0.4, cachedInputPerM: 0.025 },
+  "gemini-3.5-flash": { inputPerM: 0.3, outputPerM: 2.5, reasoningPerM: 2.5, cachedInputPerM: 0.075 },
   "gemini-embedding-001": { inputPerM: 0.15 },
-  "gemini-3.1-flash-live-preview": { inputPerM: 0.5, outputPerM: 2.0 },
+  "gemini-3.1-flash-live-preview": { inputPerM: 0.5, outputPerM: 2.0, reasoningPerM: 2.0, cachedInputPerM: 0.125 },
   "gpt-image-2": { perImage: 0.04 },
 };
 
@@ -46,13 +50,26 @@ export const PRICING: Record<string, ModelPrice> = {
  * 待上線以 provider 官方分鐘/chunk 單價校正（可用 PRICING__ 環境覆寫或未來擴充計量單位）。
  */
 const FALLBACK_BY_KIND: Record<UsageKind, ModelPrice> = {
-  gemini_text: { inputPerM: 0.1, outputPerM: 0.4 },
-  gemini_extract: { inputPerM: 0.3, outputPerM: 2.5 },
-  gemini_live: { inputPerM: 0.5, outputPerM: 2.0 },
+  gemini_text: { inputPerM: 0.1, outputPerM: 0.4, reasoningPerM: 0.4, cachedInputPerM: 0.025 },
+  gemini_extract: { inputPerM: 0.3, outputPerM: 2.5, reasoningPerM: 2.5, cachedInputPerM: 0.075 },
+  gemini_live: { inputPerM: 0.5, outputPerM: 2.0, reasoningPerM: 2.0, cachedInputPerM: 0.125 },
   openai_image: { perImage: 0.04 },
   embedding: { inputPerM: 0.15 },
-  asr: { inputPerM: 0.3, outputPerM: 2.5 },
+  asr: { inputPerM: 0.3, outputPerM: 2.5, reasoningPerM: 2.5, cachedInputPerM: 0.075 },
 };
+
+/**
+ * 019（ezpage 對齊）：稅率倍率（含稅＝稅前 est_cost_usd × 此值）。使用者拍板：×1.25 套**全部** AI kind。
+ * env `COST_TAX_MULTIPLIER` 可覆寫（比照 ezpage settings.json 的 cost_tax_multiplier=1.25 可熱調）。
+ * 每列記帳時以 `taxMultiplierFor(kind)` 取值並快照進 usage_events.cost_tax_multiplier（改此值不回溯既有列）。
+ */
+export const DEFAULT_TAX_MULTIPLIER = ((): number => {
+  const n = Number(process.env.COST_TAX_MULTIPLIER);
+  return Number.isFinite(n) && n > 0 ? n : 1.25;
+})();
+export function taxMultiplierFor(_kind: UsageKind): number {
+  return DEFAULT_TAX_MULTIPLIER; // 目前全 kind 一致；若日後改「僅生圖加成」在此依 kind 分流。
+}
 
 /** 已被環境變數覆寫的 model id 集合（source 標記用；loadPricingOverrides 填入）。 */
 const overriddenModels = new Set<string>();
@@ -81,11 +98,22 @@ export function loadPricingOverrides(env: NodeJS.ProcessEnv = process.env): stri
     const key = envKeyOf(model);
     const input = num(env[`PRICING__${key}__INPUT_PER_M`]);
     const output = num(env[`PRICING__${key}__OUTPUT_PER_M`]);
+    const reasoning = num(env[`PRICING__${key}__REASONING_PER_M`]);
+    const cachedIn = num(env[`PRICING__${key}__CACHED_IN_PER_M`]);
     const perImage = num(env[`PRICING__${key}__PER_IMAGE`]);
-    if (input === undefined && output === undefined && perImage === undefined) continue;
+    if (
+      input === undefined &&
+      output === undefined &&
+      reasoning === undefined &&
+      cachedIn === undefined &&
+      perImage === undefined
+    )
+      continue;
     const price = PRICING[model]!;
     if (input !== undefined) price.inputPerM = input;
     if (output !== undefined) price.outputPerM = output;
+    if (reasoning !== undefined) price.reasoningPerM = reasoning;
+    if (cachedIn !== undefined) price.cachedInputPerM = cachedIn;
     if (perImage !== undefined) price.perImage = perImage;
     overriddenModels.add(model);
     changed.push(model);
@@ -99,6 +127,8 @@ export interface PricingRow {
   model?: string;
   inputPerM?: number;
   outputPerM?: number;
+  reasoningPerM?: number;
+  cachedInputPerM?: number;
   perImage?: number;
   source: "default" | "env";
 }
@@ -121,6 +151,8 @@ export function pricingRows(pairs: { kind: UsageKind; model?: string }[]): Prici
       model,
       inputPerM: price.inputPerM,
       outputPerM: price.outputPerM,
+      reasoningPerM: price.reasoningPerM,
+      cachedInputPerM: price.cachedInputPerM,
       perImage: price.perImage,
       source,
     };
@@ -133,7 +165,9 @@ function priceFor(kind: UsageKind, model: string | undefined): ModelPrice {
 }
 
 /**
- * 估算一次呼叫的成本（USD）。生圖類走 perImage（token 忽略）；token 類走 input/output × 用量。
+ * 估算一次呼叫的**稅前**成本（USD）。生圖類走 perImage（token 忽略）；token 類走差別計價：
+ *  - cached input 較便宜（019）：inputTokens 內含 cached，故 uncached=(input-cached) 走 input 價、cached 走 cached 價（避免雙算）。
+ *  - reasoning/thinking（019）為額外輸出（candidatesTokenCount 不含 thoughts）→ 走 reasoning 價（缺則退 output）。
  * 缺 token（provider 未回報）→ 該部分算 0（不臆造）；估不出（無定價）→ 0。永不為負／NaN。
  */
 export function estimateCostUsd(
@@ -141,14 +175,20 @@ export function estimateCostUsd(
   model: string | undefined,
   inputTokens: number | undefined,
   outputTokens: number | undefined,
+  reasoningTokens?: number,
+  cachedInputTokens?: number,
 ): number {
   const price = priceFor(kind, model);
   if (kind === "openai_image") {
     return round6(price.perImage ?? 0);
   }
-  const inCost = ((inputTokens ?? 0) / 1_000_000) * (price.inputPerM ?? 0);
+  const cached = Math.max(0, cachedInputTokens ?? 0);
+  const uncachedInput = Math.max(0, (inputTokens ?? 0) - cached);
+  const inCost = (uncachedInput / 1_000_000) * (price.inputPerM ?? 0);
+  const cachedCost = (cached / 1_000_000) * (price.cachedInputPerM ?? price.inputPerM ?? 0);
   const outCost = ((outputTokens ?? 0) / 1_000_000) * (price.outputPerM ?? 0);
-  const total = inCost + outCost;
+  const reasoningCost = (Math.max(0, reasoningTokens ?? 0) / 1_000_000) * (price.reasoningPerM ?? price.outputPerM ?? 0);
+  const total = inCost + cachedCost + outCost + reasoningCost;
   return Number.isFinite(total) && total > 0 ? round6(total) : 0;
 }
 

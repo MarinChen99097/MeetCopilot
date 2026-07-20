@@ -8,6 +8,7 @@
  */
 import { GoogleGenAI } from "@google/genai";
 import type { GeminiConfig } from "./config.js";
+import { safetyNetRecord } from "./ops/metering-context.js";
 
 export interface GenerateJsonOptions {
   /** Model id; default = cfg.textModel. */
@@ -68,6 +69,10 @@ export interface TokenUsage {
   model: string;
   inputTokens?: number;
   outputTokens?: number;
+  /** 019（ezpage 對齊）：thinking/thoughts tokens（算 output 價）。 */
+  reasoningTokens?: number;
+  /** 019：cached input tokens（較便宜計價）。 */
+  cachedInputTokens?: number;
 }
 
 /** 業務結果 + 計費用量（*Metered 變體的回傳）。 */
@@ -101,6 +106,10 @@ interface UsageMetadataLoose {
   promptTokenCount?: number;
   candidatesTokenCount?: number;
   totalTokenCount?: number;
+  /** 019（ezpage 對齊）：thinking/thoughts tokens。 */
+  thoughtsTokenCount?: number;
+  /** 019：cached input tokens（部分回應以 promptTokenCount 內含快取，另回此欄細分）。 */
+  cachedContentTokenCount?: number;
 }
 
 /** 從 generateContent/embedContent 回應寬鬆讀出 token 用量（缺欄→undefined，不臆造）。 */
@@ -109,6 +118,9 @@ function readUsage(model: string, meta: UsageMetadataLoose | undefined): TokenUs
     model,
     inputTokens: typeof meta?.promptTokenCount === "number" ? meta.promptTokenCount : undefined,
     outputTokens: typeof meta?.candidatesTokenCount === "number" ? meta.candidatesTokenCount : undefined,
+    reasoningTokens: typeof meta?.thoughtsTokenCount === "number" ? meta.thoughtsTokenCount : undefined,
+    cachedInputTokens:
+      typeof meta?.cachedContentTokenCount === "number" ? meta.cachedContentTokenCount : undefined,
   };
 }
 
@@ -384,14 +396,37 @@ export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
 
   return {
     isConfigured: () => Boolean(cfg.apiKey),
-    generateJsonMetered,
+    generateJsonMetered, // Metered 變體：不掛安全網（metered wrapper 走此路，避免雙記）
+    // 公開 generateJson/generateGrounded/embed 掛安全網：有計費脈絡且未抑制時補記一筆（019；raw 呼叫不漏記）。
     async generateJson<T>(opts: GenerateJsonOptions): Promise<T> {
-      return (await generateJsonMetered<T>(opts)).value;
+      const m = await generateJsonMetered<T>(opts);
+      safetyNetRecord({
+        model: m.usage.model,
+        inputTokens: m.usage.inputTokens,
+        outputTokens: m.usage.outputTokens,
+        reasoningTokens: m.usage.reasoningTokens,
+        cachedInputTokens: m.usage.cachedInputTokens,
+      });
+      return m.value;
     },
-    generateGrounded,
-    embedMetered,
+    async generateGrounded(opts: GenerateGroundedOptions): Promise<GroundedResult> {
+      const r = await generateGrounded(opts);
+      // grounded 無 usageMetadata → 字元/4 粗估（與手動 meter 的估法一致）。
+      safetyNetRecord({
+        model: opts.model ?? cfg.textModel,
+        inputTokens: Math.max(1, Math.ceil((opts.prompt?.length ?? 0) / 4)),
+        outputTokens: Math.max(0, Math.ceil((r.answer?.length ?? 0) / 4)),
+      });
+      return r;
+    },
+    embedMetered, // Metered 變體：不掛安全網
     async embed(text: string): Promise<number[]> {
-      return (await embedMetered(text)).value;
+      const m = await embedMetered(text);
+      safetyNetRecord(
+        { model: m.usage.model, inputTokens: m.usage.inputTokens, outputTokens: m.usage.outputTokens },
+        "embedding",
+      );
+      return m.value;
     },
   };
 }

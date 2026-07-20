@@ -13,7 +13,8 @@
 import type { UsageRepository } from "@meetcopilot/crm";
 import type { UsageKind } from "@meetcopilot/shared";
 import type { Meter, MeterResult } from "./meter.js";
-import { estimateCostUsd } from "./pricing.js";
+import { estimateCostUsd, taxMultiplierFor } from "./pricing.js";
+import { withSuppressedMetering } from "./metering-context.js";
 
 export function createMeter(usage: UsageRepository): Meter {
   return {
@@ -24,16 +25,23 @@ export function createMeter(usage: UsageRepository): Meter {
       idemKey: string,
       userId?: string,
     ): Promise<T> {
-      const out = await fn(); // 失敗即向上拋（不記帳）
+      // explicit metering：fn 執行期間抑制安全網（避免同一次呼叫被 raw-client 安全網重複補記）。失敗即向上拋（不記帳）。
+      const out = await withSuppressedMetering(fn);
+      // 稅前估算（019 差別計價：reasoning≈output、cached 較便宜）；fn 若帶精確成本（生圖 per-image）優先。
       const estCostUsd =
-        out.estCostUsd ?? estimateCostUsd(kind, out.model, out.inputTokens, out.outputTokens);
+        out.estCostUsd ??
+        estimateCostUsd(kind, out.model, out.inputTokens, out.outputTokens, out.reasoningTokens, out.cachedInputTokens);
       try {
         await usage.record(orgId, {
           kind,
           model: out.model,
           inputTokens: out.inputTokens,
           outputTokens: out.outputTokens,
-          estCostUsd,
+          reasoningTokens: out.reasoningTokens,
+          cachedInputTokens: out.cachedInputTokens,
+          retryCount: out.retryCount,
+          estCostUsd, // 稅前
+          costTaxMultiplier: taxMultiplierFor(kind), // 每列稅率快照（含稅＝estCostUsd × 此值）
           meetingId: out.meetingId,
           userId, // ADMIN_CONTRACT §2：發起使用者歸屬（可選；省略 → NULL）
           idempotencyKey: idemKey,

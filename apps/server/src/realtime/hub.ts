@@ -29,6 +29,7 @@ import { CrmCopilotOrchestrator } from "./orchestrator.js";
 import { LivePatchService } from "./patch-service.js";
 import { MeetingStore } from "./meeting-store.js";
 import { routeTranscriptSegment } from "./transcript-privacy.js";
+import { runWithMetering } from "../ops/metering-context.js";
 import type { BroadcastSink, BroadcastTarget, ConnMeta } from "./types.js";
 
 /** Binding captured at meeting creation, consumed when the runtime is first materialized. */
@@ -71,6 +72,7 @@ export class RealtimeHub implements BroadcastSink {
       inferenceModel: config.gemini.extractModel,
       getRuntime: (id) => this.sessions.get(id),
       meter,
+      supplementAutoLimitPerMeeting: config.supplementAutoLimitPerMeeting,
     });
     this.patch = new LivePatchService({
       getRuntime: (id) => this.sessions.get(id),
@@ -85,6 +87,9 @@ export class RealtimeHub implements BroadcastSink {
     this.orchestrator.onResearchStatus((sid, jobId, status, remainingQuota) =>
       this.broadcast(sid, { type: "research_status", jobId, status, remainingQuota }, "hud"),
     );
+    // DynamicSlide 補充頁橋接：對話→補充頁生成後進 patch.suggest（HUD 批准佇列，I3：只到 hud）。
+    // I2 不變——suggest 只入列，報告者手動 ACCEPT 才 append（patch.act）。
+    this.orchestrator.onSuggestSlide((sid, slide, reason) => this.patch.suggest(sid, slide, reason));
   }
 
   /** Called by POST /api/meetings (same process) to record the live binding for lazy runtime creation. */
@@ -270,7 +275,8 @@ export class RealtimeHub implements BroadcastSink {
     runtime.deckLength = Math.max(deckLength, runtime.deckLength);
 
     // ASR final → speaker inference → transcript (hud/I3) + persist + analysis feed.
-    asr.onFinal((seg) => void this.onAsrFinal(runtime, seg));
+    // 019 安全網：包進計費脈絡，未經 wrapper 的 raw 會中 AI 呼叫也會被補記（歸屬 orgId＋meetingId＋presenter）。
+    asr.onFinal((seg) => this.runMeteredForMeeting(runtime, () => void this.onAsrFinal(runtime, seg)));
     // Genuine ASR outage (transcribe threw/exhausted — NOT blank audio) → notify the presenter's HUD once
     // per outage so they know live transcription/analysis is degraded (contract C3; dedup lives in the
     // provider, cleared on the next successful transcribe). I3: hud only, and the payload carries no
@@ -283,10 +289,33 @@ export class RealtimeHub implements BroadcastSink {
       ),
     );
     // Analysis threshold met → signals (hud/I3) + persist + orchestrator retrieval.
-    engine.onSignals((items) => this.onSignals(runtime, items));
+    engine.onSignals((items) => this.runMeteredForMeeting(runtime, () => this.onSignals(runtime, items)));
 
     this.sessions.set(meta.meetingId, runtime);
     return runtime;
+  }
+
+  /**
+   * 019 安全網：把會中 AI 處理（speaker 推斷 / 分析→orchestrator 檢索·研究·補充頁）包進計費脈絡，
+   * 未經 metered wrapper 的 raw AI 呼叫也會被 gemini 安全網補記（歸屬 orgId＋meetingId＋presenter）。
+   * 無 meter → 直接跑（行為不變）。fn 同步啟動的 fire-and-forget async 會繼承此脈絡。
+   */
+  private runMeteredForMeeting(runtime: LiveSessionRuntime, fn: () => void): void {
+    if (!this.meter) {
+      fn();
+      return;
+    }
+    runWithMetering(
+      {
+        orgId: runtime.orgId,
+        userId: runtime.presenterUserId,
+        meetingId: runtime.meetingId,
+        kind: "gemini_text",
+        meter: this.meter,
+        idemPrefix: `mtg:${runtime.meetingId}:${randomUUID()}`,
+      },
+      fn,
+    );
   }
 
   private async onAsrFinal(runtime: LiveSessionRuntime, seg: AsrSegment): Promise<void> {

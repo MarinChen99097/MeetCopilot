@@ -17,9 +17,12 @@ import type {
   TrainTurn,
   TrainDifficulty,
 } from "@meetcopilot/shared";
+import { randomUUID } from "node:crypto";
 import type { LiveTokenMinter } from "./live-token.js";
 import type { TrainScorer } from "./scoring.js";
 import type { Meter } from "../ops/meter.js";
+import type { GeminiClient } from "../gemini.js";
+import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { buildPersonaPrompt, personaReadiness, trustedFieldSet, passesGate } from "./persona.js";
 
 export interface TrainService {
@@ -31,7 +34,7 @@ export interface TrainService {
   /** Upload the two-way transcript (during / at end of practice). */
   saveTranscript(orgId: string, sessionId: string, turns: TrainTurn[]): Promise<void>;
   /** Finish → trigger LLM scoring over the two-way transcript → { reportId }. */
-  finish(orgId: string, sessionId: string): Promise<{ reportId: string }>;
+  finish(orgId: string, sessionId: string, userId?: string): Promise<{ reportId: string }>;
   /** Fetch a scored report. */
   report(orgId: string, reportId: string): Promise<TrainReport>;
 }
@@ -51,6 +54,8 @@ export interface TrainServiceDeps {
   core: CrmCore;
   minter: LiveTokenMinter;
   scorer: TrainScorer;
+  /** Raw Gemini client——finish 評分時現包 metered client 記帳（洞 D，gemini_text）。 */
+  gemini: GeminiClient;
   liveModel: string;
   /**
    * 成本記帳（ADMIN_CONTRACT §3.2）。有 meter 則於 startSession 鑄 Live token 成功時記一筆 `gemini_live`
@@ -66,7 +71,7 @@ const DEFAULT_MAX_COMPANIES = 500;
 const COMPANY_PAGE_SIZE = 100;
 
 export function createTrainService(deps: TrainServiceDeps): TrainService {
-  const { core, minter, scorer, liveModel, meter } = deps;
+  const { core, minter, scorer, gemini, liveModel, meter } = deps;
   const maxCompanies = deps.maxCompaniesScan ?? DEFAULT_MAX_COMPANIES;
 
   /** 有界枚舉本 org 的公司（無 companyId 時用）——經 repo 層，不繞過。 */
@@ -174,7 +179,7 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
       await core.training.saveTranscript(orgId, sessionId, turns);
     },
 
-    async finish(orgId: string, sessionId: string): Promise<{ reportId: string }> {
+    async finish(orgId: string, sessionId: string, userId?: string): Promise<{ reportId: string }> {
       const session = await core.training.findSession(orgId, sessionId);
       if (!session) throw new TrainError("not_found", "training session not found");
 
@@ -188,13 +193,27 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
       const contact = await core.contacts.findById(orgId, session.contactId);
       const company = contact ? await core.companies.findById(orgId, contact.companyId) : null;
 
+      // 記帳（洞 D）：評分是一次 gemini_text 呼叫。有 meter 就現包 metered client 傳給 scorer（歸屬 orgId＋userId）。
+      const scoreClient = meter
+        ? meteredGeminiClient(gemini, meter, {
+            orgId,
+            kind: "gemini_text",
+            userId,
+            idemPrefix: `train-score:${sessionId}:${randomUUID()}`,
+          })
+        : undefined;
+
       let result;
       try {
-        result = await scorer.score(turns, {
-          personaName: contact?.fullName ?? "the customer",
-          personaTitle: contact?.title ?? "",
-          companyName: company?.name ?? "their company",
-        });
+        result = await scorer.score(
+          turns,
+          {
+            personaName: contact?.fullName ?? "the customer",
+            personaTitle: contact?.title ?? "",
+            companyName: company?.name ?? "their company",
+          },
+          scoreClient,
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : "scoring failed";
         if (/not configured/i.test(msg)) throw new TrainError("not_configured", msg);

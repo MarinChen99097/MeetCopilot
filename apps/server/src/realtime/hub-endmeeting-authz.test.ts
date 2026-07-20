@@ -22,6 +22,7 @@ function testConfig(): AppConfig {
     jwtSecret: "test-secret-value-not-a-placeholder-1234567890",
     dbPath: ":memory:",
     researchAutoLimitPerMeeting: 5,
+    supplementAutoLimitPerMeeting: 8,
     googleClientId: "",
     platformAdminEmails: [],
     adminOrigin: "",

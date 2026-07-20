@@ -89,7 +89,7 @@ export const BLOCK_SCHEMA = {
   required: ["type"],
 };
 
-const SLIDE_SCHEMA = {
+export const SLIDE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     template: { type: Type.STRING, enum: [...AI_GENERATION_TEMPLATES] },
@@ -431,6 +431,49 @@ export async function generateDeckSlides(
     }
   }
   return slides;
+}
+
+/**
+ * 會中即時「補充頁」生成（DynamicSlide 對話→補充頁橋接；orchestrator 觸發、patch.suggest 送批准）。
+ * 針對當下對話焦點/訊號生成「一張」精煉補充投影片——回應對方疑慮或補上其最關心的資訊。
+ * 與 deck 生成共用同一套 prompt 片段＋sanitizeSlide（最後防線）；禁止 image block（sanitize 濾除）。
+ * 回傳 sanitize 後非空的 SlideSpec；空頁或任何失敗（含未設定 Gemini）→ null（呼叫端不送建議）。
+ * bounds：單頁、maxOutputTokens 小、attempts 2；theme 繼承 anchor（缺則渲染器退 app 預設）。
+ */
+export async function generateSupplementSlide(
+  gemini: GeminiClient,
+  model: string,
+  language: DeckLanguage,
+  input: { transcriptContext: string; signalSummary: string; companyName?: string; anchorSlide?: SlideSpec },
+): Promise<SlideSpec | null> {
+  if (!gemini.isConfigured()) return null;
+  const parts: string[] = [];
+  if (input.companyName?.trim()) parts.push(`對方公司：${input.companyName.trim()}`);
+  if (input.signalSummary.trim()) parts.push(`當下對話訊號（要回應的焦點）：${input.signalSummary.trim()}`);
+  parts.push(`近期對話逐字（脈絡，勿逐字照抄、只擷取要點）：\n${input.transcriptContext.trim() || "（暫無）"}`);
+  const prompt =
+    `這是一場進行中的銷售會議。請針對「當下對話焦點」生成『一張』補充投影片，` +
+    `補上對方最關心的資訊、數據或回應其疑慮/異議，幫報告者臨場加分。\n${parts.join("\n")}\n` +
+    `只回一張 slide 的 JSON（符合 schema）；標題精煉、內文精簡，寧可只聚焦一個重點。`;
+  try {
+    const raw = await gemini.generateJson<unknown>({
+      model,
+      system:
+        `你是會議中的即時簡報補充頁生成器。只產生「一張」補充投影片。` +
+        `template 欄位只能是以下 enum 值之一：${AI_GENERATION_TEMPLATES.join(", ")}。` +
+        `${BLOCK_SHAPE_PROMPT_ZH}${TEMPLATE_INTENT_ZH}${DESIGN_PRINCIPLES_ZH}` +
+        `視覺主題不由你決定（系統會沿用鄰頁）。全部輸出語言：${language}。`,
+      prompt,
+      schema: SLIDE_SCHEMA,
+      attempts: 2,
+      maxOutputTokens: 2048,
+    });
+    const slide = sanitizeSlide(raw, input.anchorSlide?.theme);
+    return slide.blocks.length > 0 ? slide : null;
+  } catch (err) {
+    console.warn(`[generation] supplement slide gen failed: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 /** 把 anchor 頁壓成一段「風格連續性參考」——版面類型＋內容輪廓。 */

@@ -4,7 +4,37 @@
  * (a unique model key that no other test touches).
  */
 import { describe, it, expect } from "vitest";
-import { estimateCostUsd, loadPricingOverrides, pricingRows, PRICING_DISCLAIMER } from "./pricing.js";
+import {
+  estimateCostUsd,
+  loadPricingOverrides,
+  pricingRows,
+  PRICING_DISCLAIMER,
+  DEFAULT_TAX_MULTIPLIER,
+  taxMultiplierFor,
+} from "./pricing.js";
+
+describe("差別計價 reasoning/cached ＋稅率（019，ezpage 對齊）", () => {
+  // gemini-3.5-flash：0.3 in / 2.5 out / reasoning 2.5 / cached 0.075（per 1M）。此 model 未被 override 測試汙染。
+  it("reasoning tokens 以 output 級費率額外計入", () => {
+    const base = estimateCostUsd("gemini_extract", "gemini-3.5-flash", 1_000_000, 1_000_000);
+    const withReasoning = estimateCostUsd("gemini_extract", "gemini-3.5-flash", 1_000_000, 1_000_000, 1_000_000);
+    expect(base).toBeCloseTo(0.3 + 2.5, 6);
+    expect(withReasoning).toBeCloseTo(0.3 + 2.5 + 2.5, 6); // +reasoning 1M × 2.5
+  });
+
+  it("cached input 較便宜且不與 input 雙算（input 內含 cached）", () => {
+    // input=1M 全為 cached → uncached=0（0 × 0.3）＋ cached 1M × 0.075 = 0.075（遠低於全走 input 的 0.3）。
+    const c = estimateCostUsd("gemini_extract", "gemini-3.5-flash", 1_000_000, 0, 0, 1_000_000);
+    expect(c).toBeCloseTo(0.075, 6);
+  });
+
+  it("稅率預設 1.25 且套全部 kind（使用者拍板）", () => {
+    expect(DEFAULT_TAX_MULTIPLIER).toBeCloseTo(1.25, 6);
+    expect(taxMultiplierFor("gemini_text")).toBeCloseTo(1.25, 6);
+    expect(taxMultiplierFor("openai_image")).toBeCloseTo(1.25, 6);
+    expect(taxMultiplierFor("asr")).toBeCloseTo(1.25, 6);
+  });
+});
 
 describe("estimateCostUsd", () => {
   it("token cost = in/out × per-M; missing tokens → 0; never NaN/negative", () => {

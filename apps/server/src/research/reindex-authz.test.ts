@@ -29,6 +29,7 @@ function testConfig(): AppConfig {
     jwtSecret: SECRET,
     dbPath: ":memory:",
     researchAutoLimitPerMeeting: 5,
+    supplementAutoLimitPerMeeting: 8,
     googleClientId: "",
     platformAdminEmails: [],
     adminOrigin: "",

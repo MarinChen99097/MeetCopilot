@@ -64,6 +64,7 @@ export function createTrainRouter(
       core,
       minter: createLiveTokenMinter(config.gemini.apiKey),
       scorer: createTrainScorer(gemini, config.gemini.extractModel),
+      gemini,
       liveModel: config.gemini.liveModel,
       meter,
     });
@@ -128,7 +129,7 @@ export function createTrainRouter(
     const orgId = req.auth!.orgId;
     const sessionId = req.params.id ?? "";
     try {
-      res.json(await service.finish(orgId, sessionId));
+      res.json(await service.finish(orgId, sessionId, req.auth!.userId));
     } catch (err) {
       sendTrainError(res, err);
     }

@@ -45,6 +45,12 @@ export interface AppConfig {
   dbPath: string;
   researchAutoLimitPerMeeting: number;
   /**
+   * DynamicSlide 會中補充頁：每場自動「建議一頁」的上限（I2 仍需報告者手動批准才進 deck）。
+   * bounds the live conversation→supplement-slide bridge so a long meeting can't spam suggestions/spend.
+   * env SUPPLEMENT_AUTO_LIMIT_PER_MEETING（預設 8）；0 = 關閉自動補充頁生成。
+   */
+  supplementAutoLimitPerMeeting: number;
+  /**
    * YouTube Data API v3 key (research social layer, WP1). Optional: empty/undefined ⇒ the YouTube social
    * fetcher is skipped (one job-log warning, NOT a job failure — see SOCIAL_CRAWL_FINDINGS §1). Only ever
    * read here into env; never logged, never persisted. When set, the YouTube platform fetcher runs during deep research.
@@ -165,6 +171,7 @@ export function loadConfig(): AppConfig {
     jwtSecret,
     dbPath: resolvePath(process.env.DB_PATH ?? "./data/meetcopilot.db"),
     researchAutoLimitPerMeeting: Number(process.env.RESEARCH_AUTO_LIMIT_PER_MEETING ?? 10),
+    supplementAutoLimitPerMeeting: Number(process.env.SUPPLEMENT_AUTO_LIMIT_PER_MEETING ?? 8),
     youtubeApiKey,
     googleCseApiKey,
     googleCseCx,

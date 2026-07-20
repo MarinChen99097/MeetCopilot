@@ -20,6 +20,7 @@ import type { CrmCore, Role } from "@meetcopilot/crm";
 import { LastOwnerError, MemberNotFoundError } from "@meetcopilot/crm";
 import { INVITE_ROLES, type InviteRole } from "@meetcopilot/shared";
 import { authRequired } from "../auth/jwt.js";
+import { orgUsage, orgUsageEvents, ORG_USAGE_GROUP_BY, type OrgUsageGroupBy } from "./usage-queries.js";
 
 type Json = Record<string, unknown>;
 
@@ -27,12 +28,27 @@ const MEMBER_ROLES = ["owner", "admin", "member"] as const;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** invite 連結指向的 web 站台來源（與 index.ts 的 CORS 白名單同源）。 */
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+const DAY_MS = 24 * 60 * 60 * 1000;
+const USAGE_DEFAULT_WINDOW_MS = 30 * DAY_MS;
+/** 用量查詢窗上限（from/to 使用者可控；day 分組逐列拉回 → 上限防記憶體爆量）。 */
+const USAGE_MAX_WINDOW_MS = 400 * DAY_MS;
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
 }
 function isOneOf<T extends string>(v: unknown, allowed: readonly T[]): v is T {
   return typeof v === "string" && (allowed as readonly string[]).includes(v);
+}
+/** epoch-ms 查詢參數；缺省回 fallback，非法（NaN/負）回 null（→ 400）。 */
+function parseEpoch(raw: unknown, fallback: number): number | null {
+  if (raw === undefined || raw === null || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.trunc(n);
+}
+function intParam(raw: unknown, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
 }
 
 export function createOrgRouter(core: CrmCore, jwtSecret: string): Router {
@@ -84,6 +100,64 @@ export function createOrgRouter(core: CrmCore, jwtSecret: string): Router {
       // 指向實際存在的 web 路由 [locale]/invite（localePrefix:"always"→必帶 locale，預設 zh-TW）。P0-1。
       const acceptUrl = `${WEB_ORIGIN}/zh-TW/invite?token=${encodeURIComponent(invite.token)}`;
       res.status(201).json({ invite, acceptUrl });
+    }),
+  );
+
+  // ── GET /org/usage?from&to&groupBy=kind|model|day（owner/admin：本 org AI 花費明細） ──
+  router.get(
+    "/usage",
+    mw(requireManager),
+    mw(async (req, res) => {
+      const orgId = req.auth!.orgId;
+      const now = Date.now();
+      const to = parseEpoch(req.query.to, now);
+      const from = parseEpoch(req.query.from, now - USAGE_DEFAULT_WINDOW_MS);
+      if (from === null || to === null) {
+        res.status(400).json({ error: "from/to must be epoch-ms numbers" });
+        return;
+      }
+      if (from > to) {
+        res.status(400).json({ error: "from must be <= to" });
+        return;
+      }
+      if (to - from > USAGE_MAX_WINDOW_MS) {
+        res.status(400).json({ error: "date range too large (max ~400 days)" });
+        return;
+      }
+      const groupByRaw = str(req.query.groupBy) ?? "day";
+      if (!isOneOf<OrgUsageGroupBy>(groupByRaw, ORG_USAGE_GROUP_BY)) {
+        res.status(400).json({ error: "groupBy must be one of kind|model|day" });
+        return;
+      }
+      res.json(await orgUsage(core.db, orgId, { from, to, groupBy: groupByRaw }));
+    }),
+  );
+
+  // ── GET /org/usage/events?from&to&kind&limit&offset（本 org 用量明細，分頁） ──
+  router.get(
+    "/usage/events",
+    mw(requireManager),
+    mw(async (req, res) => {
+      const orgId = req.auth!.orgId;
+      const now = Date.now();
+      const to = parseEpoch(req.query.to, now);
+      const from = parseEpoch(req.query.from, now - USAGE_DEFAULT_WINDOW_MS);
+      if (from === null || to === null) {
+        res.status(400).json({ error: "from/to must be epoch-ms numbers" });
+        return;
+      }
+      if (from > to) {
+        res.status(400).json({ error: "from must be <= to" });
+        return;
+      }
+      if (to - from > USAGE_MAX_WINDOW_MS) {
+        res.status(400).json({ error: "date range too large (max ~400 days)" });
+        return;
+      }
+      const kind = str(req.query.kind) ?? undefined;
+      const limit = Math.min(200, Math.max(1, intParam(req.query.limit, 50)));
+      const offset = Math.max(0, intParam(req.query.offset, 0));
+      res.json(await orgUsageEvents(core.db, orgId, { from, to, kind, limit, offset }));
     }),
   );
 
