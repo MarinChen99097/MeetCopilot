@@ -42,3 +42,22 @@ export function fmtNumber(n?: number): string {
   if (n === undefined || n === null || Number.isNaN(n)) return "—";
   return n.toLocaleString("zh-TW");
 }
+
+/** 美元金額。小額顯示到 4 位（AI 用量估算值常為 <$0.01）。 */
+export function fmtUsd(n?: number | null): string {
+  if (n === undefined || n === null || Number.isNaN(n)) return "—";
+  const abs = Math.abs(n);
+  const digits = abs > 0 && abs < 1 ? 4 : 2;
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+}
+
+/** token 大數精簡：1200 → 1.2K、3.4M、5B。 */
+export function fmtCompact(n?: number | null): string {
+  if (n === undefined || n === null || Number.isNaN(n)) return "—";
+  const abs = Math.abs(n);
+  const trim = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+  if (abs >= 1e9) return `${trim(n / 1e9)}B`;
+  if (abs >= 1e6) return `${trim(n / 1e6)}M`;
+  if (abs >= 1e4) return `${trim(n / 1e3)}K`;
+  return fmtNumber(n);
+}

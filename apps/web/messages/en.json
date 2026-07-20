@@ -37,7 +37,10 @@
     "newTab": "Opens in a new tab",
     "language": "Language",
     "present": "Present stage",
-    "copilot": "Copilot · HUD"
+    "copilot": "Copilot · HUD",
+    "test": "Testing",
+    "sim": "Meeting Simulator",
+    "spend": "AI Spend"
   },
   "crm": {
     "title": "CRM",

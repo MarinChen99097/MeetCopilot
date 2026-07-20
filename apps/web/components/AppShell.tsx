@@ -131,9 +131,16 @@ const NAV_GROUPS: NavGroup[] = [
   },
   { kickerKey: "nav.practice", items: [{ key: "train", href: "/train", labelKey: "train.title", icon: "mic" }] },
   {
+    kickerKey: "nav.test",
+    items: [{ key: "sim", href: "/sim", labelKey: "nav.sim", icon: "gauge" }],
+  },
+  {
     kickerKey: "nav.admin",
     adminOnly: true,
-    items: [{ key: "team", href: "/settings/team", labelKey: "org.nav.team", icon: "users" }],
+    items: [
+      { key: "spend", href: "/spend", labelKey: "nav.spend", icon: "coins" },
+      { key: "team", href: "/settings/team", labelKey: "org.nav.team", icon: "users" },
+    ],
   },
 ];
 
@@ -325,6 +332,7 @@ export type IconName =
   | "gauge"
   | "mic"
   | "users"
+  | "coins"
   | "menu";
 
 const ICON_PATHS: Record<IconName, ReactNode> = {
@@ -378,6 +386,14 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
       <path d="M3.5 20a5.5 5.5 0 0 1 11 0" />
       <path d="M16 5.4a3 3 0 0 1 0 5.6" />
       <path d="M18 20a5.5 5.5 0 0 0-3-4.9" />
+    </>
+  ),
+  coins: (
+    <>
+      <ellipse cx="9" cy="7" rx="5.5" ry="2.6" />
+      <path d="M3.5 7v4c0 1.4 2.5 2.6 5.5 2.6s5.5-1.2 5.5-2.6V7" />
+      <path d="M9.5 13.4c.6 2 3 3.2 5.8 3.2 3 0 5.2-1.2 5.2-2.6v-4" />
+      <path d="M15 10.9c1.9-.1 3.7-.7 5-1.7" />
     </>
   ),
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,

@@ -37,7 +37,10 @@
     "newTab": "於新分頁開啟",
     "language": "語言",
     "present": "簡報舞台",
-    "copilot": "會中副駕 · HUD"
+    "copilot": "會中副駕 · HUD",
+    "test": "測試",
+    "sim": "會議模擬器",
+    "spend": "AI 花費"
   },
   "crm": {
     "title": "CRM 管理",

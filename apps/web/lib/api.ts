@@ -474,6 +474,58 @@ export function ground(input: { query: string; companyId?: string; meetingId?: s
   return request<GroundResult>("/api/research/ground", { method: "POST", body: input });
 }
 
+// ── Org AI 花費（本 org 自己的用量；owner/admin；GET /api/org/usage） ──────────
+export type OrgUsageGroupBy = "kind" | "model" | "day";
+export interface OrgUsageRow {
+  key: string;
+  events: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number; // 稅前
+  costUsdPosttax: number; // 含稅（後端以每列稅率快照加總，019）
+}
+export interface OrgUsage {
+  from: number;
+  to: number;
+  totalCostUsd: number; // 稅前
+  totalCostUsdPosttax: number; // 含稅
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  rows: OrgUsageRow[];
+}
+export interface OrgUsageEvent {
+  id: string;
+  userId: string | null;
+  userEmail?: string;
+  kind: string;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null; // 019
+  cachedInputTokens: number | null; // 019
+  retryCount: number; // 019
+  estCostUsd: number; // 稅前
+  costTaxMultiplier: number; // 019（含稅＝estCostUsd × 此值）
+  meetingId: string | null;
+  createdAt: number;
+}
+/** 本 org [from,to] 窗內 AI 用量，依 kind/model/day 分組（costUsd 稅前、costUsdPosttax 含稅，019）。 */
+export function getOrgUsage(p: { from: number; to: number; groupBy: OrgUsageGroupBy }): Promise<OrgUsage> {
+  return request<OrgUsage>(`/api/org/usage${qs({ from: p.from, to: p.to, groupBy: p.groupBy })}`);
+}
+/** 本 org 用量明細（分頁；可選 kind 篩選）。 */
+export function getOrgUsageEvents(p: {
+  from: number;
+  to: number;
+  kind?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ total: number; items: OrgUsageEvent[] }> {
+  return request<{ total: number; items: OrgUsageEvent[] }>(
+    `/api/org/usage/events${qs({ from: p.from, to: p.to, kind: p.kind, limit: p.limit, offset: p.offset })}`,
+  );
+}
+
 // ── Decks / DynamicSlide (API_CONTRACT §4) ──────────────────────
 // Long tasks (image generation) use the job pattern: POST → 202 { jobId }, GET polls.
 export function listDecks(): Promise<Paged<DeckSummary>> {
