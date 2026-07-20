@@ -1230,7 +1230,7 @@ kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-ra
 .mc-hud__connect-err { margin: 0; font-size: 13px; color: var(--mc-danger); }
 
 @media (min-width: 860px) {
-  .mc-hud { max-width: 1000px; display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+  .mc-hud { max-width: 1000px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
   .mc-hud__banner { grid-column: 1 / -1; }
   .mc-hud__transcript { grid-row: span 2; }
 }

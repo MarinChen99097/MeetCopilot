@@ -11,13 +11,16 @@
  * 原始頁 SlideSpec＝既有 `image-full` 模板 + 單一 image block，dataUri 落內部參照 `asset:<assetId>`
  * （getDeck route 讀出時才換成短效簽章 URL，不存死 URL）——重用既有 SlideRenderer 的 image-full 分支，零新模板。
  *
- * 主題（配色）：pptx 的基底 theme 已由 import-handler 在 deck **建立時**帶入 core.decks.create({ theme })
- * （凍結的 DeckRepository 無 setTheme，而原檔 bytes 於上傳時即在手，故在 create 落庫最省且型別安全）。本 job 不再另設 theme。
+ * 主題（配色）：每頁 image-full spec 由 extractPaletteFromPng 從該頁點陣圖抽 bg/text/accent 帶入 slide.theme
+ * （抽不到退中性淺色），供其衍生的生成補充頁（讀 anchorSlide.theme）對齊匯入 deck 的色調——修正「生成頁
+ * 退回 app 深色紫模板、與匯入頁風格落差大」。pptx 另有基底 theme 由 import-handler 在 deck 建立時帶入
+ * decks.create({ theme })（deck 層級，本 job 不覆蓋 deck theme，只在各 slide spec 帶入頁級抽色主題）。
  */
 import { randomUUID } from "node:crypto";
 import type { CrmCore } from "@meetcopilot/crm";
-import type { SlideSpec, SlideSource } from "@meetcopilot/shared";
+import type { SlideSpec, SlideSource, SlideTheme } from "@meetcopilot/shared";
 import { rasterizePptxToImages, rasterizePdfToImages, RasterizeError } from "./deck-rasterize.js";
+import { extractPaletteFromPng } from "./palette.js";
 
 /**
  * 點陣化相依（可注入，供單元測試 mock，不必真的呼叫 soffice/pdftoppm）。
@@ -34,11 +37,12 @@ const defaultDeps: ConversionDeps = { rasterizePptxToImages, rasterizePdfToImage
  * 原始頁 SlideSpec：`image-full` + 單一 image block（dataUri＝內部參照 `asset:<assetId>`）。
  * source 用實際來源（pptx/pdf）——SlideSource 聯集無 'import'，故不能用契約草稿的 `source:'import'`（見回報）。
  */
-function buildImageFullSpec(assetId: string, source: SlideSource): SlideSpec {
+function buildImageFullSpec(assetId: string, source: SlideSource, theme: SlideTheme): SlideSpec {
   return {
     id: randomUUID(),
     template: "image-full",
     blocks: [{ type: "image", dataUri: `asset:${assetId}` }],
+    theme,
     source,
   };
 }
@@ -85,7 +89,9 @@ export async function runConversionJob(
         mime: "image/png",
         bytes: png,
       });
-      const spec = buildImageFullSpec(assetId, slideSource);
+      // 從該頁點陣圖抽色 → slide.theme，供生成補充頁對齊配色（抽不到退中性淺色）。
+      const theme = extractPaletteFromPng(png);
+      const spec = buildImageFullSpec(assetId, slideSource, theme);
       await core.decks.appendSlide(orgId, deckId, spec, { kind: "original", assetId });
     }
 

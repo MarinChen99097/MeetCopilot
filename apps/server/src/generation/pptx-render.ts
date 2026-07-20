@@ -51,6 +51,8 @@ interface ResolvedTheme {
   bg: string;
   text: string;
   accent: string;
+  /** 頁面帶了合法的顯式主色（對齊 SlideRenderer 的 `if (theme.accent)`）→ 圖表多序列色由主色衍生而非固定紫粉。 */
+  accentIsExplicit: boolean;
   muted: string;
   headingFont: string;
   bodyFont: string;
@@ -62,6 +64,7 @@ function resolveTheme(theme: SlideTheme | undefined): ResolvedTheme {
     bg: normalizeHex(theme?.bg, DEFAULT_THEME.bg),
     text: normalizeHex(theme?.text, DEFAULT_THEME.text),
     accent: normalizeHex(theme?.accent, DEFAULT_THEME.accent),
+    accentIsExplicit: normalizeHex(theme?.accent, "") !== "",
     muted: MUTED,
     headingFont: theme?.headingFont || DEFAULT_THEME.headingFont,
     bodyFont: theme?.bodyFont || DEFAULT_THEME.bodyFont,
@@ -180,10 +183,31 @@ function mixWithWhite(hex: string, ratio: number): string {
     .toUpperCase();
 }
 
-function chartPalette(accent: string): string[] {
-  const hue2 = CHART_ACCENT_HUES[0].toUpperCase();
-  const hue3 = CHART_ACCENT_HUES[1].toUpperCase();
-  return [accent, hue2, hue3, mixWithWhite(accent, 0.55), mixWithWhite(hue2, 0.55), mixWithWhite(hue3, 0.6)];
+/** color-mix(in srgb, hex ratio%, black)＝各通道 ×ratio。鏡射螢幕 --slide-accent-3 的 color-mix(accent 66%, black)。 */
+function mixWithBlack(hex: string, ratio: number): string {
+  const n = parseInt(hex, 16);
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  const mix = (c: number) => Math.round(c * ratio);
+  return [mix(r), mix(g), mix(b)]
+    .map((c) => c.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase();
+}
+
+/**
+ * 圖表多序列色。**與螢幕（slide-chart.tsx 的 PALETTE ＋ SlideRenderer 的 --slide-accent-2/-3）逐格對齊**，
+ * 確保「畫面預覽 ＝ 匯出 .pptx」（slide-spec.ts CHART_ACCENT_HUES 註解宣稱的 WYSIWYG 不變量）：
+ * - 有顯式主色時，series 2/3 由主色 color-mix 衍生（＝SlideRenderer 對 accent-2/-3 的衍生）；
+ * - 無顯式主色時，series 2/3 用固定 CHART_ACCENT_HUES（＝CSS 預設的 --slide-accent-2/-3）。
+ * series 4-6 皆為前三色的 55%/55%/60% 混白（＝slide-chart PALETTE 後三格），兩分支一致。
+ */
+function chartPalette(accent: string, accentIsExplicit: boolean): string[] {
+  const [c2, c3] = accentIsExplicit
+    ? [mixWithWhite(accent, 0.58), mixWithBlack(accent, 0.66)] // = color-mix(accent 58% white) / (accent 66% black)
+    : [CHART_ACCENT_HUES[0].toUpperCase(), CHART_ACCENT_HUES[1].toUpperCase()];
+  return [accent, c2, c3, mixWithWhite(accent, 0.55), mixWithWhite(c2, 0.55), mixWithWhite(c3, 0.6)];
 }
 
 function charsPerLine(width: number, fontSize: number): number {
@@ -298,7 +322,7 @@ function addChartBlock(
       y,
       w,
       h: chartH,
-      chartColors: chartPalette(theme.accent),
+      chartColors: chartPalette(theme.accent, theme.accentIsExplicit),
       showTitle: false,
       showLegend: isDonut,
       legendPos: "b",

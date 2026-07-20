@@ -31,7 +31,13 @@ function themeStyle(theme: SlideTheme | undefined): CSSProperties {
   const vars: Record<string, string> = {};
   if (theme.bg) vars["--slide-bg"] = theme.bg;
   if (theme.text) vars["--slide-text"] = theme.text;
-  if (theme.accent) vars["--slide-accent"] = theme.accent;
+  if (theme.accent) {
+    vars["--slide-accent"] = theme.accent;
+    // 有匯入/繼承主色時，把 mesh 漸層與圖表多序列用的 accent-2/-3 也從主色衍生（淺色調＋深色調、同色系），
+    // 取代 CSS 預設的 app 招牌紫/粉（#7c6cff/#ff5d9e）——讓生成補充頁與匯入 deck 同一色調，收斂風格落差。
+    vars["--slide-accent-2"] = `color-mix(in srgb, ${theme.accent} 58%, white)`;
+    vars["--slide-accent-3"] = `color-mix(in srgb, ${theme.accent} 66%, black)`;
+  }
   if (theme.headingFont) vars["--slide-heading-font"] = theme.headingFont;
   if (theme.bodyFont) vars["--slide-body-font"] = theme.bodyFont;
   return vars as CSSProperties;

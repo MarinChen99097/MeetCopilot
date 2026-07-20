@@ -1,6 +1,7 @@
 "use client";
 
 import type { InfoCard } from "@meetcopilot/shared";
+import { Markdown } from "@/components/ui/Markdown";
 
 const KIND_LABEL: Record<InfoCard["kind"], string> = {
   company: "公司",
@@ -35,7 +36,7 @@ export function InfoCardStream({ cards }: { cards: InfoCard[] }) {
                 <span className={`mc-trust mc-trust--${c.trust}`}>{TRUST_LABEL[c.trust]}</span>
               </div>
               <div className="mc-infocard__title">{c.title}</div>
-              <p className="mc-infocard__body">{c.body}</p>
+              <Markdown className="mc-infocard__body">{c.body}</Markdown>
               <div className="mc-infocard__foot">
                 {typeof c.confidence === "number" ? (
                   <span className="mc-conf mc-conf--mid">信心 {(c.confidence * 100) | 0}%</span>

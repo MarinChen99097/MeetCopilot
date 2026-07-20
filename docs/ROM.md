@@ -36,6 +36,30 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-20 | /code-review 部署前把關：pptx 圖表色 WYSIWYG 修正
+- **誰決定**: 使用者（AskUserQuestion 選「修 pptx 匯出對齊」）
+- **決策**: `/code-review`（5 opus 視角對抗式）對本輪 /sim 修復抓到**唯一 ≥80 finding**（信心 88，Warning）——`SlideRenderer` 螢幕端在有顯式主色時衍生 `--slide-accent-2/-3` 後，pptx 匯出 `chartPalette` 仍固定紫粉（7c6cff/ff5d9e）→ themed deck 多序列圖表「螢幕 ≠ 匯出」。使用者選「**修 pptx 匯出對齊**」（非撤銷螢幕衍生、非只改註解）。已在 `pptx-render.ts` 鏡射衍生（見 CHANGE_TRACKER 19:40）。
+- **脈絡與理由**: 部署前跑 /code-review 把關；Bug/正確性、I1/I2/I3/SSRF、authz、錯誤處理四視角皆無高信心問題，脈絡一致性抓到此 WYSIWYG 破口（`slide-spec.ts:59-61` 明文宣稱螢幕=pptx）。使用者要完整對齊（螢幕＝匯出都採 deck 色調）。
+- **考慮過的替代**: (b) 撤掉螢幕 accent-2/-3 衍生（回紫粉、最小最安全，但放棄圖表/mesh 對齊 deck 色）；(c) 照現況出、只改註解宣告螢幕≠匯出（否——使用者要一致）。
+- **影響**: `apps/server/src/generation/pptx-render.ts`（`ResolvedTheme.accentIsExplicit`＋`mixWithBlack`＋`chartPalette` 分支）。
+
+### 2026-07-20 | /sim 實測回饋修復：HUD 排版/markdown、補充頁重疊、風格對齊（抽色）；分析正確性釐清
+- **誰決定**: 使用者（回報 4 點問題＋mid-turn 補「簡報風格不一致」＋AskUserQuestion 選風格策略）＋Fable（診斷＋修法）
+- **決策**:
+  1. **風格對齊策略＝抽色為主，抽不到退中性淺色**（AskUserQuestion 三選一，使用者選第三「兩者都要」）。實作：匯入時逐頁抽 bg/text/accent 寫進 `slide.theme` 供生成補充頁繼承；`SlideRenderer` 由主色衍生 `--slide-accent-2/-3` 消掉紫/粉招牌色。
+  2. HUD markdown 渲染、HUD 欄寬、補充頁文字重疊皆為 UI/prompt 層修（見 CHANGE_TRACKER 18:30／19:15 兩筆）。
+  3. **「第 4 點：擷取分析比照腳本修正」→ 查證結論：分析引擎正確、無 bug**。撈線上 Cloud SQL 最新 meeting 的 58 筆 signals 證明——這次餵的音檔是**混合內容**（金融劇本只占少數，交錯大量無關：AI/統計課程、科技政策論壇、閒聊），管線忠實轉寫＋分析。跨場次無污染（前一場 signals=0、disposeSession 逐場清、signals 以 meeting_id 隔離）。**不改分析**；要驗劇本用桌面乾淨 WAV 重跑。
+- **脈絡與理由**: WS_PUBLIC_BASE 修好後首次跑通 /sim，使用者實測發現 4 問題。3 個 opus agent 平行診斷：markdown 沒渲染（`InfoCardStream:38` 純字串直出）、HUD 欄寬（`.mc-hud` `1fr/1fr`＋/sim 沒掛 `mc-cockpit__hud`）、補充頁重疊（`.slide-block--features` 漏 `min-height:0`＋`align-content:center` 上溢疊字）、風格落差（PDF 無 theme→生成頁退深色紫）。
+- **考慮過的替代**: 風格——(A) 只抽色／(B) 只中性淺色／(C) 兩者（選 C）；補充頁重疊——只改 CSS vs 只改 prompt（選兩者：CSS 根治溢出＋prompt 減少硬塞）；`accent-2/-3`——保留紫粉 vs 從主色衍生（選衍生，接受 studio deck 圖表轉單色系副作用）。
+- **影響**: apps/web（新 `ui/Markdown.tsx`、`InfoCardStream`、`NotesTab`、`globals.css`、`MeetingSimulator`、`SlideRenderer`、`studio-present.css`）、apps/server（新 `import/palette.ts`＋測試、`conversion-job.ts`、`slide-gen.ts` prompt、`package.json` +pngjs）。全綠待部署（web＋server 都要重建）。分析引擎不動；I1/I2/I3 未碰。
+
+### 2026-07-20 | 線上 realtime WS 全掛：server 漏設 WS_PUBLIC_BASE → 補 env（rev 00018）
+- **誰決定**: 使用者（核准部署）＋Fable（根因診斷＋修法）
+- **決策**: 在 Cloud Run `meetcopilot-server` 補環境變數 `WS_PUBLIC_BASE=wss://meetcopilot-server-54139295474.asia-east1.run.app`，用 `gcloud run services update --update-env-vars`（只動這一 key、保留其餘 17 個 env/secret）；不改程式、沿用現有 image 起新 revision `meetcopilot-server-00018-47r`。
+- **脈絡與理由**: 使用者首次用瀏覽器實跑 `/sim`，capture／present 兩條 WS 永遠停「連線中」、收音 0%、補充頁 0。根因在 `apps/server/src/realtime/meetings-routes.ts:33`——`wsBase = process.env.WS_PUBLIC_BASE ?? \`ws://localhost:${port}\``；線上該 env **從未設定**（describe env 清單無此 key），故 `POST /api/meetings` 回給瀏覽器的 `wsUrl = ws://localhost:8080/ws`，瀏覽器連不到自身 localhost、又被 web CSP（connect-src 僅放 wss://server）與 https 頁的 mixed-content 擋 → 三個 realtime 面（/sim·/copilot·/hud，皆用 `creds.wsUrl ?? API_BASE`）在線上其實一直連不上。先前只跑 HTTP 冒煙（/api/ready·/api/org/usage）從未用瀏覽器開 WS，故此洞到今天才現形。
+- **考慮過的替代**: 改程式讓 wsUrl 從 request host 動態推導（否——Cloud Run 有代理層、host 標頭不一定可信；顯式 env 最穩、與既有 WEB_ORIGIN/ADMIN_ORIGIN 一致）；prod 缺 WS_PUBLIC_BASE 時 fail-fast 開機報錯（可考慮的後續硬化，本次未做，先以文件必填清單防呆）；用 `--set-env-vars`（否——會吹光其餘 env，違反部署 SOP）。
+- **影響**: Cloud Run server rev 00018；`docs/DEPLOY.md`（D 段完整 deploy 補 WS_PUBLIC_BASE、E 段「重設全部 env 記得帶」清單、排錯速記新增一條）。修正後須「重開一場新會議」才生效（wsUrl 在開會當下鑄）。**驗證**：describe env 見 WS_PUBLIC_BASE=wss://…、其餘 17 key 皆在、/api/ready=200。
+
 ### 2026-07-20 | 底層 AI 記帳全面對齊 ezpage（五桶 token＋差別計價＋每列稅率＋運行時安全網）
 - **誰決定**: 使用者（問「有無參考 ezpage 底層」後拍板）＋AskUserQuestion 兩題＋Fable 裁決實作
 - **決策**:

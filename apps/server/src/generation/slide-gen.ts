@@ -138,7 +138,7 @@ export const TEMPLATE_INTENT_ZH =
   `content＝heading＋2-4 個 bullets 或 paragraph，也可用 two-col 做對比；內容頁應優先使用單一 features block，` +
   `放 3-4 個 {icon,title,desc} 項目來填滿版面（bullets 仍可作為次要輔助）；` +
   `stats＝3-6 個 stat block 呈現關鍵數字；每個 stat block 必須同時填 value（數字或百分比，如 "40%"、"3.2x"）與 label（說明文字），兩者缺一不可；` +
-  `content 或 stats 頁若主題涉及量化數據，可額外使用一個 chart block 來視覺化 3-6 個資料點` +
+  `content 或 stats 頁若主題涉及量化數據，可改用一個 chart block（此時該頁不要再放 features，二選一）來視覺化 3-6 個資料點` +
   `（長條圖 bar＝比較、圓環圖 donut＝占比、折線圖 line＝趨勢，依資料性質擇一）；` +
   `closing＝heading＋一段 CTA/感謝 paragraph。` +
   `title／section／closing 頁可額外加一個簡短 eyebrow（如分節編號「01」或主題標籤），非必填。`;
@@ -157,7 +157,7 @@ export const DESIGN_PRINCIPLES_ZH =
   `設計原則：` +
   `(1) 版面配合內容數量——剛好 2 個對照概念用 two-col，3-4 個並列重點用 features 卡格，勿把 2 點硬塞成多欄、也勿把 6 點擠成一頁。` +
   `(2) 一頁只聚焦一個重點，寧可拆成多頁也不要塞滿；標題精煉、內文精簡（大標配少字）。` +
-  `(3) 有量化數據就做成 chart 或 stat 大數字，別只用文字描述；一頁最多一個 chart，且該頁不要再塞大量文字（讓圖表當主角）。` +
+  `(3) 有量化數據就做成 chart 或 stat 大數字，別只用文字描述；一頁最多一個 chart，且有 chart 或多個 stat 的頁面不要再放 features 卡格或大量文字（讓圖表／指標獨占版面當主角，否則會與卡片上下擠壓、標籤與卡標題重疊）。` +
   `(4) bullets 每頁至多 5 條、每條精簡一行；features 每張 desc 一句話即可。`;
 
 const DECK_STRUCTURE_CONTRACT_ZH =

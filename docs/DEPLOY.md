@@ -89,9 +89,10 @@ gcloud run deploy meetcopilot-server --image=asia-east1-docker.pkg.dev/ezpagesit
   --region=asia-east1 --project=ezpagesite --execution-environment=gen2 --min-instances=0 --max-instances=1 --cpu=2 --memory=4Gi \
   --add-cloudsql-instances=ezpagesite:asia-east1:meetcopilot-db \
   --set-secrets=JWT_SECRET=meetcopilot-jwt-secret:latest,GEMINI_API_KEY=meetcopilot-gemini-key:latest,OPENAI_API_KEY=meetcopilot-openai-key:latest,DATABASE_URL=meetcopilot-db-url:latest \
-  --set-env-vars=DB_DRIVER=pg,WEB_ORIGIN=https://meetcopilot-web-54139295474.asia-east1.run.app,GOOGLE_CLIENT_ID=54139295474-f7cve65n4884ttkcbc2o23hs763q7hm4.apps.googleusercontent.com,GEMINI_TEXT_MODEL=gemini-3.1-flash-lite,GEMINI_EXTRACT_MODEL=gemini-3.5-flash,GEMINI_EMBED_MODEL=gemini-embedding-001,GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview,OPENAI_IMAGE_MODEL=gpt-image-2,OPENAI_IMAGE_SIZE=1536x864,OPENAI_IMAGE_QUALITY=medium,RESEARCH_AUTO_LIMIT_PER_MEETING=10,RESEARCH_JOB_TIMEOUT_MS=600000 \
+  --set-env-vars=DB_DRIVER=pg,WEB_ORIGIN=https://meetcopilot-web-54139295474.asia-east1.run.app,WS_PUBLIC_BASE=wss://meetcopilot-server-54139295474.asia-east1.run.app,GOOGLE_CLIENT_ID=54139295474-f7cve65n4884ttkcbc2o23hs763q7hm4.apps.googleusercontent.com,GEMINI_TEXT_MODEL=gemini-3.1-flash-lite,GEMINI_EXTRACT_MODEL=gemini-3.5-flash,GEMINI_EMBED_MODEL=gemini-embedding-001,GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview,OPENAI_IMAGE_MODEL=gpt-image-2,OPENAI_IMAGE_SIZE=1536x864,OPENAI_IMAGE_QUALITY=medium,RESEARCH_AUTO_LIMIT_PER_MEETING=10,RESEARCH_JOB_TIMEOUT_MS=600000 \
   --allow-unauthenticated --timeout=3600 --session-affinity
 # ⚠ WEB_ORIGIN 必帶（CORS）；GOOGLE_CLIENT_ID 必帶（沿用 EZpage 的 client，共用帳號）。
+# ⚠ WS_PUBLIC_BASE 必帶（**realtime WS**）：POST /api/meetings 用它組 wsUrl 回前端；漏設 → fallback ws://localhost → /sim·/copilot·/hud 三個 realtime 面永遠「連線中」、收音 0%。須 wss://（https 頁不能連 ws://，且 web CSP connect-src 只放 wss://server網址）。2026-07-20 補（rev 00018 起）。
 # ⚠ Google 登入前置（一次性、只有使用者能做）：Console 把 meetcopilot-web 兩個網址加進該 OAuth client 的「已授權 JavaScript 來源」。
 ```
 
@@ -112,11 +113,12 @@ curl -s https://meetcopilot-admin-54139295474.asia-east1.run.app/  -o /dev/null 
 ```
 
 > ⚠ Google 登入前置（一次性、只有使用者能做）：Console 把 **meetcopilot-admin** 的 run.app 網址也加進該 OAuth client 的「已授權 JavaScript 來源」（不可結尾 `/`，約 5 分鐘生效），否則 admin 的 Google 登入會 `origin_mismatch`。
-> 完整 `run deploy meetcopilot-server`（D 段）若日後需重設全部 env，記得把 `ADMIN_ORIGIN`、`PLATFORM_ADMIN_EMAILS` 一併補進 `--set-env-vars`，否則會漏掉這兩個。
+> 完整 `run deploy meetcopilot-server`（D 段）若日後需重設全部 env，記得把 `ADMIN_ORIGIN`、`PLATFORM_ADMIN_EMAILS`、`WS_PUBLIC_BASE` 一併補進 `--set-env-vars`，否則會漏掉這幾個。
 
 ### 排錯速記（本 session 踩過）
 - **build 卡住/工具逾時** → `gcloud builds submit` 用 `--async`＋`gcloud builds describe <id> --format="value(status)"` 輪詢；build 在雲端續跑，不受本地 2 分逾時影響。
 - **env 被吹光**（CORS 壞、Google 登入壞）→ 用了 `--set-env-vars`/完整 `run deploy` 只帶部分 env。改用 `--update-env-vars` 只動單一 key。
+- **realtime 面永遠「連線中」／收音 0%**（/sim·/copilot·/hud，兩條 WS 都卡）→ server 漏設 `WS_PUBLIC_BASE`，`POST /api/meetings` 回 fallback `ws://localhost:8080/ws`，瀏覽器連不到 localhost（又被 CSP／mixed-content 擋）。修：`gcloud run services update meetcopilot-server --region=asia-east1 --update-env-vars=WS_PUBLIC_BASE=wss://meetcopilot-server-54139295474.asia-east1.run.app`（只動這 key）；設好後重開一場新會議（wsUrl 是開會當下鑄的）。2026-07-20 首次瀏覽器實測才抓到（先前只跑 HTTP 冒煙）。
 - **改了程式卻沒生效** → 只重建了一邊。web 的 `NEXT_PUBLIC_*` 是 build 期常數，非重建 web 無效（光 `run services update` 或重啟都沒用）。
 - **日誌**：app 自身 log 在 `logName:"stdout"` 的 `jsonPayload`（request log 在 `run.googleapis.com/requests`）；查研究 job：`gcloud logging read 'resource.labels.service_name=meetcopilot-server AND logName:"stdout"' --freshness=20m --format=json`。
 - **Google 登入驗證**（不需真登入即可測後端就緒）：`curl -X POST .../api/auth/google -d '{"idToken":"bogus"}'` 應回 401「invalid Google credential」（端點已接）；`OPTIONS` 應回 204＋`access-control-allow-origin`。

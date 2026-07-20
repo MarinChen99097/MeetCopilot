@@ -34,6 +34,38 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-20 19:40 | code-review 修正：pptx 匯出圖表色對齊螢幕衍生（維持 WYSIWYG 不變量）
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/generation/pptx-render.ts`
+- **改了什麼**: 19:15 讓 `SlideRenderer` 螢幕端在有顯式主色時衍生 `--slide-accent-2/-3`，但 pptx 匯出 `chartPalette` 仍固定用 `CHART_ACCENT_HUES`（7c6cff/ff5d9e）→ themed deck 多序列圖表「螢幕預覽 ≠ 匯出 .pptx」（違反 `slide-spec.ts:59-61`／`studio-present.css:13-15` 宣稱的 WYSIWYG）。修：`ResolvedTheme` 加 `accentIsExplicit`（`normalizeHex(theme?.accent,"")!==""`）；加 `mixWithBlack(hex,ratio)=各通道×ratio`；`chartPalette(accent, accentIsExplicit)`——顯式主色時 series 2/3＝`mixWithWhite(accent,0.58)`／`mixWithBlack(accent,0.66)`（＝螢幕 `color-mix(accent 58% white)`／`(accent 66% black)`），series 4-6 沿用前三色 55/55/60% 混白，與 `slide-chart.tsx` PALETTE **逐格對齊**；無顯式主色仍用固定 hues（＝CSS 預設）。呼叫點傳 `theme.accentIsExplicit`。
+- **為什麼**: `/code-review`（脈絡一致性視角，信心 88）抓到的唯一 ≥80 Warning；使用者 AskUserQuestion 選「修 pptx 匯出對齊」。
+- **驗證**: fresh-context agent——server typecheck PASS、server `vitest` **47 檔 269 測全綠**（`pptx-merge`/`pdf-merge`/`palette` 皆過；無測試斷言圖表色故未破）、web typecheck PASS。未 commit。
+
+### 2026-07-20 19:15 | 匯入頁抽色 → 生成補充頁風格對齊（消除「深色紫模板 vs 淺色匯入 deck」落差）
+- **工作區**: apps/server, apps/web
+- **類型**: feat
+- **檔案**: `apps/server/package.json`(+`pngjs`/`@types/pngjs`)、`apps/server/src/import/palette.ts`(新)、`import/palette.test.ts`(新)、`import/conversion-job.ts`、`apps/web/components/slide/SlideRenderer.tsx`
+- **改了什麼**:
+  - **根因**: 匯入 PDF 無結構化配色 → `conversion-job` 的 image-full spec 不帶 theme → 生成補充頁（讀 `anchorSlide.theme`）繼承到空 → 退回 app 深色紫預設模板，與淺色匯入 deck 落差大。使用者拍板策略「**抽色為主、抽不到退中性淺色**」。
+  - **抽色（`palette.ts`）**: 用 pngjs 解每頁 PNG——四角＋四邊中點取樣平均為 bg（彼此分歧 >96 視為低信心）、依 bg 亮度給深/淺 text、稀疏掃描取「最飽和且亮度適中、離背景夠遠」的像素為 accent（飽和 <0.28 退中性）；任一步失敗/低信心回 `NEUTRAL_LIGHT_THEME`（`#f6f7f9`/`#1b2130`/`#4f6bed`）。
+  - **接線（`conversion-job.ts`）**: 每頁 `extractPaletteFromPng(png)` → 帶入 `buildImageFullSpec(assetId, source, theme)`（spec 多 `theme` 欄）。pdf/pptx 皆套；不覆蓋 deck 層 theme。
+  - **消招牌色（`SlideRenderer.themeStyle`）**: `theme.accent` 存在時，額外把 mesh/圖表用的 `--slide-accent-2/-3` 以 `color-mix` 從主色衍生（淺調/深調同色系），取代 CSS 預設 `#7c6cff`/`#ff5d9e` 紫粉 → 生成頁 mesh/漸層/圖表改採 deck 色調。**副作用**：studio AI 生成 deck 的多序列圖表色亦轉為單一色系（同色明暗區分，可接受、更貼品牌）。
+- **為什麼**: 使用者回報「生成簡報排版有問題、且與前面匯入的簡報風格差異太大」；PDF 無 theme 是根因。不動 I1/I2/I3（僅視覺 theme／匯入 spec 帶主題）。
+- **驗證**: fresh-context agent——server typecheck PASS、server `vitest` **47 檔 269 測全綠**（含新 `palette.test.ts` 5 測、`conversion-job.test` 5 測不破）、web typecheck PASS、`next build` 18 路由 PASS。未 commit（硬規則 10）。
+
+### 2026-07-20 18:30 | 會中副駕 HUD markdown 渲染＋欄寬修復；DynamicSlide 補充頁佈局重疊修復＋生成收斂
+- **工作區**: apps/web, apps/server
+- **類型**: fix
+- **檔案**: `apps/web/components/ui/Markdown.tsx`(新)、`components/hud/InfoCardStream.tsx`、`components/crm/NotesTab.tsx`、`app/globals.css`、`components/sim/MeetingSimulator.tsx`、`app/studio-present.css`、`apps/server/src/generation/slide-gen.ts`
+- **改了什麼**:
+  - **markdown 未渲染（情報卡/深查卡）**: `InfoCardStream.tsx:38` 原 `<p>{c.body}</p>` 純字串直出 → 字面顯示 `**粗體**`/反引號/清單。抽共用 `<Markdown>`（react-markdown＋連結 scheme 白名單＋a-tag noopener＋`div.mc-md`，移自 NotesTab）套上；NotesTab 一併收斂到共用元件（移除本地 `mdUrlTransform`/`MC_MD_COMPONENTS`/`ReactMarkdown` import）。數學 `$...$` 仍不渲染（未裝 katex，另議）。
+  - **HUD 欄寬擠成細長條**: `globals.css:1233` `.mc-hud` grid `1fr 1fr`→`minmax(0,1fr) minmax(0,1fr)`（`1fr`=minmax(auto,1fr) 令 CJK 被壓到 min-content）；`/sim` 的 HUD wrapper（`MeetingSimulator.tsx`）className 加 `mc-cockpit__hud` → 套既有「內嵌單欄」規則（`globals.css:1448`），窄面板改單欄可讀。
+  - **補充頁文字重疊**: `studio-present.css:134` `.slide-block--features` `flex:1` 漏 `min-height:0`＋`align-content:center` → 被上方 chart/stat 擠扁時上下雙向溢出、標籤疊到 feature 標題。修＝加 `min-height:0`＋`align-content:safe center`（超出退 start 往下裁切、不往上溢）；`.slide-block--two-col` 同補 `min-height:0`。
+  - **生成端收斂**: `slide-gen.ts` prompt（`TEMPLATE_INTENT_ZH`/`DESIGN_PRINCIPLES_ZH`）禁止「chart 或多個 stat」與 features 同頁（硬塞重疊的源頭）。
+- **為什麼**: 使用者實機跑 /sim 後回報 HUD 排版差、markdown 沒渲染、補充頁重疊。皆 UI/prompt 層修復，不動 I1/I2/I3。
+- **驗證**: fresh-context agent：web typecheck＋server typecheck＋`next build`(18 路由)＋server `vitest` 264 測全綠；NotesTab 無殘留引用。未 commit（硬規則 10）。
+
 ### 2026-07-20 16:10 | 底層 AI 記帳全面對齊 ezpage：五桶 token＋差別計價＋每列稅率快照＋運行時安全網（migration 019）
 - **工作區**: packages/shared, packages/crm, apps/server, apps/web, docs
 - **類型**: feat

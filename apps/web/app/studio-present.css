@@ -131,7 +131,9 @@
 }
 .slide-block--quote cite { display: block; margin-top: 1cqw; font-style: normal; font-size: 2cqw; color: var(--slide-muted); }
 
-.slide-block--features { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 2.4cqw; align-content: center; }
+/* min-height:0 讓 flex:1 的 features 能真正縮到可用高度；align-content:safe center 保留置中，
+   但內容超出時退回 start（往下裁切）而非往上溢出、疊到上方 chart/stat 的標籤帶（重疊 bug）。 */
+.slide-block--features { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2.4cqw; align-content: safe center; }
 .feature {
   display: flex;
   gap: 2.2cqw;
@@ -161,7 +163,7 @@
 .slide-block--image { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .slide-block--image img { max-height: 100%; object-fit: contain; }
 
-.slide-block--two-col { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 3cqw; }
+.slide-block--two-col { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3cqw; }
 .two-col__left, .two-col__right { display: flex; flex-direction: column; gap: 1.2cqw; min-width: 0; }
 
 /* charts (CSS/SVG) */
