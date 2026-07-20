@@ -202,3 +202,15 @@
 - **merge 注意**：本支 migration **018**（主樹 research WIP 已佔 016_social_tech/017_more_mode）；crm-core 冪等測試已改 gap-tolerant。merge 前確認 018 不撞屆時主樹最高號。
 - **隔離狀態**：code 全在 worktree 分支；docs（本檔/ROM/CHANGE_TRACKER）在主樹補（與 research session 平行編輯交疊，Edit 精確插入未覆蓋）。**本檔已超 150 上限（研究 session 內容為主），歸檔待兩線 session 收斂後處理。**
 - **記債**：真 pptx 恰為 10×5.625（寬螢幕修正只用合成檔驗）；補充頁生成走真 Gemini 管線未在本輪 E2E 驗；export HTTP 層/錯誤逾時路徑/加密 PDF 未驗；conversion job max-instances>1 時開機對帳理論上可能誤殺他實例進行中轉檔（現部署 max-instances=1 故無虞）。
+
+## 2026-07-20 session（DynamicSlide 對話→補充頁生成橋接補完＋mp3 會議模擬器測試工具）
+
+- **緣起**：使用者要「打造測試管道＋腳本，匯入音檔模擬會議、配合 PPT（`AI金融商品應用v1.pdf`）看到新增 PPT 被插在後面」；假設三人＝2 客戶＋1 報告者；測試入口直接寫進前端不隱藏。
+- **關鍵發現（4 路 Opus 調查＋親自查證）**：DynamicSlide 的 append 機制（I1/I2/patch-service/deck_update/present 渲染）全建好且有測試，但 **`patch.suggest()` 無任何生產呼叫者**——`onSignals` 只做 CRM info_card＋自動深查，「會中對話→生成一張補充頁→送批准」這條觸發線**從未接上生產**＝真會議永不 append。→ 任務升級為「補完產品缺件＋測試工具」。
+- **使用者三拍板（AskUserQuestion）**：(a) 補**真正的產品接線**（非測試專用觸發器）；(b) 走**真 HUD 手動接受**（保完整 I2，不自動批准）；(c) 執行環境**入口可切、本機/線上兩邊支援**（缺件偵測寫進頁面）。決策記 ROM 2026-07-20。
+- **實作（server 橋接）**：`config` 加 `supplementAutoLimitPerMeeting`（env，預設 8）；`slide-gen` export SLIDE_SCHEMA＋新 `generateSupplementSlide`（與 deck 生成共用 prompt＋sanitize、禁 image、空頁回 null）；`orchestrator` 加 `onSuggestSlide`＋`maybeSuggestSlide`（合格訊號集＋節流 40s 樂觀佔窗＋每場配額成功才計＋`companyName` grounding，disposeSession 清狀態）；`hub` 傳配額＋`onSuggestSlide→patch.suggest`。**I1/I2/I3 未弱化**（只新增建議產出者，批准/append/HUD 隔離不變）。
+- **實作（前端測試工具）**：`lib/mp3-capture.ts`（mp3→decodeAudioData→OfflineAudioContext 重取樣 16k mono→Int16→250ms/frame，與生產 worklet 同格式，回傳同形 CaptureController）；`components/sim/MeetingSimulator.tsx`（/sim，導覽「測試」群組**可見不隱藏**）——選/匯入 deck→選 mp3→createMeeting(綁 deck)→3 條 WS（capture 灌 mp3／present 收 deck_update 畫即時縮圖列、本次新增頁標綠／`HudInner embedded` 真 transcript/signals/建議＋手動接受）；AppShell nav 群組＋i18n 兩語系。
+- **驗證**：server `tsc` 綠＋`vitest` **44 檔 248 測全綠**（含新 supplement-slide.test.ts 7 測）；web `tsc` 綠＋`next build` **17 路由綠**（新增 /sim）。fresh-context 對抗驗證：橋接觸發/bounded/I1/I2/I3/mp3 格式/配額連帶/companyName **全 PASS**，抓到 **1 真 bug**＝模擬器 **consent-on-open 競態**（consent 早於非同步 ensureRuntime 建好的 runtime→靜默丟棄→零補充頁，本機最易中）→**已修**（收 `session_state` 重送 consent 兜底）＋2 小瑕疵（seedLen 標記／註解）全修，複驗 web tsc 綠。
+- **未 commit（硬規則 10，等使用者核准）**。CHANGE_TRACKER 1 筆（含審後修正）、ROM 1 則。
+- **待使用者**：(1) 提供 mp3 實測（隨後給）；(2) 本機測需 `GEMINI_API_KEY`（跑 ASR/分析/生成）＋ PDF 轉原始頁需 `pdftoppm`(poppler)——裸 Windows 沒有 → 匯入會 failed（頁面誠實顯示＋提示），可改打線上已部署環境（已內建 poppler，但新橋接接線需先 commit＋部署才生效）；(3) 核准 commit／部署。
+- **記債**：補充頁生成 language 先固定 zh-TW（orchestrator 無 deck language）；補充頁未繼承 anchor theme（PDF 原始頁本無 theme，渲染器退 app 預設反而讓 AI 頁視覺區隔＝可接受）；`/sim` 頁文字走 inline zh-TW（測試工具，未進 i18n，只 nav 標籤入兩語系）；補充頁生成真 Gemini 端到端未在本輪跑（等 mp3＋金鑰實測）。

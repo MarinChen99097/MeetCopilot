@@ -106,6 +106,11 @@ request-scoped 寫入點（generation、research enrich/ground、image job 建�
 
 ## 8. 版本紀錄
 
+- v1.3（2026-07-20）：**AI 記帳細化（對齊 ezpage 底層 per-call ledger）＋運行時安全網**（使用者拍板「全面對齊 ezpage」＋稅率 ×1.25 套全部 AI）。
+  - **migration 019**（SQLite+PG，ALTER usage_events）：加 `reasoning_tokens`／`cached_input_tokens`（token 五桶＋差別計價：reasoning≈output、cached 較便宜）、`retry_count`、`cost_tax_multiplier`（每列稅率快照，NOT NULL DEFAULT 1.25；含稅＝est_cost_usd × 此值）。**`est_cost_usd` 語意不變＝稅前**，故 §4 #2/#3 admin 端點形狀**不變**（admin 續呈稅前，A1/A2/A3 不受影響）。
+  - **記帳管線**：gemini.ts 取 usageMetadata 的 thoughts/cached；pricing.ts 加 reasoning/cached 分桶單價＋`taxMultiplierFor`／`DEFAULT_TAX_MULTIPLIER`（env `COST_TAX_MULTIPLIER`）；meter-impl 記稅前＋每列稅率快照＋五桶 token。
+  - **運行時安全網**（`ops/metering-context.ts`＋`metering-middleware.ts`）：AsyncLocalStorage 計費脈絡（realtime hub 每場＋AI-using request 邊界），raw GeminiClient 公開方法補記未經 metered wrapper 的呼叫；explicit metering 期間抑制以防雙記。對既有已記帳路徑零影響（走 Metered 變體、且被抑制）。
+  - **org-scoped 花費呈現**（非本契約的平台 admin 範圍）：apps/web `/spend`（owner/admin）走新 `GET /api/org/usage(+events)`，回稅前＋含稅（每列稅率加總）＋reasoning/cached/retry 明細。與 apps/admin 平台主控台並存不重疊。
 - v1.0（2026-07-09）：初版凍結。
 - v1.1（2026-07-09）：吸收 ezpage admin 解剖（`C:\tmp\meetcopilot-recon\ezpage-admin.md`）——
   (a) 驗證模式獲印證（ezpage＝Google OAuth＋後端 email allowlist＋is_admin 布林，與 §1 同構，維持原設計）；

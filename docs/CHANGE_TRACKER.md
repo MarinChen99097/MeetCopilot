@@ -34,6 +34,63 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-20 16:10 | 底層 AI 記帳全面對齊 ezpage：五桶 token＋差別計價＋每列稅率快照＋運行時安全網（migration 019）
+- **工作區**: packages/shared, packages/crm, apps/server, apps/web, docs
+- **類型**: feat
+- **檔案（資料層）**: `packages/crm/migrations/019_usage_detail.sql`(新)＋`migrations-pg/019_usage_detail.sql`(新)、`packages/shared/src/ops-types.ts`(UsageEvent/NewUsageEvent 加新欄)、`packages/crm/src/repos-ops.ts`(record INSERT 加欄)。
+- **檔案（記帳管線）**: `apps/server/src/gemini.ts`(TokenUsage/UsageMetadataLoose/readUsage 取 thoughts/cached＋raw 三方法掛安全網)、`ops/pricing.ts`(ModelPrice/PRICING/FALLBACK 加 reasoning/cached 單價＋estimateCostUsd 差別計價＋DEFAULT_TAX_MULTIPLIER/taxMultiplierFor＋PricingRow/loadPricingOverrides 擴充)、`ops/meter.ts`(MeterResult 加新欄)、`ops/meter-impl.ts`(稅前差別計價＋每列稅率快照＋抑制安全網)、`ops/metered-gemini.ts`(plumb reasoning/cached)。
+- **檔案（安全網）**: `apps/server/src/ops/metering-context.ts`(新，ALS)＋`ops/metering-middleware.ts`(新)、`index.ts`(4 個 AI-using 掛 meterBoundary)、`realtime/hub.ts`(runMeteredForMeeting 包 onAsrFinal/onSignals)。
+- **檔案（呈現）**: `org-routes/usage-queries.ts`(orgUsage/Events 回 posttax＋新 token/tax 欄)、`apps/web/lib/api.ts`(型別)、`components/spend/SpendDashboard.tsx`(改讀後端 posttax＋明細加 reasoning/cached/retry 欄)。
+- **測試/契約**: `ops/metering-safety-net.test.ts`(新 6)、`ops/pricing.test.ts`(+3 差別計價/稅率)、`org-routes/usage-authz.test.ts`(+posttax/稅率斷言)、`docs/ADMIN_CONTRACT.md` v1.3。
+- **改了什麼**:
+  - **緣起**: 使用者問「底層 AI 呼叫邏輯有沒有參考 ezpage」——答：前端有、底層沒有（用 MeetCopilot 既有 Meter 接縫）。調查 ezpage `marketing_backend` 後拍板**全面對齊**＋稅率 ×1.25 套**全部** AI（ezpage 只套生圖）＋防漏安全網走**運行時補記**。
+  - **五桶 token＋差別計價**: gemini usageMetadata 取 `thoughtsTokenCount`→reasoning、`cachedContentTokenCount`→cached；`estimateCostUsd` 改：uncachedInput=(input−cached) 走 input 價、cached 走較便宜 cachedInputPerM（避免雙算）、reasoning 走 reasoningPerM(≈output)。既有無 reasoning/cached 的呼叫成本不變（向後相容，253 測不動）。
+  - **每列稅率快照**: `est_cost_usd` 續為**稅前**；新 `cost_tax_multiplier`（DEFAULT 1.25）每列快照；含稅＝稅前×該列稅率（查詢/顯示層算，改預設不回溯既有列）。admin §4 端點形狀不變（續呈稅前）。
+  - **運行時安全網（對齊 ezpage SDK-boundary autolog）**: ALS 計費脈絡（`runWithMetering`，於 realtime hub 每場＋AI-using request 邊界設 orgId/kind/meetingId/userId/meter）；raw GeminiClient 的 `generateJson`/`generateGrounded`/`embed`（**非** Metered 變體）呼叫後 `safetyNetRecord`——脈絡存在且未抑制時補記一筆。`meter.meter` 以 `withSuppressedMetering` 抑制其 fn 期間的安全網（防與 explicit metering 雙記）。metered wrapper 走 Metered 變體（不掛安全網）→ 天然不雙記。
+  - **org 花費呈現**: `/api/org/usage(+events)` 回稅前＋含稅（SUM(est_cost × cost_tax_multiplier)）＋reasoning/cached/retry；SpendDashboard 改讀後端 posttax（每列稅率）＋明細顯示新欄。
+- **為什麼**: 使用者要底層記帳對齊 ezpage 的成熟度（token 細分準確、每列稅率、raw 呼叫不漏記）。純記帳可觀測性強化＋唯讀呈現；**不動 I1/I2/I3**（未碰 deck patch/approval/HUD）；記帳仍為吞錯副作用、不改業務結果。
+- **驗證**: 全 workspace tsc 綠（shared/crm/server/web）；重建 shared+crm dist；server `vitest run` **46 檔 262 測全綠**（含新 safety-net 6／pricing +3／usage-authz posttax）；crm 65 測（migration 019 從空庫套用＋既有列 DEFAULT 回填）；web `next build` 18 路由綠。未 commit（硬規則 10）。
+- **審後修正（fresh-context 對抗驗證：8 項 7 PASS＋1 真 bug，已修）**: **安全網併發雙記**——`withSuppressedMetering` 用單一布林「存/還原 prev」，僅 LIFO 巢狀正確；deep research 的 grounding 並行池（同脈絡內併發多個 explicit meter，預設併發 2）下，先完成者的 finally 把旗標還原成 false → 讓並行中的裸 grounded 安全網誤放行 → 雙記（org 儀表板系統性高估）。修＝`suppressed` 改**深度計數器**（`{depth}`，任一 explicit meter 在飛即抑制，併發安全）——`metering-context.ts` 三處（interface/withSuppressedMetering ++/--/safetyNetRecord depth>0）＋補併發回歸測試。複驗 server tsc 綠＋safety-net 7 測＋全套 263 測全綠。
+- **/code-review（5 視角 opus→對抗評分→濾≥80）：raw 6→confirmed 0，順修 2 門檻下（皆為本輪新建機制的正確性、修法便宜）**:
+  1. **安全網自我干擾（scores 24/30/50，dormant）**：`safetyNetRecord` 自己的補記也走 `ctx.meter.meter`，而 meter-impl 對每個 fn 一律 `withSuppressedMetering`（depth++）→ 併發的兄弟安全網補記會被自己短暫抬高的 depth 誤抑制而漏記（目前熱路徑無 raw 呼叫故 dormant，但這正是安全網的目的）。修＝安全網補記以 **`als.exit()` 走出 ALS 脈絡**再記，其 meter.meter 的 withSuppressedMetering 見不到 store → 不動 depth；explicit metering 仍在脈絡內照常抑制。補**真 meter-impl 路徑**回歸測試（fakeMeter 測不到 withSuppressedMetering，改用 createMeter+假 repo 驗兩筆併發安全網都落）。
+  2. **org usage day 分組記憶體（score 55）**：`orgUsage` day 分支逐列拉回、from/to 使用者可控 → 加 `USAGE_MAX_WINDOW_MS`(400 天) 守衛（/usage＋/usage/events，超窗 400）。
+  複驗 server tsc 綠＋全套 **264 測全綠**（safety-net 8）。
+- **工作區**: apps/server, apps/web
+- **類型**: feat
+- **檔案（server）**: `apps/server/src/realtime/orchestrator.ts`（geminiFor/groundedMetered 助手＋A/B/C 三處接 metered）、`apps/server/src/train/scoring.ts`（score 加 per-call client override）＋`train-service.ts`（deps 加 gemini、finish 現包 metered client＋userId）＋`train/routes.ts`（傳 gemini＋finish 帶 userId）＝洞 D、`apps/server/src/org-routes/usage-queries.ts`(新)、`apps/server/src/org-routes/index.ts`（+2 路由）、`apps/server/src/org-routes/usage-authz.test.ts`(新)。
+- **檔案（web）**: `apps/web/lib/format.ts`(fmtUsd/fmtCompact)、`apps/web/lib/api.ts`(getOrgUsage/getOrgUsageEvents+型別)、`apps/web/components/spend/SpendDashboard.tsx`(新)、`apps/web/app/[locale]/spend/page.tsx`(新)、`apps/web/components/AppShell.tsx`(nav.admin 加 spend＋coins icon)、`apps/web/messages/{zh-TW,en}.json`(nav.spend)。
+- **改了什麼**:
+  - **緣起**: 使用者要「每次調用 AI 都記錄成本」＋ apps/web 開一個 AI 花費 dashboard（參考 ezpage、稅 ×1.25）。稽核出計費雖大致完整但有 **4 個 AI 呼叫漏記帳**（全走 raw gemini client、不經 Meter）：**A** 補充頁生成（本 session 新加）、**B** 說話者推斷 inferSpeaker（每 ASR 段、量最大）、**C** 會中即時深查 grounded、**D** 訓練評分。
+  - **補記帳（洞 A/B/C，orchestrator）**: 新私有助手 `geminiFor(sessionId,kind,tag)` 依既有 metered 樣板（retrieval/analysis）現包 `meteredGeminiClient`（orgId＋meetingId＋presenter userId，idemPrefix 帶 uuid），無 meter/runtime 退 raw。A＝maybeSuggestSlide 生成走 gm；B＝inferSpeaker 走 gm；C＝`groundedMetered` 手動 `meter.meter`（metered wrapper 對 grounded 透傳不記，故手動；token 以字元/4 估）＝記 gemini_text。
+  - **補記帳（洞 D，train）**: TrainScorer.score 加可選 `client` override；train-service deps 加 raw `gemini`，finish 現包 metered client（gemini_text＋userId）傳給 scorer；finish 簽名加可選 userId，routes 傳 `req.auth.userId`。behaviour 不變（記帳純副作用）。
+  - **org-scoped 花費端點**: 使用者拍板本 org 自己的花費、owner/admin 可見。新 `usage-queries.ts`（`orgUsage`/`orgUsageEvents`，一律 `WHERE org_id=?`、佔位符 `?`、day 走 JS UTC 分桶——與 admin-queries 同構但 org-filtered）＋org-router 加 `GET /api/org/usage?from&to&groupBy=kind|model|day` 與 `/usage/events?...`（皆 `mw(requireManager)` owner/admin 閘）。**不動既有 admin `/api/admin/usage`（platformAdmin）與 by-kind `/api/usage`**。
+  - **前端 dashboard（/spend）**: 導覽 nav.admin 群組（owner/admin 才顯示，沿用 adminOnly）；KPI（含稅總花費/總 tokens/呼叫數）＋日期範圍（近 7/30/90＋date input）＋groupBy 切換（項目/模型/日期）表格（**稅前 → 含稅 ×1.25 雙欄**＋CSS 佔比條）＋逐筆明細抽屜（分頁）。`TAX_MULTIPLIER=1.25` 集中一處、免責文字說明估算值＋含稅=稅前×1.25。純自繪表格/CSS 條、無圖表庫（沿用專案慣例）。
+- **為什麼**: 兌現「AI 呼叫成本可觀測且完整」＋讓使用者在既有前端看本 org 花費。純新增記帳（吞錯副作用、不改業務行為）＋唯讀 org-scoped 查詢；**不動 I1/I2/I3**（未碰 deck patch/approval/HUD 路徑），新端點過 owner/admin 閘且租戶硬隔離（A1 風格）。
+- **驗證**: server `tsc` 綠、`vitest run` **45 檔 253 測全綠**（新 usage-authz.test.ts 5 測：401／member 403／owner 200＋租戶隔離他 org $9.99 不混入／明細 org-scoped／groupBy=model＋非法 400）；web `tsc` 綠、`next build` 18 路由綠（新增 /spend 3.91kB）；messages JSON parse OK＋nav.spend parity。未 commit（硬規則 10）。
+- **審後修正（fresh-context 對抗驗證：8 項全 PASS，1 LOW＋1 一致性順修）**: (1) **洞 C model 標籤不符**——`groundedMetered` 記 `model:inferenceModel`(flash) 但實際 `generateGrounded({prompt})` 未帶 model→用預設 textModel(flash-lite)，dashboard 研究列 model 誤標＋以 flash 費率略高估。修＝`generateGrounded({prompt, model:this.deps.inferenceModel})` 兩處，讓呼叫與記帳一致（且對齊 grounding 升模 flash 慣例——gemini.ts:136 註解＋90s timeout 本就假設 flash）。(2) `/api/org/usage/events` 補 `from>to→400`（與 /usage 一致；原回空結果非崩潰非洩漏）。複驗 server tsc 綠＋12 測（usage-authz 5＋supplement 7）綠。
+
+### 2026-07-20 14:00 | DynamicSlide 對話→補充頁生成橋接（接上生產缺失的一段）＋會議模擬器測試工具
+- **工作區**: apps/server, apps/web
+- **類型**: feat
+- **檔案（server）**: `apps/server/src/config.ts`, `apps/server/src/generation/slide-gen.ts`, `apps/server/src/realtime/orchestrator.ts`, `apps/server/src/realtime/hub.ts`, `apps/server/src/realtime/supplement-slide.test.ts`(新), 及 5 個 test config 字面＋mid-meeting-crm.test.ts orchestrator deps 補新必填欄。
+- **檔案（web）**: `apps/web/lib/mp3-capture.ts`(新), `apps/web/components/sim/MeetingSimulator.tsx`(新), `apps/web/app/[locale]/sim/page.tsx`(新), `apps/web/components/AppShell.tsx`, `apps/web/messages/{zh-TW,en}.json`。
+- **改了什麼**:
+  - **根因**: 全 repo `patch.suggest()`（產生待批准補充頁的唯一入口）**無任何生產呼叫者**，只有測試；`orchestrator.onSignals` 只做 CRM 檢索→info_card＋自動深查。→ DynamicSlide 的 append 機制（I1/I2/patch-service/deck_update/present 渲染）全建好但「會中依對話生成一張補充頁並送批准」這條觸發線從未接上＝真會議永不 append。
+  - **config**: 加 `supplementAutoLimitPerMeeting`（env `SUPPLEMENT_AUTO_LIMIT_PER_MEETING`，預設 8；0＝關閉）。
+  - **slide-gen**: `export const SLIDE_SCHEMA`（原 private）＋新 `generateSupplementSlide(gemini,model,language,{transcriptContext,signalSummary,companyName?,anchorSlide?})`——與 deck 生成共用 prompt 片段＋`sanitizeSlide`（禁 image、空頁回 null）；單頁、maxOutputTokens 2048、attempts 2。
+  - **orchestrator**: 加 `onSuggestSlide(cb)` sink＋`maybeSuggestSlide()`（在 `onSignals` 第 3 步 fire-and-forget 呼叫）。合格訊號 `SUPPLEMENT_TRIGGER_KINDS`（interest/objection/pain/competitor_mention/buying_signal/risk/pricing/next_step/topic_shift；排除 person_mention/landmine）＋節流（`supplementThrottleMs`，預設 env `SUPPLEMENT_THROTTLE_MS`/40s，樂觀佔窗防並發）＋每場配額（`supplementAutoLimitPerMeeting`，成功才計）。`companyName()` best-effort 讀 `core.companies.findById` grounding。`disposeSession` 清 `lastSuggestAt`/`suggestCount`。`OrchestratorDeps` 加 `supplementAutoLimitPerMeeting`＋可選 `supplementThrottleMs`（僅測試覆寫）。
+  - **hub**: 傳 `supplementAutoLimitPerMeeting`；`onSuggestSlide((sid,slide,reason)=>this.patch.suggest(...))`——I2 不變（只入列 HUD 批准佇列，報告者手動 ACCEPT 才 append；patch.act 的 presenterAuth 閘照舊）。I3 不變（suggestion 只到 hud、deck_update 只到 present）。
+  - **web mp3-capture**: `startMp3Capture(file,cb,{speed,onProgress})`——decodeAudioData→OfflineAudioContext 重取樣 16k mono→Int16→250ms/frame 逐 frame `onFrame(ArrayBuffer)`；回傳與 `startCapture` 同形狀 `CaptureController`（getLevel/displaySurface/stop），跑完 `onEnded()`。frame 格式與生產 worklet 一字不差。
+  - **web MeetingSimulator**（/sim，導覽「測試」群組可見，不隱藏）: 選/匯入 deck（輪詢 importStatus，failed 顯示 importError＋poppler 提示）→選 mp3→`createMeeting({title,deckId,companyId?})`→3 條 WS：capture（open 送 consent＋灌 mp3）、present（收 deck_update→縮圖列即時長出新頁、AI 補充頁標綠）、hud（`<HudInner embedded creds>` 真 transcript/signals/建議＋手動接受）。另可開 present/HUD 分頁。API base 顯示於頁面（本機/線上以對應前端開啟）。
+  - **AppShell/i18n**: 新 nav 群組 `nav.test`→item `sim`（`/sim`, icon gauge）；messages 兩檔加 `nav.test`/`nav.sim`（parity 維持）。
+- **為什麼**: 使用者要「匯入音檔模擬會議、看新 PPT 被插到後面」的測試管道；查出 append 生成觸發線為生產缺件，遂補真接線（使用者拍板：補真產品接線＋走真 HUD 手動批准＋入口可切本機/線上）。純新增產出者＋測試工具，不弱化 I1/I2/I3。
+- **驗證**: server `tsc --noEmit` 綠、`vitest run` 44 檔 248 測全綠（含新 supplement-slide.test.ts 7 測：合格觸發/非合格不觸發/節流/配額/關閉/未設定/空頁不計）；web `tsc --noEmit` 綠、`next build` 17 路由綠（新增 /sim 6.7kB）；messages JSON parse OK＋nav.test/sim parity。未 commit（硬規則 10）。
+- **審後修正（fresh-context 對抗驗證抓到 1 真 bug＋2 小瑕疵，全修）**: (1) **consent-on-open 競態**（真 bug、靜默失敗、本機低延遲最易中）——模擬器 capture 只在 WS open 送一次 consent，但 server runtime 由非同步 `ensureRuntime`（兩次 DB 讀後才 `sessions.set`）建立；consent 若早於 runtime→ws-server handler no-op 靜默丟棄→整場音訊被 consent gate 丟→零補充頁。修＝capture `onMessage` 收到 server 在 runtime 建好後才發的 `session_state` 時重送 consent（idempotent 兜底）。(2) 補充頁「本次新增」標記改用 `seedLen`（會議開始時 deck 頁數）取代 `originalCount`——對 native/generated deck（originalCount=0）也正確，不再把全部頁誤標。(3) orchestrator `companyName` 註解移除不實的「每場快取」字樣。三修後 web `tsc --noEmit` 綠。
+- **/code-review 復審（5 視角 opus 並行→每筆對抗式評分→濾 ≥80）：raw 6→confirmed 1（全修）＋2 門檻下小瑕疵順修**:
+  - **confirmed（80，warning，MeetingSimulator.tsx mp3-start effect）**: 該 effect 無 cleanup；`startMp3Capture` 要先 decode（數秒）才產生 controller，若解碼期間卸載/結束，卸載 effect 當下 `captureCtrlRef` 仍 null→stop() 空轉，controller 隨後才建、其 setInterval 對著關閉的 WS 空轉到整檔播畢（資源洩漏）。修＝加 `mountedRef`：解碼完成的 `.then` 檢查已卸載即 `c.stop()`；卸載 effect 設 `mountedRef=false`＋stop。**刻意放 ref 而非 start-effect cleanup**，避免 WS 每次重連（status 變動重跑 effect）誤停灌流。
+  - **順修（門檻下，低風險利多）**: (a) seed `getDeck().catch` 不再吞錯——新 `deckErr` state，失敗顯示「⚠ deck 載入失敗」取代永遠「載入中…」＋避免 seedLen=0 誤標（score 44）。(b) `mp3-capture.decodeToPcm16` 加 `MAX_FILE_BYTES`(200MB) 前置守衛＋友善錯誤，擋超大檔吃爆分頁記憶體（score 28）。
+  - **記為取捨不改**: orchestrator 每場配額只在成功計（空頁不計）＝刻意設計，spend 另由節流（樂觀佔窗 40s/次）bound，非 runaway，flash tier 成本極小（score 60，門檻下）；`SUPPLEMENT_TRIGGER_KINDS` 硬列字串＝合格訊號本就是 SIGNAL_KINDS 的刻意子集（score 13）；三視圖共置不破 I3＝broadcast role-filtered（正確判定非破壞，score 7）。修後 web `tsc --noEmit` 綠。
+
 ### 2026-07-19 23:58 | E2E 三尾巴（Threads 登入牆／finalHandles 二次社群抓取／FB·IG 摘要放寬）＋照片 v3（DOM 鄰近＋Google CSE）
 - **工作區**: apps/server
 - **類型**: fix＋feat

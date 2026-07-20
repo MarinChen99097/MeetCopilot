@@ -36,6 +36,38 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-20 | 底層 AI 記帳全面對齊 ezpage（五桶 token＋差別計價＋每列稅率＋運行時安全網）
+- **誰決定**: 使用者（問「有無參考 ezpage 底層」後拍板）＋AskUserQuestion 兩題＋Fable 裁決實作
+- **決策**:
+  1. 使用者問「有參考 ezpage 的底層 AI 呼叫邏輯設計嗎？」——誠實答：**前端花費頁有參考 ezpage、底層記帳沒有**（用 MeetCopilot 既有 `Meter`/`meteredGeminiClient`/`pricing`）。遂調查 ezpage `marketing_backend`（`llm_client.py`/`agent_logging.py`/`log_pricing.py`）底層設計並比對。
+  2. **兩題拍板**：對齊深度＝**全面對齊 ezpage**（安全網＋reasoning/cached 細分＋差別計價＋每列稅前/含稅/稅率快照）；稅率 ×1.25 套**全部 AI**（ezpage 只套生圖，使用者要當整體 markup）；防漏安全網＝**運行時補記（最像 ezpage 的 SDK-boundary autolog）**。
+  3. Fable 實作裁決：`est_cost_usd` **維持稅前**（admin §4 端點與既有測試不破）＋新 `cost_tax_multiplier` 每列快照（含稅顯示層/查詢層 ×該列稅率）；安全網用 **AsyncLocalStorage** 脈絡＋raw client 公開方法補記＋`meter.meter` 抑制防雙記（**不重改所有既有已驗證的 metered 呼叫點**，故選「運行時補記」而非「單一記帳點重構」）；差別計價避免雙算（input 內含 cached → uncached 走 input 價、cached 走便宜價；reasoning 為額外 output）。
+- **脈絡與理由**: ezpage per-call ledger 較成熟（token 五桶、每列稅率、monkeypatch 補記 raw 呼叫），MeetCopilot 較粗（僅 input/output、無安全網、顯示層固定 ×1.25）。使用者要底層真正對齊。
+- **考慮過的替代**: 靜態守衛安全網（否——使用者要運行時補記）；單一記帳點 ALS 重構（否——回歸風險最高、要重改所有已驗證呼叫點）；稅只套生圖如 ezpage（否——使用者要套全部當整體 markup）；把含稅烤進 est_cost（否——稅前留真相值、每列稅率快照可回溯不變、顯示層算含稅）；改 admin §4 端點呈現含稅（否——範圍外、admin 續呈稅前避免破契約/測試）。
+- **影響**: migration 019（usage_events +4 欄，SQLite+PG）、shared ops-types、crm repos-ops、server gemini/pricing/meter/meter-impl/metered-gemini/metering-context(新)/metering-middleware(新)/index/hub/org-routes usage-queries；web api.ts/SpendDashboard；新測 metering-safety-net＋pricing/usage-authz 擴充；ADMIN_CONTRACT v1.3。I1/I2/I3 未觸及；記帳仍吞錯副作用不改業務。未 commit（等使用者核准）。待使用者：核准 commit/部署（動 server＋web＋packages；migration 019 開機自動套）。
+
+### 2026-07-20 | AI 花費完整記帳 + apps/web org-scoped 花費 dashboard（稅 ×1.25）
+- **誰決定**: 使用者（指示）＋AskUserQuestion 兩題拍板＋Fable 裁決實作
+- **決策**:
+  1. 使用者指示：apps/web 開「admin dashboard」顯示花了多少 token、用哪些 AI model、成本明細（參考 ezpage admin console 的 AI 花費明細），**稅率 ×1.25**；且「成本要寫進最底層，確保每次調用 AI 都記錄成本」。
+  2. 稽核發現：計費（Meter→usage_events）大致完整但有 **4 個 AI 呼叫走 raw client 漏記帳**——補充頁生成（本 session 新加）、說話者推斷、會中 grounded 深查、訓練評分。→ 全補（照既有 metered 樣板；train 需把 raw gemini 注入 service、finish 現包 metered client）。
+  3. **兩題拍板（AskUserQuestion）**：花費範圍＝**本 org 自己的花費**（org-scoped，非平台跨 org；理由：放 apps/web 產品前端、用既有 org 登入即可、不與現有 apps/admin 平台主控台重疊、符合「我想知道這功能/我的用量花多少」）；可見性＝**owner/admin**（沿用 nav.admin adminOnly）。稅率一律 ×1.25、以「稅前 → 含稅」雙欄呈現（比照 ezpage token-usage），且我不另問（使用者已明示）。
+  4. Fable 實作裁決：新 org-scoped 端點 `GET /api/org/usage(+events)`（一律 WHERE org_id=?，owner/admin 閘），**不動**既有 admin `/api/admin/usage`（platformAdmin）與 by-kind `/api/usage`；稅率 markup 放**顯示層**（`TAX_MULTIPLIER=1.25` 前端常數，後端仍記稅前 est_cost 為真相來源，透明可調）；圖表沿用專案「自繪 CSS/SVG、無圖表庫」慣例（非 ezpage 的 recharts）。
+- **脈絡與理由**: 使用者想觀測 DynamicSlide 補充頁等 AI 功能的實際花費。既有 apps/admin 是平台營運跨 org 視角、需 platformAdmin 且 apps/web 的 useMe 不帶該旗標；org-scoped 才能用產品前端現有登入直接看、且天然租戶隔離。ezpage 的 token-usage 頁證實「稅前/含稅雙欄＋markup 1.25（源 gpt_image.cost_tax_multiplier）」是可參照的呈現。
+- **考慮過的替代**: 全平台跨 org 視角（否——需在 apps/web 補 platformAdmin 管線且與 apps/admin 重疊）；稅率烤進儲存的 est_cost（否——顯示層 markup 較透明可調，最底層留稅前真相值）；引 recharts（否——專案慣例自繪 SVG/CSS）；只補洞 A（否——使用者要「每次調用 AI 都記錄」，四洞全補）；member 也可見（否——owner/admin）。
+- **影響**: server orchestrator（geminiFor/groundedMetered＋A/B/C）、train（scoring/train-service/routes＝洞 D）、org-routes（usage-queries.ts＋2 路由＋usage-authz.test）；web format.ts/api.ts/SpendDashboard/spend route/AppShell（nav.admin+coins icon）/messages×2。I1/I2/I3 未觸及；新端點 owner/admin 閘＋org 硬隔離。未 commit（等使用者核准）。待使用者：本機看需登入 owner/admin 帳號；花費要有數字需先跑過 AI 功能（且本機設 GEMINI_API_KEY）；核准 commit/部署（動 server＋web）。
+
+### 2026-07-20 | DynamicSlide 補充頁生成橋接為生產缺件 → 補真接線；測試工具用 mp3 模擬
+- **誰決定**: 使用者（AskUserQuestion 三題皆拍板）＋Fable 裁決橋接設計細節
+- **決策**:
+  1. 使用者要「打造測試用管道＋腳本，匯入音檔模擬會議、配合 PPT（`AI金融商品應用v1.pdf`）看到新增 PPT 被插在後面」；假設三人會議＝2 客戶＋1 報告者；測試入口直接寫進前端、不隱藏。
+  2. 調查揭露**生產缺件**：`patch.suggest()` 無任何生產呼叫者，`onSignals` 只做 CRM info_card＋自動深查——DynamicSlide 的 append 機制全建好但「對話→生成補充頁→送批准」觸發線從未接上，真會議永不 append。
+  3. 使用者三拍板：(a) **補真正的產品接線**（非測試專用觸發器）——分析訊號→Gemini 生一張補充頁→進批准佇列；(b) **走真 HUD 手動接受**（保留完整 I2，不自動批准）；(c) 執行環境**入口可切、本機/線上兩邊都支援**（缺件偵測與提示寫進頁面）。
+  4. Fable 橋接設計：生成函式放 `slide-gen.ts`（與 deck 生成共用 prompt＋sanitize）；orchestrator 加 `onSuggestSlide`＋`maybeSuggestSlide`（合格訊號集＋節流 40s＋每場配額 8，env 可調）；hub 把回呼接到 `patch.suggest`；補充頁生成 grounding＝近期逐字＋觸發訊號＋對方公司名；語言先固定 zh-TW。測試工具＝新 `/sim` 頁（導覽「測試」群組可見），3 條 WS（capture 灌 mp3／present 收 deck_update 畫縮圖列／HudInner 真批准），mp3 走 `startMp3Capture` 解碼成與生產 worklet 同格式的 16k mono PCM。
+- **脈絡與理由**: 使用者以為 DynamicSlide 已能會中長頁；四路 Opus 調查（音訊管線／分析→append／前端／匯入）親自查證確認觸發線缺失，遂把「測試任務」升級為「補完產品缺件＋測試工具」。補真接線讓測試反映真實行為、也讓產品真正兌現承諾。
+- **考慮過的替代**: 只做測試專用觸發器（否——DynamicSlide 在真會議仍不會 append，測試不具代表性）；測試模式自動接受（否——使用者選走真 HUD 手動批准保 I2）；UI 內即時切換 API base 打線上（否——本機→線上跨 origin 會撞 server CORS allowlist，改採 env-based：以對應前端開啟本頁，頁面顯示當前 API base）；補充頁繼承 anchor theme（暫略——orchestrator 無 deck slides，PDF 原始頁本無 theme token 可繼承，渲染器退 app 預設反而讓 AI 補充頁在視覺上與原始頁區隔；記為小債）。
+- **影響**: `config.ts`(supplementAutoLimitPerMeeting)、`generation/slide-gen.ts`(generateSupplementSlide＋export SLIDE_SCHEMA)、`realtime/orchestrator.ts`(onSuggestSlide/maybeSuggestSlide/companyName)、`realtime/hub.ts`(佈線)、`realtime/supplement-slide.test.ts`(新 7 測)、5 test config 字面＋mid-meeting-crm.test.ts；web `lib/mp3-capture.ts`／`components/sim/MeetingSimulator.tsx`／`app/[locale]/sim/page.tsx`／`AppShell.tsx`／messages×2。I1/I2/I3 未弱化（只新增建議產出者，批准/append/HUD 隔離不變）。未 commit（等使用者核准）。待使用者：本機測需裝 poppler(pdftoppm) 讓 PDF 轉原始頁＋GEMINI_API_KEY 跑 ASR/生成；或打線上；隨後提供 mp3 實測。
+
 ### 2026-07-19 | 照片來源指定：官網＋Google 圖片（使用者補充指示）
 - **誰決定**: 使用者
 - **決策**: 照片「可以從官網或是 Google 圖片找到」——照片獵取要吃這兩個來源。
