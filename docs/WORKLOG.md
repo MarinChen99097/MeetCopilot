@@ -229,3 +229,15 @@
 - **commit＋部署（使用者核准「好」）**：commit **`606f7ee`**（17 檔）。**server＋web 皆重建**：build server `df93c5e7-263f-43a0-9a67-a9edb376aac4`／web `615c9d03-2ae8-40ef-ab27-6d9495cfa964` 皆 SUCCESS → server rev **00019-mzw**（`services update --image` 保 env，含 00018 補的 `WS_PUBLIC_BASE`＋`--no-cpu-throttling`，env count 18 未吹）＋web rev **00015-kzp**（`run deploy` 帶 NEXT_PUBLIC_API_BASE）。**本輪無新 migration、無新必填 env**。冒煙全綠：`/api/health`+`/api/ready` 200＋web `/`307＋`/zh-TW`·`/zh-TW/sim`·`/zh-TW/spend` 200＋`/api/org/usage` unauth 401＋`WS_PUBLIC_BASE` 仍在。DEPLOY.md 版本節已更新。
 - **⚠ 尚未 push origin main**（本地 commit `606f7ee`；Cloud Build 從本地 tarball 建置故部署不需 push，但 origin 落後於已部署狀態——待使用者確認是否 push 備份）。
 - **部署後待使用者**：用桌面乾淨的 `meetcopilot-測試音檔_AI金融商品.wav` 重跑 `/sim` 驗收——HUD 可讀＋markdown 正常、補充頁不重疊、生成頁採淺底配色貼近匯入簡報。
+
+## 2026-07-23 session（/sim 實測二輪回饋——補充頁繼承匯入配色＋版型多樣＋版面預算，已部署）
+
+- **緣起**：使用者用 `/sim`（07-21 匯入的 deck）實測，回報 3 點：①生成補充頁仍深色、與淺色匯入簡報不匹配 ②簡報下緣被裁 ③版型過於一致（都是 features 卡格）。
+- **診斷（2 opus agent 平行，含撈線上 Cloud SQL 該 deck 實際 theme 值）**：
+  - ①**根因＝anchor 未接**（真 bug，**非「要重新匯入」**）：前輪已讓匯入頁逐頁抽色帶 theme（線上實查：deck 19 頁匯入頁皆有淺色 theme `#f6f7f9`／末頁真實主色 `#911d22`/`#1595f7`——producer 正常），但 `orchestrator.maybeSuggestSlide` 呼叫 `generateSupplementSlide` **從未傳 anchorSlide** → `sanitizeSlide(raw, undefined)` → 補充頁 theme=undefined → 前端退 app 深色（consumer 斷線）。前輪只做「匯入抽色＋SlideRenderer 衍生」，漏了 orchestrator 這條接線。
+  - ②內容量 ~59cqw ≫ 可用 ~42.3cqw（eyebrow+heading+subheading+4 feature 卡超出固定 16:9、body overflow:hidden），且 `generateSupplementSlide` 未跑 QA。
+  - ③`TEMPLATE_INTENT_ZH` 叫 content 頁「優先 features 填滿」、補充頁又無「依訊號選版型」指引 → 千篇一律 features。
+- **修**：`orchestrator.ts` 新私有 `deckTailSlide(orgId, deckId?)`（`core.decks.findWithSlides` 取 `slides.at(-1)?.spec`、deckId 缺/失敗吞錯回 undefined），`maybeSuggestSlide` 撈 deck 尾頁當 anchor 傳入 → 補充頁繼承匯入 deck 配色（含級聯：後續頁 anchor＝前一張已themed 補充頁）；`slide-gen.ts` 補充頁 system prompt 加「補充頁專屬規則」＝依當下訊號選版型（數據→stats/chart、對比→two-col、清單→bullets、單點→section/paragraph，僅並列多重點才 features；覆寫 content 優先 features）＋版面預算（features≤3、用 features 不放 subheading、每張 desc 一句話 ~20 全形字、不放 eyebrow、一頁一重點）；`studio-present.css` `.feature__desc` 加 `-webkit-line-clamp:2` 安全網（過長 desc 省略號、不硬裁整卡）。不動 I1/I2/I3（只補 anchor 唯讀讀取＋prompt/CSS）。
+- **驗證**：fresh-context agent——server typecheck＋vitest **47 檔 269 測全綠**（`supplement-slide` 7 測如預期過：測試 runtime 無 deckId → `deckTailSlide` 早退不碰 core；`mid-meeting-crm`／I2 authz 相關測綠）＋web typecheck＋`next build` 18 路由。
+- **commit＋部署（使用者核准「要」）**：commit **`7d77115`**（4 檔）。**server＋web 皆重建**：build server `79136327-5f74-4fad-a210-1b73acc97ef7`／web `4f92d4ea-6965-420a-879c-0d08539f56aa` 皆 SUCCESS → server rev **00020-q28**（`services update --image` 保 env，`WS_PUBLIC_BASE`＋`--no-cpu-throttling`，env count 18 未吹）＋web rev **00016-m7l**（`run deploy` 帶 NEXT_PUBLIC_API_BASE）。**本輪無新 migration/env/相依**。冒煙全綠：`/api/health`+`/api/ready` 200＋web `/zh-TW`·`/zh-TW/sim` 200＋`/api/org/usage` unauth 401。DEPLOY.md 版本節已更新、ROM 記「反轉前輪『補充頁不繼承 theme＝可接受』記債」。（CHANGE_TRACKER 該筆初寫誤植 07-21，已更正 07-23。）
+- **部署後待使用者**：**不用重新匯入**——anchor 是生成當下即時撈 deck 尾頁，現有 deck 已帶淺色 theme；直接開一場新 `/sim` 即可看到補充頁淺底配色＋版型有變化＋不被裁。

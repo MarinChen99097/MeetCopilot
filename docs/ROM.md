@@ -36,6 +36,13 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-23 | /sim 二輪回饋：補充頁「必須繼承匯入 deck 配色」（推翻前輪記債）
+- **誰決定**: 使用者（回報生成頁仍深色/下緣切/版型單一）＋Fable（診斷後修法）
+- **決策**: **推翻** 2026-07-20 WORKLOG 記債「補充頁未繼承 anchor theme（PDF 原始頁本無 theme，渲染器退 app 預設反而讓 AI 頁視覺區隔＝可接受）」。現況已變：前輪已讓匯入頁逐頁抽色帶 theme，故補充頁**應主動繼承** deck 尾頁 theme（在 `orchestrator.maybeSuggestSlide` 撈 deck 尾頁當 anchor）。並定調補充頁生成要「依訊號選版型（不千篇一律 features）＋守版面預算（不超出被裁）」。
+- **脈絡與理由**: 使用者 /sim 二輪實測，生成補充頁仍是 app 深色紫。2 opus agent 平行診斷（含撈線上 Cloud SQL 該 deck 實際 theme 值）證明：匯入端抽色**有效**（19 頁皆帶淺色 theme），但 `maybeSuggestSlide` 呼叫 `generateSupplementSlide` 時**從未傳 anchorSlide**（前輪只做匯入抽色＋SlideRenderer 衍生，漏了 orchestrator 這條 consumer 接線）→ theme=undefined → 退深色。屬前輪不完整，非設計取捨。
+- **考慮過的替代**: 叫使用者重新匯入（否——查證後確認 deck 已有 theme，是 anchor 未接，重匯無用）；anchor 取「第一張匯入頁」而非尾頁（否——尾頁才對，且支援補充頁級聯繼承）。
+- **影響**: `apps/server/src/realtime/orchestrator.ts`（新 `deckTailSlide`＋傳 anchor）、`slide-gen.ts`（補充頁 prompt 版型決策＋版面預算）、`apps/web/app/studio-present.css`（`.feature__desc` 2 行截斷安全網）。不動 I1/I2/I3。已部署 server 00020-q28／web 00016-m7l。
+
 ### 2026-07-20 | /code-review 部署前把關：pptx 圖表色 WYSIWYG 修正
 - **誰決定**: 使用者（AskUserQuestion 選「修 pptx 匯出對齊」）
 - **決策**: `/code-review`（5 opus 視角對抗式）對本輪 /sim 修復抓到**唯一 ≥80 finding**（信心 88，Warning）——`SlideRenderer` 螢幕端在有顯式主色時衍生 `--slide-accent-2/-3` 後，pptx 匯出 `chartPalette` 仍固定紫粉（7c6cff/ff5d9e）→ themed deck 多序列圖表「螢幕 ≠ 匯出」。使用者選「**修 pptx 匯出對齊**」（非撤銷螢幕衍生、非只改註解）。已在 `pptx-render.ts` 鏡射衍生（見 CHANGE_TRACKER 19:40）。

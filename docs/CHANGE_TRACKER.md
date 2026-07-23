@@ -34,7 +34,7 @@
 
 <!-- TRACKER_BELOW -->
 
-### 2026-07-21 14:40 | /sim 實測二輪：補充頁繼承匯入配色（接上遺漏的 anchor）＋版型多樣＋版面預算（下緣不切）
+### 2026-07-23 15:30 | /sim 實測二輪：補充頁繼承匯入配色（接上遺漏的 anchor）＋版型多樣＋版面預算（下緣不切）
 - **工作區**: apps/server, apps/web
 - **類型**: fix
 - **檔案**: `apps/server/src/realtime/orchestrator.ts`、`apps/server/src/generation/slide-gen.ts`、`apps/web/app/studio-present.css`
