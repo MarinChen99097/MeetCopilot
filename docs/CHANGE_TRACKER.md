@@ -34,6 +34,17 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-21 14:40 | /sim 實測二輪：補充頁繼承匯入配色（接上遺漏的 anchor）＋版型多樣＋版面預算（下緣不切）
+- **工作區**: apps/server, apps/web
+- **類型**: fix
+- **檔案**: `apps/server/src/realtime/orchestrator.ts`、`apps/server/src/generation/slide-gen.ts`、`apps/web/app/studio-present.css`
+- **改了什麼**:
+  - **生成頁仍深色不匹配（根因）**: 前輪做了匯入端逐頁抽色（`slide.theme`）＋`SlideRenderer` 衍生，但 `orchestrator.maybeSuggestSlide` 呼叫 `generateSupplementSlide` 時**從未傳 `anchorSlide`** → `sanitizeSlide(raw, undefined)` → 補充頁 `theme=undefined` → 前端退 app 深色。（線上實查：最新 deck 19 頁匯入頁**皆有淺色 theme**，`#f6f7f9`／末頁真實主色 `#911d22`/`#1595f7`——producer 正常、consumer 斷線。）修：新增私有 `deckTailSlide(orgId, deckId?)`＝`core.decks.findWithSlides` 取 `slides.at(-1)?.spec`（deckId 缺/撈失敗/無 slide → undefined，try/catch 吞錯不阻斷）；`maybeSuggestSlide` 撈 deck 尾頁當 anchor 傳入 → 補充頁繼承匯入 deck 配色（含級聯：後續補充頁 anchor＝前一張已themed 補充頁）。
+  - **版型太單一**: `generateSupplementSlide` system prompt 加「補充頁專屬規則」——依當下訊號性質挑版型（數據→stats/chart、我方vs競品/對比→content＋two-col、清單→bullets、單點/報價/下一步→section 或 paragraph，僅並列 3-4 獨立重點才 features），明文覆寫 `TEMPLATE_INTENT_ZH` 的「content 優先 features」。
+  - **下緣被裁**: 同 prompt 加「版面預算」——用 features 時不放 subheading（大標直接帶重點）、features≤3、每張 desc 一句話（~20 全形字）、不放 eyebrow、一頁一重點。`studio-present.css` `.feature__desc` 加 `-webkit-line-clamp:2`＋`box-orient`＋`overflow:hidden` 安全網（過長 desc 省略號收尾、不硬裁整卡；正常一句話 desc 與 studio deck 無感）。
+- **為什麼**: 使用者 `/sim` 二輪實測回報：生成頁仍深色不匹配、下緣被切、版型太單一。2 opus agent 平行診斷（含撈線上 deck 實際 theme 值）定位 anchor 未接為深色根因。不動 I1/I2/I3（只補 anchor 唯讀讀取＋prompt/CSS）。
+- **驗證**: fresh-context agent——server typecheck PASS、server `vitest` **47 檔 269 測全綠**（`supplement-slide` 7 測如預期過：測試 runtime 無 deckId → `deckTailSlide` 早退不碰 core；orchestrator/I2 authz 相關測皆綠）、web typecheck＋`next build` 18 路由 PASS。未 commit（硬規則 10）。
+
 ### 2026-07-20 19:40 | code-review 修正：pptx 匯出圖表色對齊螢幕衍生（維持 WYSIWYG 不變量）
 - **工作區**: apps/server
 - **類型**: fix

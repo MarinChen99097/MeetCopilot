@@ -462,6 +462,14 @@ export async function generateSupplementSlide(
         `你是會議中的即時簡報補充頁生成器。只產生「一張」補充投影片。` +
         `template 欄位只能是以下 enum 值之一：${AI_GENERATION_TEMPLATES.join(", ")}。` +
         `${BLOCK_SHAPE_PROMPT_ZH}${TEMPLATE_INTENT_ZH}${DESIGN_PRINCIPLES_ZH}` +
+        `【補充頁專屬規則，優先於上述通則】` +
+        `(1) 依「當下對話訊號」的性質挑版型，切勿每張都用 features 卡格——` +
+        `數據/成效/ROI/百分比→stats（3-4 個大數字 stat）或 content＋一個 chart；` +
+        `我方 vs 競品、兩案對比→content＋two-col；` +
+        `步驟/條件/清單→content＋bullets（≤5 條、每條一行）；` +
+        `單一要點/定義/報價/下一步→section（大標＋一句 subheading）或 content＋一段短 paragraph；` +
+        `唯有並列 3-4 個各自獨立的重點時才用 features。` +
+        `(2) 版面預算（固定 16:9 版面、內容過多會被裁掉，務必放得下）：用 features 時「不要」再放 subheading（讓大標直接帶重點）、features 至多 3 張、每張 desc 一句話（約 20 全形字內）；一頁只聚焦一個重點、寧可少而精；不要放 eyebrow。` +
         `視覺主題不由你決定（系統會沿用鄰頁）。全部輸出語言：${language}。`,
       prompt,
       schema: SLIDE_SCHEMA,

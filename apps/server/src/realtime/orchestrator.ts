@@ -219,6 +219,9 @@ export class CrmCopilotOrchestrator implements CopilotOrchestrator {
     const transcriptContext = (this.context.get(sessionId) ?? []).slice(-SUPPLEMENT_CONTEXT_MAX).join("\n");
     const signalSummary = triggers.map((s) => `${s.label}（${s.kind}）`).join("；");
     const companyName = await this.companyName(sessionId);
+    // anchor＝deck 目前最後一張，讓補充頁「繼承匯入 deck 的配色（theme）」——否則 theme=undefined → 前端退 app 深色，
+    // 與淺色匯入簡報格格不入。best-effort：撈不到就不帶 anchor（渲染器退預設），不阻斷生成。
+    const anchorSlide = await this.deckTailSlide(runtime.orgId, runtime.deckId);
 
     // 記帳（洞 A）：走 metered client，補充頁生成成本記為 gemini_text（歸屬 orgId＋meetingId＋presenter）。
     const gm = this.geminiFor(sessionId, "gemini_text", "supp");
@@ -227,6 +230,7 @@ export class CrmCopilotOrchestrator implements CopilotOrchestrator {
         transcriptContext,
         signalSummary,
         companyName,
+        anchorSlide,
       }),
       SUPPLEMENT_DEADLINE_MS,
       "copilot.supplementSlide",
@@ -236,6 +240,20 @@ export class CrmCopilotOrchestrator implements CopilotOrchestrator {
     this.suggestCount.set(sessionId, (this.suggestCount.get(sessionId) ?? 0) + 1);
     const reason = triggers[0]?.label ? `依對話補充：${triggers[0].label}`.slice(0, 80) : "依對話補充";
     this.suggestSlideCb(sessionId, slide, reason);
+  }
+
+  /**
+   * 撈 deck 目前最後一張 slide 當補充頁的 anchor（供繼承 theme/配色）。deckId 缺、撈失敗、無 slide → undefined
+   * （呼叫端不帶 anchor，渲染器退 app 預設）。唯讀、bounded、吞錯——絕不阻斷補充頁生成。
+   */
+  private async deckTailSlide(orgId: string, deckId: string | undefined): Promise<SlideSpec | undefined> {
+    if (!deckId) return undefined;
+    try {
+      const dws = await this.deps.core.decks.findWithSlides(orgId, deckId);
+      return dws?.slides.at(-1)?.spec;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

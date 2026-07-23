@@ -146,7 +146,8 @@
 .feature__icon { flex: none; }
 .feature__icon svg { width: 4.6cqw; height: 4.6cqw; color: var(--slide-accent); display: block; }
 .feature__title { font-size: 2.5cqw; font-weight: 700; line-height: 1.2; }
-.feature__desc { font-size: 1.95cqw; color: var(--slide-muted); margin-top: 0.7cqw; line-height: 1.4; }
+/* 安全網：過長 desc 以 2 行省略號收尾，避免整卡超出固定 16:9 版面被硬裁（正常一句話的 desc 不受影響）。 */
+.feature__desc { font-size: 1.95cqw; color: var(--slide-muted); margin-top: 0.7cqw; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 .slide-block--stat { display: flex; flex-direction: column; gap: 0.4cqw; }
 .stat__value {
