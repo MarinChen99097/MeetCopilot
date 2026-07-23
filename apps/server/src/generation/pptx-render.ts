@@ -267,7 +267,9 @@ function addFeaturesGrid(
   features.forEach((f, i) => {
     const c = i % cols;
     const r = Math.floor(i / cols);
-    const cx = x + c * (colW + colGap);
+    // 落單在最後一列的卡片（奇數張的最後一張，含單張）→ 置中，避免右下留空（對齊螢幕 .feat-count-3 三角排版）。
+    const isLoneLast = i === features.length - 1 && c === 0 && r === rows - 1;
+    const cx = isLoneLast ? x + (w - colW) / 2 : x + c * (colW + colGap);
     const cy = y + r * (rowH + rowGap);
     const runs: PptxGenJS.TextProps[] = [
       { text: "▪  ", options: { color: theme.accent, bold: true } },

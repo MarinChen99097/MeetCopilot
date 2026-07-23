@@ -34,6 +34,14 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-23 18:40 | features 恰好 3 個要點改三角形排版（2 上＋1 置中下；螢幕＝匯出一致）
+- **工作區**: apps/web, apps/server
+- **類型**: fix
+- **檔案**: `apps/web/components/slide/SlideRenderer.tsx`、`apps/web/app/studio-present.css`、`apps/server/src/generation/pptx-render.ts`
+- **改了什麼**: 使用者兩度回報「3 個要點排成 2 上＋1 左下、右下留空、不好看，要三角形」。修：`SlideRenderer` features case 加 `feat-count-${length}` class；`studio-present.css` 新增 `.slide-block--features.feat-count-3` 改 `display:flex;flex-wrap:wrap;justify-content:center`＋`.feature flex:0 1 calc(50%-1.2cqw)`→前兩張一列、第三張換行置中（2 上＋1 置中下三角排列，不留空右下角；2/4 個維持 2×2 grid）。**pptx 匯出同步**：`addFeaturesGrid` 對「落單在最後一列的卡片」（奇數張最後一張，含單張）改置中 `cx = x + (w-colW)/2`，對齊螢幕三角排版（維持螢幕＝匯出 WYSIWYG，比照先前圖表色一致修正）。
+- **為什麼**: 生成/匯入簡報的 features 3 項排版不美觀。純視覺佈局；不動 I1/I2/I3、不改 SlideSpec 契約。
+- **驗證**: web typecheck＋`next build` 全綠、server typecheck＋`vitest` 48 檔全綠（pptx-merge/pdf-merge 不破，無測試斷言 feature 座標）。未 commit（硬規則 10）。
+
 ### 2026-07-23 16:20 | CRM Phase A Cycle 1：手動解鎖對練（training_unlocked）＋新增主管補欄＋子表重爬不覆寫人工值
 - **工作區**: packages/shared, packages/crm, apps/server, apps/web
 - **類型**: feat

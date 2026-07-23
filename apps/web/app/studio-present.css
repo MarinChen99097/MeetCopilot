@@ -134,6 +134,9 @@
 /* min-height:0 讓 flex:1 的 features 能真正縮到可用高度；align-content:safe center 保留置中，
    但內容超出時退回 start（往下裁切）而非往上溢出、疊到上方 chart/stat 的標籤帶（重疊 bug）。 */
 .slide-block--features { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2.4cqw; align-content: safe center; }
+/* 恰好 3 個要點：改 flex-wrap 置中 → 前兩張一列、第三張換行置中（2 上＋1 置中下的三角排列，不留空的右下角）。2/4 個維持 2×2。 */
+.slide-block--features.feat-count-3 { display: flex; flex-wrap: wrap; justify-content: center; }
+.slide-block--features.feat-count-3 .feature { flex: 0 1 calc(50% - 1.2cqw); min-width: 0; }
 .feature {
   display: flex;
   gap: 2.2cqw;

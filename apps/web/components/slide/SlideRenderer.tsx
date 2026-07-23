@@ -127,7 +127,7 @@ function renderBlock(block: SlideBlock, key: number): ReactNode {
 
     case "features":
       return (
-        <div key={key} className="slide-block slide-block--features">
+        <div key={key} className={`slide-block slide-block--features feat-count-${block.features.length}`}>
           {block.features.map((f, i) => (
             <div key={i} className="feature">
               <span className="feature__icon">
