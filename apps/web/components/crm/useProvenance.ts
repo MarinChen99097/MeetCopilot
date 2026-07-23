@@ -84,7 +84,7 @@ export function useEntityProvenance(
   );
 
   const save = useCallback(
-    async (fieldName: string, value: string) => {
+    async (fieldName: string, value: unknown) => {
       mark(setBusySave, fieldName, true);
       try {
         await patchFn(entityId, { [fieldName]: value });

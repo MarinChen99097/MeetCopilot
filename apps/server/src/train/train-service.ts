@@ -23,7 +23,7 @@ import type { TrainScorer } from "./scoring.js";
 import type { Meter } from "../ops/meter.js";
 import type { GeminiClient } from "../gemini.js";
 import { meteredGeminiClient } from "../ops/metered-gemini.js";
-import { buildPersonaPrompt, personaReadiness, trustedFieldSet, passesGate } from "./persona.js";
+import { buildPersonaPrompt, personaReadiness, trustedFieldSet, canTrain } from "./persona.js";
 
 export interface TrainService {
   /** List trainable contacts (only those whose persona fields pass the verified gate). */
@@ -102,7 +102,7 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
         for (const c of contacts) {
           const prov = await core.provenance.listForEntity(orgId, "contact", c.id);
           const readiness = personaReadiness(trustedFieldSet(prov));
-          if (!passesGate(readiness)) continue; // 逐欄信任閘：無任何已驗證 persona 欄位 → 不可對練
+          if (!canTrain(readiness, c.trainingUnlocked)) continue; // 逐欄信任閘 OR 手動解鎖（R4c）
           out.push({
             contactId: c.id,
             fullName: c.fullName,
@@ -123,10 +123,10 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
       const prov = await core.provenance.listForEntity(orgId, "contact", contact.id);
       const trusted = trustedFieldSet(prov);
       const readiness = personaReadiness(trusted);
-      if (!passesGate(readiness)) {
+      if (!canTrain(readiness, contact.trainingUnlocked)) {
         throw new TrainError(
           "not_ready",
-          "this contact has no verified persona fields — confirm/fill persona in CRM before training",
+          "this contact has no verified persona fields — confirm/fill persona in CRM, or unlock it manually, before training",
         );
       }
 

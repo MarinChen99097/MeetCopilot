@@ -233,6 +233,40 @@ describe("trust integration: human value beats crawler", () => {
   });
 });
 
+// A5a：把「human value beats crawler」延伸到 company_product 子表（child-upsert 加 entityType + trustedFieldsOf）。
+describe("A5a — 子表 human value beats crawler（company_product）", () => {
+  it("PATCH 產品 description（human）後，重爬同名產品不覆寫該欄", async () => {
+    const c = await core.companies.create(ORG, { name: "Acme", domain: "acme.com" });
+    const p = await core.companyProducts.create(ORG, c.id, { name: "Widget", description: "原始爬蟲描述" });
+    // 人工細填 description → human provenance（entity_type=company_product）
+    await core.companyProducts.update(ORG, p.id, { description: "人工修正描述" }, { userId: USER });
+
+    // 重爬同名產品（matchCols=[name] → UPDATE 路徑）想蓋 description
+    await core.companies.upsertFromCrawl(ORG, "acme.com", {
+      company: { name: "Acme" },
+      provenance: [],
+      products: [{ name: "Widget", description: "重爬想蓋的描述" }],
+    });
+
+    const after = await core.companyProducts.findById(ORG, p.id);
+    expect(after?.description).toBe("人工修正描述"); // A5a：人工鎖不被覆寫
+    const prov = await core.provenance.listForEntity(ORG, "company_product", p.id);
+    expect(prov.find((x) => x.fieldName === "description")?.filledBy).toBe("human");
+  });
+
+  it("未鎖定的產品欄，重爬正常更新（不誤擋爬蟲）", async () => {
+    const c = await core.companies.create(ORG, { name: "Bcme", domain: "bcme.com" });
+    const p = await core.companyProducts.create(ORG, c.id, { name: "Gadget", description: "原始" });
+    await core.companies.upsertFromCrawl(ORG, "bcme.com", {
+      company: { name: "Bcme" },
+      provenance: [],
+      products: [{ name: "Gadget", description: "重爬更新" }],
+    });
+    const after = await core.companyProducts.findById(ORG, p.id);
+    expect(after?.description).toBe("重爬更新"); // 無 human 鎖 → 正常更新
+  });
+});
+
 describe("EmbeddingRepository cosine search (org-scoped + whitelist)", () => {
   const vec = (x: number, y: number, z: number): number[] => [x, y, z];
 

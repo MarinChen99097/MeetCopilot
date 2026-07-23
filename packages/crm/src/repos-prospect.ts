@@ -77,6 +77,8 @@ const CONTACT_SPEC: ChildUpsertSpec = {
   // full_name 落空 → 以 full_name_zh 再配一次（fill-empty 合併）；title/title_zh 累加。
   fallbackMatchCols: ["full_name_zh"],
   accumulateCols: ["title", "title_zh"],
+  // 信任層（M1 §3）：公司重爬的 contacts 子表路徑也查 field_provenance（entity_type=contact），不覆寫人已細填/驗證欄。
+  entityType: "contact",
 };
 const PRODUCT_SPEC: ChildUpsertSpec = {
   table: "company_products",
@@ -84,6 +86,8 @@ const PRODUCT_SPEC: ChildUpsertSpec = {
   matchCols: ["name"],
   hasUpdatedAt: true,
   sysOnInsert: { verified_status: "none", source: "crawler" },
+  // 信任層（M1 §3）：重爬時查 field_provenance（entity_type=company_product），跳過人已細填/驗證的欄位不覆寫。
+  entityType: "company_product",
 };
 const NEWS_SPEC: ChildUpsertSpec = {
   table: "company_news",
@@ -378,7 +382,7 @@ export class SqliteContactRepository implements ContactRepository {
 
   async list(orgId: string, companyId: string): Promise<ContactSummary[]> {
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT id, company_id, full_name, full_name_zh, title, title_zh, seniority, decision_power, verified_status, photo_url
+      `SELECT id, company_id, full_name, full_name_zh, title, title_zh, seniority, decision_power, training_unlocked, verified_status, photo_url
        FROM contacts WHERE org_id = ? AND company_id = ? ORDER BY created_at DESC`,
       [orgId, companyId],
     );
@@ -497,6 +501,7 @@ function mapContactSummary(r: Record<string, unknown>): ContactSummary {
     titleZh: (r.title_zh as string | null) ?? undefined,
     seniority: (r.seniority as Seniority | null) ?? undefined,
     decisionPower: (r.decision_power as DecisionPower | null) ?? undefined,
+    trainingUnlocked: (r.training_unlocked as 0 | 1 | null) ?? undefined,
     verifiedStatus: r.verified_status as VerifiedStatus,
     photoUrl: (r.photo_url as string | null) ?? undefined,
   };

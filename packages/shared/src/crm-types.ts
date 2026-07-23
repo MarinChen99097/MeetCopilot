@@ -497,6 +497,9 @@ export interface Contact {
   isDecisionMaker?: Bool01;
   decisionPower?: DecisionPower;
   influenceLevel?: number;
+  // ── 訓練（手動測試閘）──
+  /** 手動「解鎖對練」旗標：1 時模擬訓練閘放行，與 persona 欄位 verified 狀態脫鉤（R4c：手動點、不用內容判定）。 */
+  trainingUnlocked?: Bool01;
   relationshipStatus?: string;
   relationshipStrength?: number;
   sentiment?: number;
@@ -757,6 +760,8 @@ export interface ContactSummary {
   titleZh?: string;
   seniority?: Seniority;
   decisionPower?: DecisionPower;
+  /** 手動解鎖對練旗標（見 Contact.trainingUnlocked）；訓練閘用它放行。 */
+  trainingUnlocked?: Bool01;
   verifiedStatus: VerifiedStatus;
   photoUrl?: string;
 }

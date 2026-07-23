@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import type { Contact, ContactSummary, DecisionPower } from "@meetcopilot/shared";
+import type { Contact, ContactSummary, DecisionPower, Seniority } from "@meetcopilot/shared";
 import { ApiError, createContact, getContact, listContacts, updateContact } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { StateBoundary } from "@/components/ui/StateBoundary";
 import { VerifiedBadge } from "@/components/ui/StatusBadge";
 import { Spinner } from "@/components/ui/Spinner";
-import { PersonaCard } from "./PersonaCard";
+import { PersonaCard, SENIORITY_LABEL } from "./PersonaCard";
 import { useEntityProvenance } from "./useProvenance";
 
 const DP_SHORT: Record<DecisionPower, string> = {
@@ -186,13 +186,22 @@ function AddContactForm({
 }) {
   const [fullName, setFullName] = useState("");
   const [title, setTitle] = useState("");
+  const [department, setDepartment] = useState("");
+  const [seniority, setSeniority] = useState<Seniority | "">("");
+  const [decisionPower, setDecisionPower] = useState<DecisionPower | "">("");
   const [busy, setBusy] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     try {
-      await createContact(companyId, { fullName: fullName.trim(), title: title.trim() || undefined });
+      await createContact(companyId, {
+        fullName: fullName.trim(),
+        title: title.trim() || undefined,
+        department: department.trim() || undefined,
+        seniority: seniority || undefined,
+        decisionPower: decisionPower || undefined,
+      });
       onDone();
     } catch (err) {
       onError(err instanceof ApiError ? err.message : "新增失敗");
@@ -210,6 +219,36 @@ function AddContactForm({
         <label className="mc-field mc-field--grow">
           <span>職稱</span>
           <input value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+      </div>
+      <div className="mc-newco__row">
+        <label className="mc-field mc-field--grow">
+          <span>部門</span>
+          <input value={department} onChange={(e) => setDepartment(e.target.value)} />
+        </label>
+        <label className="mc-field">
+          <span>職級</span>
+          <select value={seniority} onChange={(e) => setSeniority(e.target.value as Seniority | "")}>
+            <option value="">—</option>
+            {(Object.keys(SENIORITY_LABEL) as Seniority[]).map((s) => (
+              <option key={s} value={s}>
+                {SENIORITY_LABEL[s]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mc-field">
+          <span>決策權</span>
+          <select value={decisionPower} onChange={(e) => setDecisionPower(e.target.value as DecisionPower | "")}>
+            <option value="">—</option>
+            {(Object.keys(DP_SHORT) as DecisionPower[])
+              .filter((d) => d !== "unknown")
+              .map((d) => (
+                <option key={d} value={d}>
+                  {DP_SHORT[d]}
+                </option>
+              ))}
+          </select>
         </label>
       </div>
       <div className="mc-newco__actions">

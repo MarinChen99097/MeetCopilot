@@ -34,7 +34,19 @@
 
 <!-- TRACKER_BELOW -->
 
-### 2026-07-23 15:30 | /sim 實測二輪：補充頁繼承匯入配色（接上遺漏的 anchor）＋版型多樣＋版面預算（下緣不切）
+### 2026-07-23 16:20 | CRM Phase A Cycle 1：手動解鎖對練（training_unlocked）＋新增主管補欄＋子表重爬不覆寫人工值
+- **工作區**: packages/shared, packages/crm, apps/server, apps/web
+- **類型**: feat
+- **檔案**: `packages/shared/src/crm-types.ts`、`packages/crm/migrations/020_training_unlock.sql`(新)＋`migrations-pg/020_training_unlock.sql`(新)、`packages/crm/src/mappers.ts`、`repos-prospect.ts`、`child-upsert.ts`、`crm.test.ts`(A5a 測)、`apps/server/src/train/{persona.ts,train-service.ts,train-gate.test.ts(新)}`、`apps/web/components/crm/{useProvenance.ts,PersonaCard.tsx,ContactsTab.tsx}`、`apps/web/lib/api.ts`
+- **改了什麼**:
+  - **A1 手動解鎖對練（R4c：手動點、不用內容判定）**: Contact/ContactSummary 加 `trainingUnlocked?: Bool01`；migration 020 `contacts.training_unlocked INTEGER NOT NULL DEFAULT 0`（sqlite 一欄一 ALTER／pg `ADD COLUMN IF NOT EXISTS`）；CONTACT_DEFS 加 def、list SELECT＋mapContactSummary 帶出；train-service 兩處閘改「`!passesGate(readiness) && !trainingUnlocked`」（逐欄信任閘 **OR** 手動解鎖）；PersonaCard 高信任區塊加「🔒/🔓 解鎖對練」按鈕 → `save("trainingUnlocked", 0/1)`。**刻意不走 field_provenance 信任層**（避免把「可對練」與「欄位可信」綁定，見 CRM_SCHEMA §11 反模式）。
+  - **A2 新增主管補欄**: `createContact` 前端型別放寬（+department/seniority/decisionPower，server `sanitize<NewContact>` 早已接受）；AddContactForm 加 部門/職級/決策權（＋SENIORITY_SHORT）。
+  - **A5a 子表重爬不覆寫人工值（M1 §3 延伸）**: `ChildUpsertSpec` 加 `entityType?`；`upsertChild` matched 分支若有 entityType 則 `trustedFieldsOf(db,orgId,entityType,matched.id)` 取信任欄、於 accumulate 前 `delete rec[def.col]`；PRODUCT_SPEC 設 `entityType:"company_product"`（對齊產品 PATCH provenance:545）、CONTACT_SPEC 設 `entityType:"contact"`（對齊:389）。news/tech 等 crawler-owned 子表未設 → 行為不變。
+  - **web save 放寬**: `useProvenance.save`／PersonaCard `save` prop 值 `string→unknown`（供旗標數值＋日後陣列編輯 A3）。
+- **為什麼**: 使用者回報模擬訓練「無法手動新增主管、驗證應手動、很難測試」，且「重爬會蓋掉修正」。Cycle 1 解鎖測試＋保護人工值。不動 I1/I2/I3（未碰 deck/approval/HUD）。
+- **測試**: `crm.test.ts` A5a（產品 human 值重爬不覆寫＋未鎖欄正常更新，2 測）＋`train-gate.test.ts`（0 verified 欄手動解鎖後可對練、鎖回不可，1 測）。
+- **/simplify（4 項）**: `persona.ts` 抽 `canTrain(readiness, unlocked)` 單一擁有者（train-service 兩處閘改用）；`mapContactSummary` Bool01 映射對齊慣例 `(… as 0|1|null) ?? undefined`；`child-upsert` 移除冗餘 `if(trusted.size>0)` 守衛；`SENIORITY_LABEL` 去重（PersonaCard export、ContactsTab 重用，刪 ContactsTab 重複常數）。
+- **驗證**: 兩輪對抗式 Workflow（第 2 輪＝/code-review 6 視角）——build shared→crm→server→web、**crm 67＋server 270 測全綠**、web build 18 路由；bug/正確性・I1/I2/I3/SSRF・authz・錯誤邊界 **5 視角無 ≥80**；脈絡一致性抓 1 筆（信心 88＝Cycle 1/R4c 決策未記 ROM）**已補**（ROM 2026-07-23 CRM 升級條目）。未 commit（硬規則 10）。
 - **工作區**: apps/server, apps/web
 - **類型**: fix
 - **檔案**: `apps/server/src/realtime/orchestrator.ts`、`apps/server/src/generation/slide-gen.ts`、`apps/web/app/studio-present.css`

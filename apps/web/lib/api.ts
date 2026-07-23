@@ -372,7 +372,10 @@ export function getSocial(id: string): Promise<CompanySocial> {
 export function listContacts(companyId: string): Promise<ContactSummary[]> {
   return request<ContactSummary[]>(`/api/crm/companies/${companyId}/contacts`);
 }
-export function createContact(companyId: string, input: { fullName: string; title?: string }): Promise<Contact> {
+export function createContact(
+  companyId: string,
+  input: { fullName: string; title?: string; department?: string; seniority?: string; decisionPower?: string },
+): Promise<Contact> {
   return request<Contact>(`/api/crm/companies/${companyId}/contacts`, { method: "POST", body: input });
 }
 export function getContact(id: string): Promise<Contact> {

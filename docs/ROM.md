@@ -36,6 +36,16 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-23 | CRM×DynamicSlide×模擬訓練 多階段升級（R1–R5）＋Cycle 1 設計決策
+- **誰決定**: 使用者（連續 5 則需求 R1–R5）＋Fable（分階段規劃、A1/A5a 設計取捨）
+- **決策**: 啟動一整套多階段升級，**全文計畫見 `docs/CRM_UPGRADE_PLAN.md`**（單一真相來源，含 R1–R5 原話對照）。分三階段：A（CRM 人工掌控）／B（AI 補充頁升級，契約已凍）／C（政府資料爬取）。需求：R1 補充頁品質、R2 CRM 可編輯校正＋修正值回饋爬取背景、R3 政府爬取（標案/採購）、R4 模擬訓練可用性（手動新增主管／自由筆記→AI 歸位／已驗證改手動）、R5 合成/設計式訓練對象（非真人＋人格特質＋公司 CRM＋銷售/面談目的）。
+  - **Cycle 1 已實作**（A1 手動解鎖對練＋A2 新增主管補欄＋A5a 子表重爬不覆寫；見 CHANGE_TRACKER 2026-07-23 16:20）。
+  - **A1 關鍵設計決策**：手動「解鎖對練」用**獨立 `training_unlocked` 旗標**（migration 020），**刻意不走 field_provenance 信任層**（選 Option 2、否決 Option 1b＝標 persona 欄 verified）。理由：R4c 要「手動點、不用欄位內容自動判定」→ 旗標與內容脫鉤正合此意；且 Option 1b 會把爬蟲猜測值升格為「人驗證真相」→ 汙染逐欄信任閘（§9）與扮演 prompt，正是 CRM_SCHEMA §11 警告的反模式。閘規則抽成單一 `canTrain(readiness, unlocked)`（/simplify）。
+  - **A5a 設計決策**：把「human value beats crawler」下沉到共用 `upsertChild`（`spec.entityType` 資料驅動、預設關閉），非各子表特例；company/contact 現有手寫版為 legacy，未來可收斂為共用（後續 cycle 的 altitude 目標）。
+- **脈絡與理由**: 使用者 /sim·/train 實測後連環回報：CRM 資料太少/有錯無管道改、模擬訓練無法手動建對象且很難測、補充頁不接 CRM 也沒講稿。
+- **考慮過的替代**: A1 用零-migration 的 `mark-trainable` 端點標 persona 欄 verified（否——汙染信任層＋persona 全空時無法解鎖）；先做 Phase B 補充頁（順序可調，但先解 A1/A2 測試痛點）。
+- **影響**: `docs/CRM_UPGRADE_PLAN.md`（計畫＋Phase A/B 凍結契約）、CHANGE_TRACKER 2026-07-23 16:20（Cycle 1 程式）。Phase A 餘項（A3 編輯器/A4 筆記歸位/A5b 背景注入/A6 合成對象）與 Phase B/C 待後續 cycle。
+
 ### 2026-07-23 | /sim 二輪回饋：補充頁「必須繼承匯入 deck 配色」（推翻前輪記債）
 - **誰決定**: 使用者（回報生成頁仍深色/下緣切/版型單一）＋Fable（診斷後修法）
 - **決策**: **推翻** 2026-07-20 WORKLOG 記債「補充頁未繼承 anchor theme（PDF 原始頁本無 theme，渲染器退 app 預設反而讓 AI 頁視覺區隔＝可接受）」。現況已變：前輪已讓匯入頁逐頁抽色帶 theme，故補充頁**應主動繼承** deck 尾頁 theme（在 `orchestrator.maybeSuggestSlide` 撈 deck 尾頁當 anchor）。並定調補充頁生成要「依訊號選版型（不千篇一律 features）＋守版面預算（不超出被裁）」。

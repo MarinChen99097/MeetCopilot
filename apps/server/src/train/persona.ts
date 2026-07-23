@@ -49,9 +49,17 @@ export function personaReadiness(trusted: Set<string>): PersonaReadiness {
   return { verifiedFields: verified.length, missing: [...missing] };
 }
 
-/** 是否過閘（可對練）。 */
+/** 是否過逐欄信任閘。 */
 export function passesGate(readiness: PersonaReadiness): boolean {
   return readiness.verifiedFields >= MIN_PERSONA_FIELDS;
+}
+
+/**
+ * 是否可對練＝過信任閘 **或** 手動解鎖（training_unlocked，R4c 與欄位內容脫鉤）。
+ * 「可對練」的完整規則單一擁有者——呼叫點只問結果、不各自 inline OR，規則演化時不會兩處漂移。
+ */
+export function canTrain(readiness: PersonaReadiness, trainingUnlocked?: 0 | 1): boolean {
+  return passesGate(readiness) || trainingUnlocked === 1;
 }
 
 const DIFFICULTY_TONE: Record<TrainDifficulty, string> = {

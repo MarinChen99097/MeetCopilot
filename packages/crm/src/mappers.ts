@@ -230,6 +230,7 @@ export const CONTACT_DEFS: FieldDef[] = [
   { col: "is_decision_maker", key: "isDecisionMaker" },
   { col: "decision_power", key: "decisionPower" },
   { col: "influence_level", key: "influenceLevel" },
+  { col: "training_unlocked", key: "trainingUnlocked" },
   { col: "relationship_status", key: "relationshipStatus" },
   { col: "relationship_strength", key: "relationshipStrength" },
   { col: "sentiment", key: "sentiment" },

@@ -11,6 +11,7 @@
 import type { DbPort } from "./ports.js";
 import { insertRow, patchToRecord, uuidv7, type FieldDef } from "./mappers.js";
 import { accumulateAndFillEmpty } from "./contact-merge.js";
+import { trustedFieldsOf } from "./provenance-write.js";
 
 export interface ChildUpsertSpec {
   table: string;
@@ -28,6 +29,12 @@ export interface ChildUpsertSpec {
   fallbackMatchCols?: string[];
   /** 累加欄（snake_case）：新舊值以 mergeTitle 串接而非覆寫。contacts 用 [title, title_zh]。 */
   accumulateCols?: string[];
+  /**
+   * provenance 實體型別（如 'company_product'/'contact'）。設了才對「已匹配的既有列」查信任層——
+   * 跳過人已細填/驗證（human 或 verified=1）的欄位不覆寫（M1 §3「human value beats crawler」延伸到子表）。
+   * 未設＝維持原行為（crawler-owned 子表如 news/tech 不查）。
+   */
+  entityType?: string;
 }
 
 /** 依 matchCols 在 (org_id, company_id) 內取整列；任一鍵欄空或 matchCols 空 → undefined（無法安全去重）。 */
@@ -71,6 +78,12 @@ export async function upsertChild(
   }
 
   if (matched) {
+    // 信任層（M1 §3）：有 entityType 的子表，重爬時跳過人已細填/驗證（human 或 verified=1）的欄位——不覆寫人工值。
+    // 在累加/fill-empty 之前先 delete，連 title 等累加欄若被人工鎖定也不覆寫。
+    if (spec.entityType) {
+      const trusted = await trustedFieldsOf(db, orgId, spec.entityType, matched.id as string);
+      for (const d of spec.defs) if (trusted.has(d.key)) delete rec[d.col];
+    }
     // 累加欄合併 ＋（fallback 命中時）fill-empty；就地調整 rec。
     if (matchedByFallback || (spec.accumulateCols && spec.accumulateCols.length > 0)) {
       accumulateAndFillEmpty(rec, matched, {

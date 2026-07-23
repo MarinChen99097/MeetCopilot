@@ -9,7 +9,7 @@ import { ProvenanceField } from "./ProvenanceField";
  * communication_style). Core identity fields carry ProvenanceBadge + confirm/細填; the persona
  * block is framed as HIGH-TRUST (人驗證/會議衍生) and visually distinct from crawler guesses.
  */
-const SENIORITY_LABEL: Record<Seniority, string> = {
+export const SENIORITY_LABEL: Record<Seniority, string> = {
   c_level: "C 級高管",
   vp: "副總",
   director: "總監",
@@ -40,7 +40,7 @@ export function PersonaCard({
   contact: Contact;
   provMap: Record<string, FieldProvenance>;
   confirm: (field: string) => void;
-  save: (field: string, value: string) => void;
+  save: (field: string, value: unknown) => void;
   busyConfirm: Set<string>;
   busySave: Set<string>;
 }) {
@@ -115,6 +115,15 @@ export function PersonaCard({
         <div className="mc-persona__trust-head">
           <span className="mc-persona__trust-tag">人驗證 · 高信任</span>
           <span className="mc-persona__trust-hint">以下為人工/會議衍生欄位，與爬蟲猜測區隔</span>
+          <button
+            type="button"
+            className={`mc-btn mc-btn--sm ${contact.trainingUnlocked ? "mc-btn--ghost" : "mc-btn--primary"} mc-persona__unlock`}
+            onClick={() => save("trainingUnlocked", contact.trainingUnlocked ? 0 : 1)}
+            disabled={busySave.has("trainingUnlocked")}
+            title="手動解鎖/鎖定模擬對練（與欄位驗證脫鉤；解鎖後即可到「模擬訓練」對練此人）"
+          >
+            {busySave.has("trainingUnlocked") ? "…" : contact.trainingUnlocked ? "🔓 已解鎖對練" : "🔒 解鎖對練"}
+          </button>
         </div>
         <ChipBlock title="在意重點（hot buttons）" items={contact.hotButtons} tone="accent" />
         <ChipBlock title="優先目標（priorities）" items={contact.knownPriorities} tone="info" />
