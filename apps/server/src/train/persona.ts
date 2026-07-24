@@ -8,7 +8,14 @@
  * 身分欄（fullName/title/seniority/department）與公司 firmographics（name/industry/description）是可爬事實，
  * 作為「這個人是誰、在哪家公司」的背景脈絡納入；**behavior/persona 欄位才受信任閘管制**。
  */
-import type { Contact, Company, FieldProvenance, TrainDifficulty, PersonaReadiness } from "@meetcopilot/shared";
+import type {
+  Contact,
+  Company,
+  FieldProvenance,
+  TrainDifficulty,
+  TrainObjective,
+  PersonaReadiness,
+} from "@meetcopilot/shared";
 import { isTrusted } from "@meetcopilot/shared";
 
 /**
@@ -100,8 +107,23 @@ function formatValue(field: string, value: unknown): string | null {
   return s.length > 0 ? s : null;
 }
 
+/** buildPersonaPrompt 的選項（皆選填，向後相容：省略＝原本 trusted-only、無情境行為）。 */
+export interface BuildPersonaOptions {
+  /**
+   * 手動解鎖／AI 補齊（trainingUnlocked=1）時傳 true：persona 改用「**所有非空 persona 欄位**」
+   * （trusted ∪ 未驗證但有值），因為使用者已明示接受用現有內容演（CRM_UPGRADE_PLAN Phase A2）。
+   * false／省略＝維持 trusted-only（§9 預設安全：爬蟲猜測不進 prompt）。
+   */
+  unlocked?: boolean;
+  /** 本次對練情境目的（銷售目標／面談目的）；有值時於 prompt 末尾加「本次對練情境」段。 */
+  objective?: TrainObjective;
+}
+
 /**
- * 組扮演 system prompt。**只納入 `trusted` 內的 persona 欄位**（逐欄信任閘）；公司/身分事實為背景脈絡。
+ * 組扮演 system prompt。persona 特質欄的取用規則：
+ *  - **預設（trusted-only）**：只納入 `trusted` 內的 persona 欄位（逐欄信任閘，§9 預設安全）。
+ *  - **opts.unlocked=true**：改用所有**非空** persona 欄位（trusted ∪ 未驗證有值）——手動解鎖／AI 補齊直接可練。
+ * 公司/身分事實一律為背景脈絡。opts.objective 有值時附「本次對練情境」段（zh-TW）。
  * 這段被鎖進 ephemeral token（liveConnectConstraints），client 不可竄改 persona——信任閘因此有牙。
  */
 export function buildPersonaPrompt(
@@ -109,6 +131,7 @@ export function buildPersonaPrompt(
   company: Company | null,
   difficulty: TrainDifficulty,
   trusted: Set<string>,
+  opts: BuildPersonaOptions = {},
 ): string {
   const name = contact.fullName;
   const title = contact.title ?? "a decision-maker";
@@ -130,20 +153,38 @@ export function buildPersonaPrompt(
     for (const c of context) lines.push(`- ${c}`);
   }
 
-  // Persona 特質——**只用已驗證欄位**。
+  // Persona 特質。預設只用 trusted 欄；opts.unlocked 時放寬為所有**非空** persona 欄位。
   const traits: string[] = [];
   for (const field of PERSONA_FIELDS) {
-    if (!trusted.has(field)) continue;
     const raw = (contact as unknown as Record<string, unknown>)[field];
     const formatted = formatValue(field, raw);
-    if (formatted) traits.push(`- ${FIELD_LABELS[field] ?? field}: ${formatted}`);
+    if (!formatted) continue; // 空欄一律不納入
+    if (!opts.unlocked && !trusted.has(field)) continue; // trusted-only（§9 預設安全）
+    traits.push(`- ${FIELD_LABELS[field] ?? field}: ${formatted}`);
   }
   if (traits.length > 0) {
-    lines.push("\nYour verified persona (embody these — they are true about you):");
+    lines.push(
+      opts.unlocked
+        ? "\nYour persona (embody these — they are true about you):"
+        : "\nYour verified persona (embody these — they are true about you):",
+    );
     lines.push(...traits);
   }
 
   lines.push(`\n${DIFFICULTY_TONE[difficulty]}`);
+
+  // 本次對練情境（objective）——真人＋虛擬通用；有值才注入（zh-TW）。
+  const objLines: string[] = [];
+  const salesGoal = opts.objective?.salesGoal?.trim();
+  const meetingPurpose = opts.objective?.meetingPurpose?.trim();
+  if (salesGoal) objLines.push(`- 這位業務此次想達成的銷售目標：${salesGoal}`);
+  if (meetingPurpose) objLines.push(`- 這次面談的目的：${meetingPurpose}`);
+  if (objLines.length > 0) {
+    lines.push(
+      "\n本次對練情境（依此情境自然回應；你是買方，不必配合業務的目標，該質疑、該把關就照你的立場來）：",
+    );
+    lines.push(...objLines);
+  }
 
   lines.push(
     "\nRules:",

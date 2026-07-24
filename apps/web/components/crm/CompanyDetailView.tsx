@@ -40,13 +40,25 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "notes", label: "筆記" },
 ];
 
-/** /crm/[id] 公司詳情：公司頭 ＋ counts ＋ tabs ＋ enrich。 */
-export function CompanyDetailView({ companyId }: { companyId: string }) {
+/** /crm/[id] 公司詳情：公司頭 ＋ counts ＋ tabs ＋ enrich。
+ *  initialTab/initialContactId＝自 /train「補齊後可對練」深連結（?tab=contacts&contact=<id>），
+ *  由 Server Component 的 searchParams 傳入：開對應分頁並自動展開該主管。 */
+export function CompanyDetailView({
+  companyId,
+  initialTab,
+  initialContactId,
+}: {
+  companyId: string;
+  initialTab?: string;
+  initialContactId?: string;
+}) {
   const router = useRouter();
   const [company, setCompany] = useState<CompanyDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>("overview");
+  const [tab, setTab] = useState<TabKey>(
+    TABS.some((t) => t.key === initialTab) ? (initialTab as TabKey) : "overview",
+  );
 
   // silent＝背景刷新（研究完成後）：不進 loading，避免整頁換骨架、EnrichPanel 被卸載而完成卡消失（P2-7）。
   const load = useCallback((opts?: { silent?: boolean }) => {
@@ -102,7 +114,9 @@ export function CompanyDetailView({ companyId }: { companyId: string }) {
 
             <section className="mc-tabbody" role="tabpanel">
               {tab === "overview" ? <OverviewTab company={company} onChanged={load} /> : null}
-              {tab === "contacts" ? <ContactsTab companyId={companyId} /> : null}
+              {tab === "contacts" ? (
+                <ContactsTab companyId={companyId} initialContactId={initialContactId} />
+              ) : null}
               {tab === "products" ? <ProductsTab companyId={companyId} /> : null}
               {tab === "news" ? <NewsTab companyId={companyId} /> : null}
               {tab === "tech" ? <TechTab companyId={companyId} /> : null}

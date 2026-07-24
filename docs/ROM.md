@@ -36,6 +36,18 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-24 20:52 | train 頁自助建對象（Phase A2）四岔路決策＋Fable 契約/信任層取捨
+- **誰決定**: 使用者（4 個 AskUserQuestion 岔路拍板）＋Fable（契約凍結、審查後修正裁決）
+- **決策**:
+  1. **#1 真人 AI 補齊放行**：AI 補齊真人 persona 後**直接可對練**——欄位留**未驗證草稿**（applyAiDraft `verified=0`/`filled_by='llm'`，守 §11），只翻 `trainingUnlocked=1`。使用者明示接受「對練 AI 推斷版的真人」。
+  2. **#4 虛擬人物歸屬**：AI 虛擬人物**也顯示在 CRM** 公司人物清單，附「虛擬」badge 區分（非只在 train 頁）。
+  3. **面談目的／銷售目標**：放**每次對練**（`NewTrainSession.objective`），真人＋虛擬通用，注入 persona prompt。
+  4. **部署時機**：小修（中文名＋深連結）**併大功能一起部署**（不單獨部署）。
+  - **Fable 契約/實作取捨**：(a) 補契約洞 `PersonaOption.unlocked`——client `isReady` 須 `unlocked || (missing===0 && verified>0)`，否則 #1 未驗證草稿使 verifiedFields 不增→卡片誤判鎖住（#1 失效）；(b) `buildPersonaPrompt` 當 `trainingUnlocked=1` 放寬用「所有非空 persona 欄」（trusted ∪ 未驗證有值），否則維持 trusted-only（§9）——這也順帶修好 Cycle 1 純手動解鎖但零 verified 的空 persona 潛在洞；(c) 虛擬人物＝一個 `is_synthetic=1` 的 contact（重用整條 contactId-keyed pipeline＋buildPersonaPrompt），persona 走 human provenance（虛擬角色由使用者創作、非臆測真人，標人工合法）；(d) 審查後裁決修正 `draftPersona` 不得 bump `verified_status`——原走 `core.contacts.update`→applyHumanUpdate 會把真人 contact rollup 抬成 'partial' 誤導業務，改新增 `setTrainingUnlocked` 純寫旗標（不寫 provenance、不 bump）；(e) 兩個新 LLM 端點補 rate limit（與其它 AI 花費 POST 一致）；(f) 虛擬建立按鈕文案「建立並開始對練」→「建立並選取對象」＋帶難度/objective 回啟動列預填（誠實、不 silently 開計費 session）。
+- **脈絡與理由**: 使用者回報 train persona 卡「補齊」連到 /crm 外層難調整、英文名/中文名不一致（小修），且「對象不必是真人、要能直接在 train 頁選 AI 虛擬人物並選公司＋人工或 AI 設人格，目前進 CRM 內部設定太麻煩」。以「Fable 凍契約→Opus 執行→Workflow 六視角對抗式審查→修高信心項」流程完成。
+- **考慮過的替代**: #1 用「草稿＋你一鍵解鎖」把關（Fable 推薦，守信任閘）→ 使用者選「直接可對練」覆蓋；#4 只在 train 頁不進 CRM（Fable 推薦）→ 使用者選也進 CRM 附 badge；虛擬人物用獨立 `training_personas` 表（否——標記 is_synthetic 的 contact 可重用整條 pipeline，成本低）；objective 存 contact（否——放 session，每次可換情境、真人也能用）。**審查濾掉 4 誤報**（persona-gen thinkingBudget ×2、createSynthetic 兩 tx 非原子＝無害孤兒、手動全空→退 autoDesign＝合理 fallback、虛擬在 train 清單無 badge＝PersonaOption 刻意未含 isSynthetic）。
+- **影響**: shared/train.ts＋crm-types、migration 021、crm ports/repos-prospect/mappers、server train/*＋index.ts、web train/*＋crm badge＋api.ts＋globals.css；docs/CRM_UPGRADE_PLAN.md（Phase A2 凍結契約節）、CHANGE_TRACKER 2 筆（小修＋大功能）。未 commit／未部署（待使用者核准）。
+
 ### 2026-07-23 | CRM×DynamicSlide×模擬訓練 多階段升級（R1–R5）＋Cycle 1 設計決策
 - **誰決定**: 使用者（連續 5 則需求 R1–R5）＋Fable（分階段規劃、A1/A5a 設計取捨）
 - **決策**: 啟動一整套多階段升級，**全文計畫見 `docs/CRM_UPGRADE_PLAN.md`**（單一真相來源，含 R1–R5 原話對照）。分三階段：A（CRM 人工掌控）／B（AI 補充頁升級，契約已凍）／C（政府資料爬取）。需求：R1 補充頁品質、R2 CRM 可編輯校正＋修正值回饋爬取背景、R3 政府爬取（標案/採購）、R4 模擬訓練可用性（手動新增主管／自由筆記→AI 歸位／已驗證改手動）、R5 合成/設計式訓練對象（非真人＋人格特質＋公司 CRM＋銷售/面談目的）。

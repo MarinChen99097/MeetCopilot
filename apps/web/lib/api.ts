@@ -46,6 +46,10 @@ import type {
   TrainDifficulty,
   TrainReport,
   TrainTurn,
+  TrainObjective,
+  PersonaDraftResult,
+  NewSyntheticPersona,
+  CreateSyntheticResult,
   // ── M5 Org / invites (§D) ──
   Invite,
   InviteRole,
@@ -657,8 +661,23 @@ export function startTrainSession(input: {
   contactId: string;
   dealId?: string;
   difficulty?: TrainDifficulty;
+  /** 本次對練情境目的（銷售目標／面談目的）；server 注入 persona prompt。 */
+  objective?: TrainObjective;
 }): Promise<StartTrainSessionResult> {
   return request<StartTrainSessionResult>("/api/train/sessions", { method: "POST", body: input });
+}
+/**
+ * #1 讓 AI 補齊真人 persona：POST /api/train/personas/:contactId/draft。
+ * 以該 contact＋公司的 CRM 脈絡跑 LLM 產九欄未驗證草稿並自動設 trainingUnlocked=1（補齊後直接可對練）。
+ */
+export function draftPersona(contactId: string): Promise<PersonaDraftResult> {
+  return request<PersonaDraftResult>(`/api/train/personas/${contactId}/draft`, { method: "POST" });
+}
+/**
+ * #4 建立「AI 虛擬人物」對練角色：POST /api/train/synthetic。回新建虛擬 contact 的 id（可直接開對練）。
+ */
+export function createSyntheticPersona(body: NewSyntheticPersona): Promise<CreateSyntheticResult> {
+  return request<CreateSyntheticResult>("/api/train/synthetic", { method: "POST", body });
 }
 /** Upload the two-way transcript (during / at end of practice). */
 export function saveTrainTranscript(sessionId: string, turns: TrainTurn[]): Promise<void> {

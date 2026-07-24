@@ -12,6 +12,10 @@ import type { CrmCore } from "@meetcopilot/crm";
 import type {
   NewTrainSession,
   PersonaOption,
+  PersonaDraftResult,
+  PersonaFieldDraft,
+  NewSyntheticPersona,
+  CreateSyntheticResult,
   StartTrainSessionResult,
   TrainReport,
   TrainTurn,
@@ -24,6 +28,11 @@ import type { Meter } from "../ops/meter.js";
 import type { GeminiClient } from "../gemini.js";
 import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { buildPersonaPrompt, personaReadiness, trustedFieldSet, canTrain } from "./persona.js";
+import {
+  draftPersonaForContact,
+  designSyntheticPersona,
+  personaDraftToContactPatch,
+} from "./persona-gen.js";
 
 export interface TrainService {
   /** List trainable contacts (only those whose persona fields pass the verified gate). */
@@ -31,6 +40,16 @@ export interface TrainService {
   /** Start a session → ephemeral Live token + persona summary (browser connects to Gemini Live directly).
    *  userId（可選）為 ADMIN_CONTRACT §2 使用者歸屬，回填 gemini_live 記帳的 usage_events.user_id。 */
   startSession(orgId: string, input: NewTrainSession, userId?: string): Promise<StartTrainSessionResult>;
+  /**
+   * #1 讓 AI 補齊真人 persona：跑 LLM 產九欄草稿 → 以**未驗證（crawler 級）provenance** 寫入該 contact（不標 human/verified）
+   * → 設 trainingUnlocked=1（直接可對練）。回九欄草稿。contact 不存在→not_found；gemini 未設→not_configured。
+   */
+  draftPersona(orgId: string, contactId: string, userId?: string): Promise<PersonaDraftResult>;
+  /**
+   * #4 建立 AI 虛擬人物：autoDesign（或 persona 省略）→ LLM 依公司設計九欄；否則用帶入 persona。建 is_synthetic=1 的 contact，
+   * persona 以 **human provenance** 寫入 + trainingUnlocked=1。回 {contactId}。company 不存在→not_found；autoDesign 但 gemini 未設→not_configured。
+   */
+  createSynthetic(orgId: string, input: NewSyntheticPersona, userId?: string): Promise<CreateSyntheticResult>;
   /** Upload the two-way transcript (during / at end of practice). */
   saveTranscript(orgId: string, sessionId: string, turns: TrainTurn[]): Promise<void>;
   /** Finish → trigger LLM scoring over the two-way transcript → { reportId }. */
@@ -57,6 +76,8 @@ export interface TrainServiceDeps {
   /** Raw Gemini client——finish 評分時現包 metered client 記帳（洞 D，gemini_text）。 */
   gemini: GeminiClient;
   liveModel: string;
+  /** persona 產生（#1/#4）用的文字模型 id——僅供寫入 provenance 的 model 欄（生成本身走 gemini client 預設 textModel）。 */
+  textModel?: string;
   /**
    * 成本記帳（ADMIN_CONTRACT §3.2）。有 meter 則於 startSession 鑄 Live token 成功時記一筆 `gemini_live`
    * （idemKey=`live:<sessionId>`，冪等）。Live 音訊瀏覽器直連 Gemini、token 數不經我方 server，故只記**次數**
@@ -71,7 +92,7 @@ const DEFAULT_MAX_COMPANIES = 500;
 const COMPANY_PAGE_SIZE = 100;
 
 export function createTrainService(deps: TrainServiceDeps): TrainService {
-  const { core, minter, scorer, gemini, liveModel, meter } = deps;
+  const { core, minter, scorer, gemini, liveModel, meter, textModel } = deps;
   const maxCompanies = deps.maxCompaniesScan ?? DEFAULT_MAX_COMPANIES;
 
   /** 有界枚舉本 org 的公司（無 companyId 時用）——經 repo 層，不繞過。 */
@@ -105,10 +126,13 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
           if (!canTrain(readiness, c.trainingUnlocked)) continue; // 逐欄信任閘 OR 手動解鎖（R4c）
           out.push({
             contactId: c.id,
+            companyId: c.companyId,
             fullName: c.fullName,
+            fullNameZh: c.fullNameZh,
             title: c.title ?? "",
             companyName: company.name,
             readiness,
+            unlocked: c.trainingUnlocked === 1, // 手動解鎖／AI 補齊／虛擬人物 → client isReady 應 OR 此旗標
           });
         }
       }
@@ -132,7 +156,12 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
 
       const company = await core.companies.findById(orgId, contact.companyId);
       const difficulty: TrainDifficulty = input.difficulty ?? "neutral";
-      const systemInstruction = buildPersonaPrompt(contact, company, difficulty, trusted);
+      // 手動解鎖／AI 補齊（trainingUnlocked=1）→ persona 放寬為所有非空欄（見 buildPersonaPrompt）；
+      // objective 有值時注入「本次對練情境」段。純 verified 閘者維持 trusted-only。
+      const systemInstruction = buildPersonaPrompt(contact, company, difficulty, trusted, {
+        unlocked: contact.trainingUnlocked === 1,
+        objective: input.objective,
+      });
 
       // 鑄 token（persona 鎖進 token；外呼有界）。apiKey 缺 → minter 拋 → 對映 502。
       let minted;
@@ -171,6 +200,112 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
         live: { ephemeralToken: minted.token, model: minted.model, expireTime: minted.expireTime },
         persona: { displayName: contact.fullName, title: contact.title ?? "" },
       };
+    },
+
+    async draftPersona(orgId: string, contactId: string, userId?: string): Promise<PersonaDraftResult> {
+      const contact = await core.contacts.findById(orgId, contactId);
+      if (!contact) throw new TrainError("not_found", "contact not found");
+      if (!gemini.isConfigured()) throw new TrainError("not_configured", "GEMINI_API_KEY not configured");
+
+      const company = await core.companies.findById(orgId, contact.companyId);
+
+      // 記帳（gemini_text）：有 meter 就現包 metered client；idemPrefix 帶 contactId＋randomUUID（跨請求唯一）。
+      const genClient = meter
+        ? meteredGeminiClient(gemini, meter, {
+            orgId,
+            kind: "gemini_text",
+            userId,
+            idemPrefix: `persona-draft:${contactId}:${randomUUID()}`,
+          })
+        : gemini;
+
+      let fields: PersonaFieldDraft;
+      try {
+        fields = await draftPersonaForContact(genClient, { company, contact });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "persona draft failed";
+        if (/not configured/i.test(msg)) throw new TrainError("not_configured", msg);
+        throw new TrainError("bad_request", msg);
+      }
+
+      // 未驗證草稿：走**非人工**路徑（filled_by='llm'、verified=0、confidence≈0.5、source_type='ai_draft'）。
+      // applyAiDraft 內部跳過已受信任欄、不 bump verified_status、值與 provenance 同一 tx（守 §11）。
+      const patch = personaDraftToContactPatch(fields);
+      if (Object.keys(patch).length > 0) {
+        await core.contacts.applyAiDraft(orgId, contactId, patch, {
+          confidence: 0.5,
+          sourceType: "ai_draft",
+          model: textModel,
+        });
+      }
+
+      // 設 trainingUnlocked=1（純寫旗標）。trainingUnlocked 非 persona 欄，不影響逐欄信任閘。
+      // 用 setTrainingUnlocked 而非 update()：後者走 applyHumanUpdate＋bumpVerified，會把真人 contact 的
+      // verified_status 升 partial 並寫 human/verified provenance——AI 對真人的臆測不得抬高其可信徽章（契約 #1）。
+      await core.contacts.setTrainingUnlocked(orgId, contactId, true);
+
+      return { fields };
+    },
+
+    async createSynthetic(
+      orgId: string,
+      input: NewSyntheticPersona,
+      userId?: string,
+    ): Promise<CreateSyntheticResult> {
+      const company = await core.companies.findById(orgId, input.companyId);
+      if (!company) throw new TrainError("not_found", "company not found");
+
+      // autoDesign（或 persona 省略）→ LLM 設計；否則用帶入的 persona。
+      const autoDesign = input.autoDesign === true || input.persona === undefined;
+      let fields: PersonaFieldDraft;
+      let designedTitle: string | undefined;
+      if (autoDesign) {
+        if (!gemini.isConfigured()) throw new TrainError("not_configured", "GEMINI_API_KEY not configured");
+        const genClient = meter
+          ? meteredGeminiClient(gemini, meter, {
+              orgId,
+              kind: "gemini_text",
+              userId,
+              idemPrefix: `persona-synth:${input.companyId}:${randomUUID()}`,
+            })
+          : gemini;
+        try {
+          const designed = await designSyntheticPersona(genClient, {
+            company,
+            hints: { title: input.title, difficulty: input.difficulty, objective: input.objective },
+          });
+          fields = designed.fields;
+          designedTitle = designed.title;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "persona design failed";
+          if (/not configured/i.test(msg)) throw new TrainError("not_configured", msg);
+          throw new TrainError("bad_request", msg);
+        }
+      } else {
+        fields = input.persona ?? {};
+      }
+
+      const fullName = input.fullName?.trim() || "虛擬決策者";
+      const title = input.title?.trim() || designedTitle;
+
+      // is_synthetic=1 的 contact（沿用既有 create；NewContact 已含 isSynthetic，mappers 已對映 is_synthetic 欄）。
+      const contact = await core.contacts.create(orgId, input.companyId, {
+        fullName,
+        ...(title ? { title } : {}),
+        isSynthetic: 1,
+      });
+
+      // persona 九欄以 **human provenance** 寫入（虛擬角色由使用者創作、非臆測真人，標人工合法）＋trainingUnlocked=1，
+      // 同一 human update tx（applyHumanUpdate：filled_by='human'、verified=1）。
+      const patch = personaDraftToContactPatch(fields);
+      await core.contacts.update(
+        orgId,
+        contact.id,
+        { ...patch, trainingUnlocked: 1 },
+        { userId: userId ?? "system" },
+      );
+
+      return { contactId: contact.id };
     },
 
     async saveTranscript(orgId: string, sessionId: string, turns: TrainTurn[]): Promise<void> {

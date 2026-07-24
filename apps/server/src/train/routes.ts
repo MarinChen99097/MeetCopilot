@@ -12,7 +12,13 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import type { CrmCore } from "@meetcopilot/crm";
-import type { TrainDifficulty, TrainTurn } from "@meetcopilot/shared";
+import type {
+  TrainDifficulty,
+  TrainTurn,
+  TrainObjective,
+  PersonaFieldDraft,
+  NewSyntheticPersona,
+} from "@meetcopilot/shared";
 import { TRAIN_DIFFICULTIES } from "@meetcopilot/shared";
 import { authRequired } from "../auth/jwt.js";
 import { createGeminiClient } from "../gemini.js";
@@ -20,6 +26,7 @@ import type { AppConfig } from "../config.js";
 import { createTrainService, TrainError, type TrainService } from "./train-service.js";
 import { createLiveTokenMinter } from "./live-token.js";
 import { createTrainScorer } from "./scoring.js";
+import { PERSONA_FIELDS } from "./persona.js";
 import type { Meter } from "../ops/meter.js";
 
 type Json = Record<string, unknown>;
@@ -66,6 +73,7 @@ export function createTrainRouter(
       scorer: createTrainScorer(gemini, config.gemini.extractModel),
       gemini,
       liveModel: config.gemini.liveModel,
+      textModel: config.gemini.textModel,
       meter,
     });
 
@@ -99,8 +107,52 @@ export function createTrainRouter(
       return;
     }
     const difficulty = (rawDifficulty as TrainDifficulty | null) ?? undefined;
+    const objective = parseObjective(body.objective);
     try {
-      res.json(await service.startSession(orgId, { contactId, dealId, difficulty }, req.auth!.userId));
+      res.json(
+        await service.startSession(orgId, { contactId, dealId, difficulty, objective }, req.auth!.userId),
+      );
+    } catch (err) {
+      sendTrainError(res, err);
+    }
+  });
+
+  // POST /api/train/personas/:contactId/draft（#1）— 讓 AI 補齊真人 persona；回 PersonaDraftResult。
+  router.post("/personas/:contactId/draft", async (req: Request, res: Response) => {
+    const orgId = req.auth!.orgId;
+    const contactId = req.params.contactId ?? "";
+    try {
+      res.json(await service.draftPersona(orgId, contactId, req.auth!.userId));
+    } catch (err) {
+      sendTrainError(res, err);
+    }
+  });
+
+  // POST /api/train/synthetic（#4）— 建立 AI 虛擬人物對練角色；回 CreateSyntheticResult（201）。
+  router.post("/synthetic", async (req: Request, res: Response) => {
+    const orgId = req.auth!.orgId;
+    const body = (req.body ?? {}) as Json;
+    const companyId = str(body.companyId);
+    if (!companyId) {
+      res.status(400).json({ error: "companyId is required" });
+      return;
+    }
+    const rawDifficulty = str(body.difficulty);
+    if (rawDifficulty && !TRAIN_DIFFICULTIES.includes(rawDifficulty as TrainDifficulty)) {
+      res.status(400).json({ error: "difficulty must be 'friendly', 'neutral', or 'hostile'" });
+      return;
+    }
+    const input: NewSyntheticPersona = {
+      companyId,
+      fullName: str(body.fullName) ?? undefined,
+      title: str(body.title) ?? undefined,
+      autoDesign: body.autoDesign === true,
+      difficulty: (rawDifficulty as TrainDifficulty | null) ?? undefined,
+      persona: parsePersona(body.persona),
+      objective: parseObjective(body.objective),
+    };
+    try {
+      res.status(201).json(await service.createSynthetic(orgId, input, req.auth!.userId));
     } catch (err) {
       sendTrainError(res, err);
     }
@@ -147,6 +199,28 @@ export function createTrainRouter(
   });
 
   return router;
+}
+
+/** 解析對練情境目的（銷售目標／面談目的）。兩者皆空 → undefined（不注入）。 */
+function parseObjective(raw: unknown): TrainObjective | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const salesGoal = str(o.salesGoal) ?? undefined;
+  const meetingPurpose = str(o.meetingPurpose) ?? undefined;
+  if (!salesGoal && !meetingPurpose) return undefined;
+  return { salesGoal, meetingPurpose };
+}
+
+/** 解析手動帶入的 persona 九欄（只收非空字串；鍵＝PERSONA_FIELDS）。全空 → undefined（走 autoDesign）。 */
+function parsePersona(raw: unknown): PersonaFieldDraft | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: PersonaFieldDraft = {};
+  for (const f of PERSONA_FIELDS) {
+    const v = str(o[f]);
+    if (v) out[f as keyof PersonaFieldDraft] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** 驗證 + 正規化 turns body。非陣列/元素形狀不符 → null（route 回 400）。 */

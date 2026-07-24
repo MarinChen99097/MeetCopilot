@@ -51,7 +51,53 @@
 
 （順序可由使用者調整。B 的契約已凍可隨時實作；A 的 A1/A2 為最小測試解鎖、價值即時。）
 
+## Phase A2 凍結契約 — train 頁自助建對象（#1 AI 補齊真人 ＋ #4 AI 虛擬人物）
+
+**使用者決策（2026-07-24，已拍板，實作只照此）**：
+- **#1 放行**：AI 補齊真人 persona 後**直接可對練**——欄位仍寫**未驗證草稿**（不標 human/verified，守 §11），但**自動設 `trainingUnlocked=1`** 讓對練閘放行（使用者接受「對練 AI 推斷版的真人」）。
+- **#4 歸屬**：虛擬人物**也顯示在 CRM**（公司人物清單），以「虛擬」badge 區分。
+- **面談目的／銷售目標**：放**每次對練**（`NewTrainSession.objective`），真人＋虛擬通用。
+- 小修（中文名＋深連結）**併本功能一起部署**。
+
+### 已凍型別（`packages/shared/src`，已寫入）
+- `crm-types.ts`：`Contact.isSynthetic?: Bool01`、`ContactSummary.isSynthetic?: Bool01`。mappers 已加 `{ col:"is_synthetic", key:"isSynthetic" }`。migration `021_synthetic_contact.sql`（sqlite＋pg，`contacts ADD COLUMN is_synthetic INTEGER NOT NULL DEFAULT 0`）已建。
+- `train.ts`：`TrainObjective{salesGoal?,meetingPurpose?}`、`NewTrainSession.objective?`、`PersonaFieldDraft`（九欄，鍵＝Contact persona 欄位＝server `PERSONA_FIELDS`）、`PersonaDraftResult{fields}`、`NewSyntheticPersona{companyId,fullName?,title?,persona?,autoDesign?,difficulty?,objective?}`、`CreateSyntheticResult{contactId}`。
+
+### 端點契約（server 只照此實作）
+1. **`POST /api/train/personas/:contactId/draft`（#1）** — body 無。效果：讀該 contact＋其 company 的 CRM 脈絡（company 名/產業/描述/新聞標題/該 contact 的 title/department/seniority/decisionPower），跑 LLM 產九欄 `PersonaFieldDraft`（zh-TW，各一短句）；**以 crawler 級 provenance 寫入未驗證草稿**（走 contact upsert 的非人工路徑，`confidence≈0.5`、`source='ai_draft'`，**不**呼叫 applyHumanUpdate、**不**標 verified）；**設 `trainingUnlocked=1`**。回 `PersonaDraftResult`。錯誤：contact 不存在→404；GEMINI 未設→502（沿用 TrainError 對映）。org-scoped。
+2. **`POST /api/train/synthetic`（#4）** — body `NewSyntheticPersona`。效果：`autoDesign`（或 persona 省略）→ LLM 依該 company 脈絡設計九欄 persona（＋若 title 省略可一併給合理職稱）；否則用帶入的 `persona`。建立一個 `is_synthetic=1` 的 contact（`fullName` 省略→給預設如「虛擬決策者」）；**persona 欄位以 human provenance 寫入**（虛擬角色由使用者創作、非臆測真人，標人工合法）；設 `trainingUnlocked=1`。回 `CreateSyntheticResult{contactId}`（201）。錯誤：company 不存在→404；autoDesign 但 GEMINI 未設→502。org-scoped。
+3. **`POST /api/train/sessions`（既有，擴充）** — body 多收 `objective?`；startSession 把它傳進 `buildPersonaPrompt`。
+
+### LLM persona 產生器（共用 helper，`apps/server/src/train/persona-gen.ts` 新檔）
+- 匯出 `draftPersonaForContact(gemini, {company, contact}) → Promise<PersonaFieldDraft>`（#1）與 `designSyntheticPersona(gemini, {company, hints}) → Promise<{fields: PersonaFieldDraft; title?: string}>`（#4）。
+- 用 Gemini structured output（`responseSchema`＝九欄皆 string，nullable/optional；zh-TW；每欄一短句、可空）。system prompt：#1 明示「依已知事實推斷此**真實**決策者的溝通/決策風格與在意點，標示為推斷」；#4 明示「設計一個**虛構但合理**的該公司決策者，可自由創作」。外呼有界（沿用既有 gemini client 逾時慣例）。**記帳**：兩者各一次 `gemini_text`，若有 meter 就現包 metered client（idemPrefix 帶 contactId/companyId＋randomUUID），沿用 finish() 的 metered 寫法。
+- **共用**：#1／#4 共用同一 responseSchema 與欄位清單；prompt 文案不同。避免重複定義九欄鍵——可 import server `persona.ts` 的 `PERSONA_FIELDS`。
+
+### 寫入路徑對接（重點，勿繞信任層）
+- **#1 未驗證草稿**：走 contact 的**爬蟲/非人工** upsert 路徑寫九欄＋各欄 `field_provenance`（source≠human、confidence≈0.5）；**絕不** applyHumanUpdate、**絕不**動 verified。查現有 `core.contacts` 是否有可寫單一 contact 欄位＋provenance 的非人工方法（如 upsertFromCrawl／updateContact＋provenance write）；若只有 human 路徑，新增最小的「AI 草稿寫入」method（依 CRM_SCHEMA §9 provenance 慣例：值與來源同一 tx）。
+- **#4 human persona**：虛擬角色欄位走 `applyHumanUpdate`（human provenance）合法。建立 contact 用既有 `core.contacts.create`（＋set is_synthetic=1；若 create 不收 is_synthetic，最小擴充）。
+- `trainingUnlocked=1`：沿用 Cycle 1 的解鎖寫法（PATCH contact training_unlocked，見 020 相關 code）。
+
+### buildPersonaPrompt 用欄語意（**關鍵，勿漏**）＋objective（`persona.ts`）
+- **問題**：`buildPersonaPrompt(contact, company, difficulty, trusted)` 目前只用 `trusted`（verified/human）欄位組 persona（§9 預設安全：爬蟲猜測不進 prompt）。但 #1 的 AI 草稿是**未驗證**，若照舊只用 trusted → 會「可對練但 persona 空白」；同理 Cycle 1 的**純手動解鎖**（欄位全是 crawler）也有此潛在空白。
+- **凍結語意**：**當 `contact.trainingUnlocked=1` 時，buildPersonaPrompt 改用「所有非空 persona 欄位」（trusted ∪ 未驗證但有值），因為手動解鎖／AI 補齊直接可練＝使用者明示接受用現有內容演。** trainingUnlocked=0（走純 verified 閘）時維持原本 trusted-only 行為不變。實作：startSession 已有 `trusted`＋`contact.trainingUnlocked`；把「有效用欄集合」算好傳入（unlocked→非空欄集合；否則→trusted），或讓 buildPersonaPrompt 收 `unlocked` 旗標自行決定。先讀現況再改，勿破壞 trusted-only 路徑與既有測試。
+- **objective**：簽名加選填 `objective?: TrainObjective`；有 `salesGoal`/`meetingPurpose` 時在 prompt 末尾加「本次對練情境」段（zh-TW），指示 AI 依此情境回應。無則不加。
+
+### web UX（`apps/web`）
+- **train 頁模式切換**：`PersonaPicker` 之上加「真人 ／ AI 虛擬人物」切換。
+  - **真人**：清單同現況；未 ready 的卡除「補齊後可對練」深連結外，**加一顆「讓 AI 補齊」**按鈕 → `POST /personas/:id/draft` → 成功後 refetch personas（該卡變可對練）。載入中禁用＋spinner。
+  - **AI 虛擬人物**：公司選擇（重用 `listCompanies`/`GET /api/crm/companies`）→ persona 設定：「讓 AI 決定」（autoDesign）或手動填九欄（可摺疊，給友善中文標籤，複用 `FIELD_LABELS`）→（可選）填 objective → 建立 → `POST /api/train/synthetic` → 成功拿 contactId → 直接進對練/選取。
+- **objective 輸入**：對練啟動列（`mc-train__launch`）加兩個選填輸入（銷售目標／面談目的），開始對練時併入 `startSession` body。
+- **CRM 虛擬 badge**：`ContactsTab` 列與 `PersonaCard` 於 `c.isSynthetic` 時顯示「虛擬」badge（沿用 `mc-badge` 系）。
+- **api.ts**：加 `draftPersona(contactId)`、`createSyntheticPersona(body)`、`startSession` 加 objective；型別鏡像 shared。
+
+### 不變量與測試
+- **I1/I2/I3 不受影響**：純 CRM 資料＋對練設定，不動 deck patch／approval／HUD。
+- **信任層**：#1 草稿**不**升 verified（只翻 trainingUnlocked）；#4 虛擬角色 human provenance 合法（無真人可誤representation）。
+- **測試**：persona-gen 產九欄（mock gemini）；#1 端點寫草稿＋set trainingUnlocked＋不標 verified（斷言 provenance source≠human）；#4 建 is_synthetic contact＋human persona＋可 startSession；buildPersonaPrompt objective 注入斷言；authz 跨 org 憑證對 /draft、/synthetic 應 404/拒絕。
+
 ## 狀態
 
 - 2026-07-23：計畫建立；Phase A、B 藍圖皆凍結（agent 藍圖）。
 - 2026-07-23：**Phase A Cycle 1 實作完成**（A1 手動解鎖 training_unlocked＋migration 020／A2 新增主管補欄／A5a 產品·contact 子表 trustedFieldsOf 防覆寫），多視角對抗式驗證進行中；未 commit。R5（合成訓練對象）納入計畫 A6，待後續 cycle。
+- 2026-07-24：train 頁小修（中文名對齊 CRM＋「補齊」深連結到該主管＋readiness 標籤）完成、tsc 三端綠。**Phase A2 凍結契約**（train 頁自助建對象 #1/#4）如上；型別＋migration 021＋mappers 已寫入 shared/crm，server／web 實作待派工。

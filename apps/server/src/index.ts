@@ -143,6 +143,8 @@ async function main(): Promise<void> {
   app.post("/api/decks/:id/image-jobs", jwtGuard, limit);
   app.post("/api/research/enrich", jwtGuard, limit);
   app.post("/api/train/sessions", jwtGuard, limit);
+  app.post("/api/train/personas/:contactId/draft", jwtGuard, limit); // #1 AI 補齊真人 persona（gemini_text）
+  app.post("/api/train/synthetic", jwtGuard, limit); // #4 AI 虛擬人物 autoDesign（gemini_text）
 
   // Multimodal deck generation posts a logo + a few style-ref photos as base64 JSON (a real photo is
   // 1.5–5MB, +33% as base64), which blows past the default 2mb cap → 413. Give ONLY this route a higher

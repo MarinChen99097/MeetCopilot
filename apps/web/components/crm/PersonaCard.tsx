@@ -82,6 +82,9 @@ export function PersonaCard({
             {contact.titleZh ?? contact.title ?? "未知職稱"}
             {contact.seniority ? ` · ${SENIORITY_LABEL[contact.seniority]}` : ""}
           </span>
+          {contact.isSynthetic === 1 ? (
+            <span className="mc-badge mc-badge--accent mc-persona__synthetic">虛擬人物</span>
+          ) : null}
         </div>
         {dp ? (
           <div className={`mc-dp mc-dp--${dp.tone}`} title="採購決策權">

@@ -23,6 +23,7 @@ import type {
   ContactSummary,
   NewContact,
   ContactCrawlPayload,
+  FilledBy,
   CompanyProduct,
   NewCompanyProduct,
   CompanyProductPerson,
@@ -255,6 +256,17 @@ export interface CompanyRepository {
   counts(orgId: string, id: string): Promise<CompanyCounts>;
 }
 
+/**
+ * AI 草稿（非人工、未驗證）寫入的來源標記。filled_by 預設 'llm'、source_type 預設 'ai_draft'、verified 恆為 0。
+ * confidence≈0.5（臆測值）、model＝產生模型 id（供 UI 徽章與稽核）。
+ */
+export interface AiDraftMeta {
+  filledBy?: FilledBy;
+  sourceType?: string;
+  confidence?: number;
+  model?: string;
+}
+
 /** contacts 存取（list 以 companyId scope；upsertFromCrawl 單一主管值+provenance 同 tx）。 */
 export interface ContactRepository {
   create(orgId: string, companyId: string, input: NewContact): Promise<Contact>;
@@ -263,6 +275,19 @@ export interface ContactRepository {
   update(orgId: string, id: string, patch: Partial<Contact>, by: ByUser): Promise<Contact>;
   delete(orgId: string, id: string): Promise<void>;
   upsertFromCrawl(orgId: string, companyId: string, crawled: ContactCrawlPayload): Promise<Contact>;
+  /**
+   * 以 AI 草稿（非人工、未驗證）寫入 contact 欄位＋各欄 field_provenance（值與來源同一 tx，§9）。
+   * filled_by 預設 'llm'、verified=0、source_type 預設 'ai_draft'。**絕不覆寫已受信任（human/verified）欄位**
+   * （內部查 trustedFieldsOf 跳過），**絕不** bump verified_status。train 頁「讓 AI 補齊真人 persona」(#1) 用；
+   * 語意見 CRM_UPGRADE_PLAN Phase A2。回傳更新後的 Contact。
+   */
+  applyAiDraft(orgId: string, id: string, patch: Partial<Contact>, meta?: AiDraftMeta): Promise<Contact>;
+  /**
+   * 純寫 training_unlocked 旗標（值＋updated_at），**不寫 provenance、不 bump verified_status**。
+   * 供 #1「AI 補齊真人 persona」解鎖對練用：AI 對真人的臆測不得抬高該 contact 的可信徽章（rollup）——
+   * 故不可走 update()（那條走 applyHumanUpdate＋bumpVerified，會把 verified_status 升 partial 並寫 human/verified provenance）。
+   */
+  setTrainingUnlocked(orgId: string, id: string, unlocked: boolean): Promise<void>;
 }
 
 /** company_products 存取（+ 產品↔人 join：listPeople/addPerson/removePerson）。 */

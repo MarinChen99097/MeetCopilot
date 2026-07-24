@@ -966,6 +966,32 @@ img {
 .mc-difficulty__label--danger { color: var(--mc-danger); }
 .mc-difficulty__opt small { color: var(--mc-text-muted); font-size: 11px; }
 
+/* ── 對象來源切換（真人／AI 虛擬人物）＋自助建對象 ───────────── */
+.mc-train__modes { display: inline-flex; gap: 4px; margin: 14px 0 4px; padding: 4px; background: var(--mc-field); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); }
+.mc-seg__btn { padding: 6px 16px; border: 1px solid transparent; border-radius: var(--mc-r-sm); background: transparent; color: var(--mc-text-muted); font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.mc-seg__btn:hover { color: var(--mc-text); }
+.mc-seg__btn.is-on { background: var(--mc-accent); border-color: transparent; color: #fff; }
+
+/* persona 卡片動作列（AI 補齊＋「補齊後可對練」深連結；已移出卡片 button，避免 button 巢狀） */
+.mc-personacard__actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 2px 0; }
+
+/* 本次對練情境（objective）輸入：在啟動列自成一行 */
+.mc-train__objective { display: flex; gap: 12px; flex: 1 1 100%; flex-wrap: wrap; }
+
+/* AI 虛擬人物 自助建對象表單 */
+.mc-synth { margin-top: 8px; }
+.mc-synth__lead { margin: 0 0 14px; color: var(--mc-text-muted); font-size: 14px; max-width: 640px; }
+.mc-synth__form { display: flex; flex-direction: column; gap: 16px; max-width: 720px; padding: 18px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-r-md); }
+.mc-synth__row { display: flex; gap: 12px; flex-wrap: wrap; }
+.mc-synth__fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; padding: 14px; background: var(--mc-field); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); }
+.mc-synth__ta { resize: vertical; min-height: 40px; line-height: 1.5; }
+.mc-synth__design { display: flex; flex-wrap: wrap; gap: 8px; border: none; margin: 0; padding: 0; }
+.mc-synth__design legend { font-size: 12px; color: var(--mc-text-muted); width: 100%; margin-bottom: 4px; }
+.mc-synth__actions { display: flex; justify-content: flex-end; }
+.mc-radio { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid var(--mc-border); border-radius: var(--mc-radius); cursor: pointer; font-size: 13px; }
+.mc-radio.is-on { border-color: var(--mc-accent); background: rgba(139, 92, 246, 0.1); }
+.mc-persona__synthetic { align-self: flex-start; margin-top: 2px; }
+
 /* ── voice call ─────────────────────────────────────────────── */
 .mc-call { display: flex; flex-direction: column; gap: 14px; min-height: calc(100vh - 120px); }
 .mc-call__bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

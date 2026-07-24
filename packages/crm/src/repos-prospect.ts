@@ -15,6 +15,7 @@ import type {
   Paged,
   ByUser,
   CompanyCounts,
+  AiDraftMeta,
 } from "./ports.js";
 import type {
   Company,
@@ -382,7 +383,7 @@ export class SqliteContactRepository implements ContactRepository {
 
   async list(orgId: string, companyId: string): Promise<ContactSummary[]> {
     const rows = await this.db.all<Record<string, unknown>>(
-      `SELECT id, company_id, full_name, full_name_zh, title, title_zh, seniority, decision_power, training_unlocked, verified_status, photo_url
+      `SELECT id, company_id, full_name, full_name_zh, title, title_zh, seniority, decision_power, training_unlocked, is_synthetic, verified_status, photo_url
        FROM contacts WHERE org_id = ? AND company_id = ? ORDER BY created_at DESC`,
       [orgId, companyId],
     );
@@ -489,6 +490,68 @@ export class SqliteContactRepository implements ContactRepository {
     });
     return (await this.findById(orgId, contactId))!;
   }
+
+  /**
+   * AI 草稿寫入（非人工、未驗證）：於單一 tx 內寫 contact 欄位＋各欄 provenance（值與來源永不漂移，§9）。
+   * filled_by 預設 'llm'、verified=0、source_type 預設 'ai_draft'；**不** bump verified_status。
+   * **絕不覆寫已受信任（human/verified）欄位**——先查 trustedFieldsOf 跳過，避免用 AI 臆測 supersede 掉人工真相
+   * （否則新 llm/verified=0 row 會 supersede 舊 human row，害該欄從 trusted 掉出＝毀掉人工驗證）。
+   */
+  async applyAiDraft(
+    orgId: string,
+    id: string,
+    patch: Partial<Contact>,
+    meta: AiDraftMeta = {},
+  ): Promise<Contact> {
+    await this.db.tx(async () => {
+      const now = Date.now();
+      const trusted = await trustedFieldsOf(this.db, orgId, "contact", id);
+      const filtered: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(patch)) {
+        if (CRAWL_SKIP_KEYS.has(k)) continue;
+        if (trusted.has(k)) continue; // 人已細填/驗證的欄位不可被 AI 草稿覆寫
+        filtered[k] = v;
+      }
+      if (Object.keys(filtered).length === 0) return; // 全數已受信任 → no-op（不 bump updated_at）
+
+      const rec = patchToRecord(filtered, CONTACT_DEFS);
+      // provenance 由 rec 序列化後的值取快照（與實際落庫一致）；於加 updated_at 前建立。
+      const provRows: NewProvenance[] = [];
+      for (const d of CONTACT_DEFS) {
+        if (d.sys || !(d.key in filtered)) continue;
+        provRows.push({
+          entityType: "contact",
+          entityId: id,
+          fieldName: d.key,
+          valueSnapshot: rec[d.col] != null ? String(rec[d.col]) : undefined,
+          filledBy: meta.filledBy ?? "llm",
+          sourceType: meta.sourceType ?? "ai_draft",
+          confidence: meta.confidence,
+          model: meta.model,
+          verified: 0 as const, // 絕不標 verified：AI 對真人的臆測不得升成人工真相
+        });
+      }
+      rec.updated_at = now;
+      const cols = Object.keys(rec);
+      await this.db.run(
+        `UPDATE contacts SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE org_id = ? AND id = ?`,
+        [...cols.map((c) => rec[c] ?? null), orgId, id],
+      );
+      await recordProvenanceRows(this.db, orgId, provRows);
+    });
+    return (await this.findById(orgId, id))!;
+  }
+
+  /**
+   * 純寫 training_unlocked 旗標——**不寫 provenance、不 bump verified_status**（見 ports.ts 契約）。
+   * #1 AI 補齊解鎖對練用：AI 對真人的臆測不得抬高 contact rollup，故不走 update()（那條會 bumpVerified）。
+   */
+  async setTrainingUnlocked(orgId: string, id: string, unlocked: boolean): Promise<void> {
+    await this.db.run(
+      "UPDATE contacts SET training_unlocked = ?, updated_at = ? WHERE org_id = ? AND id = ?",
+      [unlocked ? 1 : 0, Date.now(), orgId, id],
+    );
+  }
 }
 
 function mapContactSummary(r: Record<string, unknown>): ContactSummary {
@@ -502,6 +565,8 @@ function mapContactSummary(r: Record<string, unknown>): ContactSummary {
     seniority: (r.seniority as Seniority | null) ?? undefined,
     decisionPower: (r.decision_power as DecisionPower | null) ?? undefined,
     trainingUnlocked: (r.training_unlocked as 0 | 1 | null) ?? undefined,
+    // is_synthetic 只在 contacts.list() 的 SELECT 帶入；其他複用 mapContactSummary 的路徑（如 listPeople）未選此欄 → undefined（安全）。
+    isSynthetic: (r.is_synthetic as 0 | 1 | null) ?? undefined,
     verifiedStatus: r.verified_status as VerifiedStatus,
     photoUrl: (r.photo_url as string | null) ?? undefined,
   };

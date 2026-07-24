@@ -231,6 +231,7 @@ export const CONTACT_DEFS: FieldDef[] = [
   { col: "decision_power", key: "decisionPower" },
   { col: "influence_level", key: "influenceLevel" },
   { col: "training_unlocked", key: "trainingUnlocked" },
+  { col: "is_synthetic", key: "isSynthetic" },
   { col: "relationship_status", key: "relationshipStatus" },
   { col: "relationship_strength", key: "relationshipStrength" },
   { col: "sentiment", key: "sentiment" },

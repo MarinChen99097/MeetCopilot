@@ -20,13 +20,13 @@ const DP_SHORT: Record<DecisionPower, string> = {
   unknown: "未知",
 };
 
-/** 人物 tab：主管清單 → 點開 persona 卡。 */
-export function ContactsTab({ companyId }: { companyId: string }) {
+/** 人物 tab：主管清單 → 點開 persona 卡。initialContactId＝自 /train 深連結時預先展開的主管。 */
+export function ContactsTab({ companyId, initialContactId }: { companyId: string; initialContactId?: string }) {
   const toast = useToast();
   const [items, setItems] = useState<ContactSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialContactId ?? null);
   const [adding, setAdding] = useState(false);
 
   const load = useCallback(() => {
@@ -106,6 +106,7 @@ export function ContactsTab({ companyId }: { companyId: string }) {
                   <span className="mc-contactrow__title">{c.titleZh ?? c.title ?? "未知職稱"}</span>
                 </span>
                 <span className="mc-contactrow__badges">
+                  {c.isSynthetic === 1 ? <span className="mc-badge mc-badge--accent">虛擬</span> : null}
                   {c.decisionPower ? <span className="mc-badge mc-badge--info">{DP_SHORT[c.decisionPower]}</span> : null}
                   <VerifiedBadge status={c.verifiedStatus} />
                 </span>

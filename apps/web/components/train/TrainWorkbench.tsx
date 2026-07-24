@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import type { PersonaOption, StartTrainSessionResult, TrainDifficulty, TrainReport, TrainTurn } from "@meetcopilot/shared";
+import type {
+  PersonaOption,
+  StartTrainSessionResult,
+  TrainDifficulty,
+  TrainObjective,
+  TrainReport,
+  TrainTurn,
+} from "@meetcopilot/shared";
 import {
   ApiError,
   finishTrainSession,
@@ -37,9 +44,9 @@ export function TrainWorkbench() {
   const reportIdRef = useRef<string | null>(null);
 
   const onStart = useCallback(
-    (persona: PersonaOption, diff: TrainDifficulty) => {
+    (persona: PersonaOption, diff: TrainDifficulty, objective?: TrainObjective) => {
       setStarting(true);
-      startTrainSession({ contactId: persona.contactId, difficulty: diff })
+      startTrainSession({ contactId: persona.contactId, difficulty: diff, objective })
         .then((res) => {
           setSession(res);
           setDifficulty(diff);
