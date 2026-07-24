@@ -34,6 +34,17 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-24 21:50 | 語音對練 Gemini Live 微調：麥克風 chunk 降延遲＋每 persona 穩定嗓音（對照官方範例）
+- **工作區**: apps/server, apps/web
+- **類型**: refactor
+- **檔案**: `apps/web/lib/train/liveClient.ts`, `apps/server/src/train/persona.ts`, `apps/server/src/train/live-token.ts`, `apps/server/src/train/train-service.ts`, `apps/server/src/train/persona-voice.test.ts`(新)
+- **改了什麼**:
+  - **低延遲（web）**: `liveClient.ts` capture worklet `_target` 1600（~104ms@16kHz）→ **512（32ms）**，對齊官方 `capture.worklet.js`「20–40ms chunks」最佳實務（128-sample render quanta 累滿 512 才 flush、邏輯不變），降 ~60–90ms 輸入緩衝延遲、barge-in 更靈敏。
+  - **每 persona 穩定嗓音（server）**: `persona.ts` 新增 `PERSONA_VOICE_POOL`（8 經典嗓音 Puck/Charon/Kore/Fenrir/Aoede/Leda/Orus/Zephyr——native-audio 與 half-cascade 皆支援、確保對 `gemini-3.1-flash-live-preview` 有效）＋純函式 `pickPersonaVoice(contactId)`（逐字元 charCode 累加 mod 8，決定性、同 contact 恆同嗓音、不同 contact 分散）；`live-token.ts` `MintOptions` 加 `voiceName?`，有值時於 `liveConnectConstraints.config` 補 `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`（走 ephemeral token constraints＝伺服器鎖定、client 不可竄改，與 systemInstruction 同信任模式）；`train-service.ts` `startSession` `minter.mint({..., voiceName: pickPersonaVoice(contact.id)})`。
+  - **修正註解（web）**: `liveClient.ts` 原註解宣稱 voice 已鎖進 token 但實際未設 → 改為正確描述（persona 嗓音現由 server 依 contactId 穩定選定並鎖進 token）。
+- **為什麼**: 使用者指定即時對話/對練用 `gemini-3.1-flash-live-preview` 並提供官方範例庫 `google-gemini/gemini-live-api-examples` 對照。稽核結論：model 已在線上（deployed env 確認）、Live client 已與官方相容且更完整（重連/resume）；本輪只補兩個「官方最佳實務、我方偏離」的錦上添花——chunk 延遲＋persona 嗓音（原都用同一預設嗓音，擬真度低）。純對練體驗優化，不動 deck/approval/HUD（I1/I2/I3）；persona 與 voice 一律伺服器端鎖進 ephemeral token（不外流、client 不可改）。
+- **驗證**: `apps/web` `tsc` EXIT=0；`apps/server` `tsc` EXIT=0；`apps/server vitest` **51 檔 289 測全綠**（新 `persona-voice.test.ts` 4 測：決定性／值域在池內／a–h 命中全 8 嗓音／實務 id 分散）。官方嗓音有效性佐證：ai.google.dev live-guide／speech-generation＋Vertex configure-language-voice。未 commit 時記（本筆），隨後 commit＋部署。
+
 ### 2026-07-24 20:52 | train 頁自助建對象（Phase A2）：#1 AI 補齊真人 persona ＋ #4 AI 虛擬人物 ＋ 每次對練 objective（未部署）
 - **工作區**: packages/shared, packages/crm, apps/server, apps/web
 - **類型**: feat

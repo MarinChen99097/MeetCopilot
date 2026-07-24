@@ -36,6 +36,13 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-24 21:50 | 即時對練 Live model 確認 ＋ 對照官方範例的兩項優化
+- **誰決定**: 使用者（指定 model＋提供官方範例庫＋2 個 AskUserQuestion 岔路拍板）
+- **決策**: (1) 即時對話/對練 model 確認用 **`gemini-3.1-flash-live-preview`**（稽核：config 預設＋.env＋**deployed server env 皆已是**，且 Live client 已與 3.1 相容——無 thinkingBudget/proactiveAudio/affectiveDialog/對話中 sendClientContent/video 等 2.5 遺留，多 part 事件正確遍歷）。(2) 依官方範例庫 `google-gemini/gemini-live-api-examples`＋`gemini-skills` SKILL.md 逐點比對後，**套用兩項優化**：麥克風 chunk 100ms→32ms（對齊官方 20–40ms 最佳實務、降輸入延遲）＋**每 persona 依 contactId 穩定分配不同嗓音**（8 經典 prebuilt 嗓音池、pickPersonaVoice 決定性選、speechConfig 鎖進 ephemeral token）。
+- **脈絡與理由**: 使用者貼 `gemini-3.1-flash-live-preview` 規格＋遷移注意事項並說「用這個 model」「參考官方範例」。稽核確認 model 已在線上且相容；比對官方範例發現唯二「官方建議、我方偏離」處＝chunk 延遲與 persona 嗓音（原全用同一預設嗓音，擬真度低）。
+- **考慮過的替代**: persona 嗓音「全用同一固定嗓音」（否——使用者選每人穩定分配不同、擬真度高）／「維持預設只修註解」（否）；嗓音池納入僅 native-audio 支援的其餘 22 個嗓音（否——保守用 native-audio＋half-cascade 皆支援的 8 經典，確保對 3.1-flash-live 一定有效、避免無效 voiceName 導致 Live 連線失敗）；低延遲 chunk「先不動」（否——使用者選套用）。
+- **影響**: apps/web/lib/train/liveClient.ts、apps/server/src/train/{persona,live-token,train-service}.ts＋persona-voice.test.ts；CHANGE_TRACKER 1 筆。web＋server 皆重建部署。persona/voice 一律伺服器端鎖進 token（不外流、client 不可改），不動 I1/I2/I3。
+
 ### 2026-07-24 20:52 | train 頁自助建對象（Phase A2）四岔路決策＋Fable 契約/信任層取捨
 - **誰決定**: 使用者（4 個 AskUserQuestion 岔路拍板）＋Fable（契約凍結、審查後修正裁決）
 - **決策**:

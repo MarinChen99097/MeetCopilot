@@ -27,7 +27,7 @@ import type { TrainScorer } from "./scoring.js";
 import type { Meter } from "../ops/meter.js";
 import type { GeminiClient } from "../gemini.js";
 import { meteredGeminiClient } from "../ops/metered-gemini.js";
-import { buildPersonaPrompt, personaReadiness, trustedFieldSet, canTrain } from "./persona.js";
+import { buildPersonaPrompt, personaReadiness, trustedFieldSet, canTrain, pickPersonaVoice } from "./persona.js";
 import {
   draftPersonaForContact,
   designSyntheticPersona,
@@ -163,10 +163,15 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
         objective: input.objective,
       });
 
-      // 鑄 token（persona 鎖進 token；外呼有界）。apiKey 缺 → minter 拋 → 對映 502。
+      // 鑄 token（persona system prompt ＋依 contactId 穩定選定的嗓音一併鎖進 token；外呼有界）。
+      // apiKey 缺 → minter 拋 → 對映 502。voiceName 由伺服器權威決定，client 不可竄改（維持 persona 鎖定模式）。
       let minted;
       try {
-        minted = await minter.mint({ model: liveModel, systemInstruction });
+        minted = await minter.mint({
+          model: liveModel,
+          systemInstruction,
+          voiceName: pickPersonaVoice(contact.id),
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "could not mint Live token";
         if (/not configured/i.test(msg)) throw new TrainError("not_configured", msg);

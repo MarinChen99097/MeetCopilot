@@ -37,6 +37,35 @@ export const PERSONA_FIELDS = [
 /** 可對練的最小門檻：至少 1 個已驗證 persona 欄位——否則沒有任何可信素材可扮演（純爬蟲猜測禁止）。 */
 export const MIN_PERSONA_FIELDS = 1;
 
+/**
+ * 每個 persona 對練用的 prebuilt 嗓音池（Gemini Live `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`）。
+ * 這 8 個是官方「經典嗓音」——native-audio 與 half-cascade 兩類 Live 模型**皆支援**（native-audio 另支援全部 30 個 TTS
+ * 嗓音，但這 8 個保證在 `gemini-3.1-flash-live-preview` 上有效），涵蓋不同性別與語氣、足夠分散不同 persona。
+ * 來源：ai.google.dev 語音生成／Live 指南（native audio 支援全部 TTS 嗓音；half-cascade 支援這 8 個）。
+ */
+export const PERSONA_VOICE_POOL = [
+  "Puck",
+  "Charon",
+  "Kore",
+  "Fenrir",
+  "Aoede",
+  "Leda",
+  "Orus",
+  "Zephyr",
+] as const;
+
+/**
+ * 依 contactId 穩定選一個 persona 嗓音（純函式、決定性）：逐字元 charCode 累加 mod 池長度。
+ * 同一 contactId 永遠回同一嗓音（該 persona 嗓音一致）；不同 contactId 盡量分散到不同嗓音。
+ * 由伺服器呼叫並把結果鎖進 ephemeral token，client 不可竄改（維持 persona/voice 伺服器端鎖定）。
+ */
+export function pickPersonaVoice(contactId: string): string {
+  let sum = 0;
+  for (let i = 0; i < contactId.length; i++) sum += contactId.charCodeAt(i);
+  const idx = sum % PERSONA_VOICE_POOL.length;
+  return PERSONA_VOICE_POOL[idx]!;
+}
+
 /** 由 provenance 逐欄算出「已信任」欄位集合（每個 field_name 取最新一筆；listForEntity 已 superseded IS NULL + created_at DESC）。 */
 export function trustedFieldSet(prov: FieldProvenance[]): Set<string> {
   const seen = new Set<string>();

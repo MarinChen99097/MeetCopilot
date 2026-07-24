@@ -11,10 +11,12 @@
  *   - >15-min seamless continuity via sessionResumption + contextWindowCompression
  *   - a HARD wall-clock deadline + forced teardown so the socket can never hang (L13).
  *
- * SEAM EXPECTATION for M4a (train server): the ephemeral token MUST lock the persona
- * `systemInstruction` (and voice `speechConfig`) into the token via `liveConnectConstraints` /
- * `lockAdditionalFields`, because `TrainLive` (API_CONTRACT §7) does NOT carry a systemInstruction —
- * the client only supplies transport config (modalities, transcription, resumption, compression).
+ * SEAM (M4a train server — now implemented): the ephemeral token locks BOTH the persona
+ * `systemInstruction` AND a per-persona voice `speechConfig` into the token via
+ * `liveConnectConstraints`. The server picks a stable prebuilt voice by contactId (same contact →
+ * same voice, different contacts spread across the pool) so the client cannot choose or override it.
+ * `TrainLive` (API_CONTRACT §7) therefore carries no systemInstruction/voice — the client only
+ * supplies transport config (modalities, transcription, resumption, compression).
  *
  * The `@google/genai` SDK is loaded via dynamic import so it stays out of SSR and the initial bundle.
  */
@@ -75,10 +77,15 @@ const RECONNECT_MAX_BACKOFF_MS = 8000;
 const USER_SPEAKING_HOLD_MS = 450;
 const MIC_LEVEL_THRESHOLD = 0.045;
 
-/** AudioWorklet processor: downsampled Float32 (context is 16 kHz) → PCM16, batched ~100 ms. */
+/**
+ * AudioWorklet processor: downsampled Float32 (context is 16 kHz) → PCM16, batched ~32 ms.
+ * `_target=512` samples @ 16 kHz = 32 ms per chunk — aligns with the official capture.worklet.js
+ * "20–40 ms chunks" best practice for low end-to-end latency (128-sample render quanta accumulate
+ * to exactly 512, so each flush is one clean 512-sample block).
+ */
 const CAPTURE_WORKLET_SRC = `
 class McCaptureProcessor extends AudioWorkletProcessor {
-  constructor() { super(); this._chunks = []; this._n = 0; this._target = 1600; }
+  constructor() { super(); this._chunks = []; this._n = 0; this._target = 512; }
   process(inputs) {
     const input = inputs[0];
     const ch = input && input[0];

@@ -21,6 +21,10 @@ export interface MintOptions {
   model: string;
   /** persona 扮演 system prompt（鎖進 token；client 不可改）。 */
   systemInstruction: string;
+  /**
+   * persona 嗓音（prebuilt voiceName，如 "Kore"）。有值時鎖進 token 的 `speechConfig`——與 systemInstruction 同屬
+   * 伺服器權威、client 不可竄改。省略＝用模型預設嗓音。 */
+  voiceName?: string;
   /** token 有效期（預設 30 分鐘；≤20h）。 */
   tokenTtlMs?: number;
   /** 開 session 的視窗（預設 2 分鐘）——前端須在此期間內開啟 Live 連線。 */
@@ -80,6 +84,11 @@ export function createLiveTokenMinter(apiKey: string): LiveTokenMinter {
                 systemInstruction: opts.systemInstruction,
                 inputAudioTranscription: {},
                 outputAudioTranscription: {},
+                // persona 嗓音鎖進 token（有值才設）：client 連線時即使自帶 speechConfig 也被 constraints 覆蓋，
+                // 故同一 persona 嗓音穩定、且不可被前端竄改（與 systemInstruction 同一信任模式）。
+                ...(opts.voiceName
+                  ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: opts.voiceName } } } }
+                  : {}),
               },
             },
             lockAdditionalFields: [],
