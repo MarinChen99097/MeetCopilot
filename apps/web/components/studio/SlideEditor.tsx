@@ -12,6 +12,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideRenderer } from "@/components/slide/SlideRenderer";
 import { BlockEditor } from "./BlockEditor";
+import { EditableSlide } from "./EditableSlide";
 import { ImageJobCard } from "./ImageJobCard";
 
 /** 一個進行中的生圖卡（每張投影片 × kind 各一張，互不阻塞）。 */
@@ -399,11 +400,15 @@ export function SlideEditor({ deckId }: { deckId: string }) {
               })}
             </aside>
 
-            {/* 中：預覽 */}
+            {/* 中：預覽（可編輯時就地 WYSIWYG；唯讀＝已播/原始頁/409 時維持唯讀 SlideRenderer） */}
             <section className="mc-editor__preview" aria-label="投影片預覽">
               {draft ? (
                 <div className="mc-editor__stage">
-                  <SlideRenderer slide={draft} size="full" />
+                  {readOnly ? (
+                    <SlideRenderer slide={draft} size="full" />
+                  ) : (
+                    <EditableSlide slide={draft} onChange={setDraft} />
+                  )}
                 </div>
               ) : null}
             </section>

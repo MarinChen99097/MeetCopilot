@@ -248,6 +248,40 @@
 .slide--image-full .slide-block--image { flex: 1; width: 100%; height: 100%; }
 .slide--image-full .slide-block--image img { width: 100%; height: 100%; max-height: none; object-fit: cover; }
 
+/* ── WYSIWYG 就地編輯（EditableSlide；C1）— slide-scoped，沿用 cqw 與主題色；只在編輯器 .slide--editing 內生效 ── */
+.mc-inline { cursor: text; border-radius: 3px; padding: 0 0.2cqw; margin: 0 -0.2cqw; }
+.slide--editing .mc-inline:hover { background: color-mix(in srgb, var(--slide-accent) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--slide-accent) 40%, transparent); }
+.slide--editing .mc-inline:focus-visible { outline: 2px solid var(--slide-accent); outline-offset: 1px; }
+.mc-inline__ph { color: var(--slide-muted); opacity: 0.65; font-style: italic; font-weight: 400; }
+/* 編輯態原生 textarea：font/色/字距全繼承外層 block（cqw 字級）→ 像素一致；透明淡底、focus 框、滿寬 auto-grow。 */
+.mc-inline--edit {
+  font: inherit; color: inherit; letter-spacing: inherit; line-height: inherit; text-align: inherit;
+  background: color-mix(in srgb, var(--slide-accent) 8%, transparent);
+  border: 0; outline: 2px solid var(--slide-accent); outline-offset: 1px; border-radius: 3px;
+  padding: 0 0.2cqw; margin: 0 -0.2cqw; width: calc(100% + 0.4cqw); box-sizing: border-box;
+  resize: none; overflow: hidden; display: block; min-height: 1em;
+}
+.mc-inline--edit::placeholder { color: var(--slide-muted); opacity: 0.6; }
+/* 區塊包裝＋hover 工具列（↑↓✕）於右上。 */
+.mc-eblk { position: relative; border-radius: 8px; }
+.slide--editing .mc-eblk:hover { box-shadow: inset 0 0 0 1px var(--slide-hairline); }
+.mc-eblk__tools {
+  position: absolute; top: -1cqw; right: 0.4cqw; z-index: 4; display: none; gap: 0.3cqw;
+  background: var(--slide-bg); border: 1px solid var(--slide-hairline); border-radius: 6px; padding: 0.3cqw 0.5cqw;
+  box-shadow: 0 0.4cqw 1.2cqw rgba(0, 0, 0, 0.18);
+}
+.slide--editing .mc-eblk:hover > .mc-eblk__tools,
+.mc-eblk:focus-within > .mc-eblk__tools { display: inline-flex; }
+.mc-eblk__tools .mc-iconbtn {
+  font-size: 2cqw; line-height: 1; width: auto; height: auto; min-width: 0; padding: 0.2cqw 0.5cqw;
+  background: none; border: 0; color: var(--slide-text); cursor: pointer; border-radius: 4px;
+}
+.mc-eblk__tools .mc-iconbtn:hover:not(:disabled) { background: color-mix(in srgb, var(--slide-text) 10%, transparent); }
+.mc-eblk__tools .mc-iconbtn:disabled { opacity: 0.3; cursor: default; }
+.mc-eblk__tools .mc-iconbtn--danger:hover { color: #e5657f; }
+.mc-eyebrow-edit { min-height: 2.4cqw; }
+.mc-eblk__empty { color: var(--slide-muted); font-size: 2.3cqw; text-align: center; padding: 6cqw 0; }
+
 /* ── /studio — deck list ────────────────────────────────────── */
 .mc-studio { max-width: 1120px; margin: 0 auto; padding: 24px; }
 .mc-studio__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }

@@ -34,7 +34,20 @@
 
 <!-- TRACKER_BELOW -->
 
-### 2026-07-23 18:40 | features 恰好 3 個要點改三角形排版（2 上＋1 置中下；螢幕＝匯出一致）
+### 2026-07-23 20:10 | WYSIWYG Studio 編輯器 C1：文字類就地編輯＋區塊工具列＋右側友善標籤（未部署）
+- **工作區**: apps/web
+- **類型**: feat
+- **檔案**: `apps/web/components/slide/SlideRenderer.tsx`、`apps/web/components/studio/EditableSlide.tsx`(新)、`apps/web/components/studio/slide-block-ops.ts`(新)、`apps/web/components/ui/InlineText.tsx`(新)、`apps/web/components/studio/SlideEditor.tsx`、`apps/web/components/studio/BlockEditor.tsx`、`apps/web/app/studio-present.css`
+- **改了什麼**:
+  - **地基重構（輸出逐字不變）**：`SlideRenderer` 把 `renderBlock`→export `renderSlideBlock`，並 export `themeStyle`/`bgIsImage`（單一顯示真相，供 EditableSlide 重用達像素一致；present/thumb/sim 唯讀路徑不受影響——純改名＋export，無邏輯變動）。
+  - **新 `EditableSlide`（WYSIWYG C1）**：沿用同一組 studio-present.css class 與 `themeStyle`/`bgIsImage`/`renderSlideBlock`；文字類 block（heading/subheading/paragraph/quote＋出處）與 eyebrow 就地編輯——`InlineText` 點擊顯示文字→換原生 `textarea`（font:inherit 吻合 cqw 字級、auto-grow），聚焦 uncontrolled（defaultValue），**blur/Enter（單行）/Cmd+Enter（多行）提交、Esc 取消**、繁中 IME 掛 `onCompositionStart/End`（避 contentEditable 游標坑）；每 top-level block hover 浮出工具列（↑↓✕）。其餘型別（stat/bullets/features/chart/two-col/image）本 cycle 唯讀顯示（C2/C3 就地化），編輯走右側過渡面板。
+  - **`SlideEditor` 掛載**：中央 `!readOnly ? EditableSlide : SlideRenderer`（已播/原始頁/409 唯讀時不掛編輯層）；draft/persist/save/dirty/PATCH 一律沿用（受控 `slide`/`onChange`＝setDraft，不新增存檔管線）。
+  - **右側面板（過渡）**：`BlockEditor` 保留供 features/chart/stat/bullets 仍可編輯，但**版型/新增區塊改中文友善標籤**（content→內容、features→圖示要點…，取代英文 enum 代碼；缺項 fallback 原值）。
+  - **CSS**：新增 `.mc-inline*`/`.mc-eblk*` 等就地編輯樣式，全 slide-scoped（`.slide--editing` 內才生效），不動 `.slide-block--*` 顯示樣式。
+- **為什麼**: 使用者回報 Studio 編輯器「太難用」，選「所見即所得（WYSIWYG）」。照凍結藍圖分 C1（文字）→C2（stat/bullets/features＋視覺 IconPicker）→C3（chart/two-col 收尾＋淘汰 BlockEditor）。不動 I1/I2/I3（未碰 deck append/approval/HUD；唯讀頁不掛編輯層）、SlideSpec 契約不變。
+- **/simplify（4 視角，套用）**: 抽 `slide-block-ops.ts`(新；blockMove/blockRemove/blockReplace/newBlock 共用，BlockEditor 移除本地重複)＋`ui/InlineText.tsx`(新；通用就地文字原語，脫離 slide 領域)＋`SlideRenderer.slideClass()`(export；`.slide` class 單一真相，SlideRenderer 與 EditableSlide 共用)；去多餘 Fragment＋自我重複三元。
+- **/code-review（build-test＋5 視角對抗式）**: **5 視角全無 ≥80**（bug/正確性・I1/I2/I3・authz・錯誤邊界・脈絡一致性）；build-test PASS（web build 18 路由、server typecheck 未受影響）＋**逐字確認 `slideClass`/`renderSlideBlock` 抽出對 present/thumb/sim 三唯讀消費端輸出等價**（純改名/抽函式，無邏輯變動）。順修 1 未達門檻項：`InlineText` Enter 提交加 `!e.nativeEvent.isComposing`（IME 穩健化，含 composing ref 兜底）。
+- **驗證**: web typecheck＋`next build` 全綠。**UI 仍需實機視覺驗收**（就地編輯順手度/字級吻合/工具列/Esc 取消丟棄）。未 commit（硬規則 10）。
 - **工作區**: apps/web, apps/server
 - **類型**: fix
 - **檔案**: `apps/web/components/slide/SlideRenderer.tsx`、`apps/web/app/studio-present.css`、`apps/server/src/generation/pptx-render.ts`

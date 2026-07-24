@@ -12,6 +12,27 @@ import {
   type SlideSpec,
   type SlideTemplate,
 } from "@meetcopilot/shared";
+import { blockMove, blockRemove, blockReplace, newBlock } from "./slide-block-ops";
+
+/** 版型／區塊型別的中文友善標籤（取代原本直出的英文 enum 代碼）。缺項 fallback 回原值。 */
+const TEMPLATE_LABEL: Partial<Record<SlideTemplate, string>> = {
+  title: "封面",
+  section: "分節",
+  content: "內容",
+  stats: "數據",
+  closing: "結語",
+  "image-full": "整頁圖",
+};
+const ADD_LABEL: Record<string, string> = {
+  heading: "大標題",
+  subheading: "副標題",
+  paragraph: "段落",
+  bullets: "條列",
+  quote: "引言",
+  stat: "數據",
+  features: "圖示要點",
+  chart: "圖表",
+};
 
 /**
  * BlockEditor — 右側屬性面板：以 SlideSpec 的 blocks 結構呈現與編輯（非寫死單一版型）。
@@ -20,17 +41,9 @@ import {
  */
 export function BlockEditor({ slide, onChange }: { slide: SlideSpec; onChange: (next: SlideSpec) => void }) {
   const setBlocks = (blocks: SlideBlock[]) => onChange({ ...slide, blocks });
-  const updateBlock = (i: number, next: SlideBlock) => setBlocks(slide.blocks.map((b, j) => (j === i ? next : b)));
-  const removeBlock = (i: number) => setBlocks(slide.blocks.filter((_, j) => j !== i));
-  const moveBlock = (i: number, dir: -1 | 1) => {
-    const j = i + dir;
-    if (j < 0 || j >= slide.blocks.length) return;
-    const next = slide.blocks.slice();
-    const a = next[i]!;
-    next[i] = next[j]!;
-    next[j] = a;
-    setBlocks(next);
-  };
+  const updateBlock = (i: number, next: SlideBlock) => setBlocks(blockReplace(slide.blocks, i, next));
+  const removeBlock = (i: number) => setBlocks(blockRemove(slide.blocks, i));
+  const moveBlock = (i: number, dir: -1 | 1) => setBlocks(blockMove(slide.blocks, i, dir));
 
   return (
     <div className="mc-blocks">
@@ -43,7 +56,7 @@ export function BlockEditor({ slide, onChange }: { slide: SlideSpec; onChange: (
         >
           {SLIDE_TEMPLATES.map((t) => (
             <option key={t} value={t}>
-              {t}
+              {TEMPLATE_LABEL[t] ?? t}
             </option>
           ))}
         </select>
@@ -91,7 +104,7 @@ export function BlockEditor({ slide, onChange }: { slide: SlideSpec; onChange: (
             className="mc-btn mc-btn--ghost mc-btn--sm"
             onClick={() => setBlocks([...slide.blocks, newBlock(t)])}
           >
-            + {t}
+            ＋ {ADD_LABEL[t] ?? t}
           </button>
         ))}
       </div>
@@ -358,32 +371,3 @@ function updateFeature(
   onChange({ ...block, features: block.features.map((f, j) => (j === i ? { ...f, ...patch } : f)) });
 }
 
-/** 新區塊的預設值（type 決定形狀）。 */
-function newBlock(type: SlideBlock["type"]): SlideBlock {
-  switch (type) {
-    case "heading":
-      return { type: "heading", text: "新標題" };
-    case "subheading":
-      return { type: "subheading", text: "副標題" };
-    case "paragraph":
-      return { type: "paragraph", text: "" };
-    case "bullets":
-      return { type: "bullets", items: [""] };
-    case "quote":
-      return { type: "quote", text: "" };
-    case "stat":
-      return { type: "stat", value: "0", label: "" };
-    case "features":
-      return { type: "features", features: [{ title: "" }] };
-    case "chart":
-      return { type: "chart", chartType: "bar", series: [{ label: "", value: 0 }] };
-    case "image":
-      return { type: "image", dataUri: "" };
-    case "two-col":
-      return { type: "two-col", left: [], right: [] };
-    default: {
-      const _exhaustive: never = type;
-      return _exhaustive;
-    }
-  }
-}

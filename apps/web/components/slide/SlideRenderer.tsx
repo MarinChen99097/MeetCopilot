@@ -26,7 +26,7 @@ export interface SlideRendererProps {
  * 寫進 `theme.bg`（一個 CSS background 值，如 `url("data:...") center/cover`；bg 型別本就是 string）。
  * 偵測到 bg 是圖片時掛 `slide--bgimg` 讓 CSS 加暗色 scrim 保住文字對比。
  */
-function themeStyle(theme: SlideTheme | undefined): CSSProperties {
+export function themeStyle(theme: SlideTheme | undefined): CSSProperties {
   if (!theme) return {};
   const vars: Record<string, string> = {};
   if (theme.bg) vars["--slide-bg"] = theme.bg;
@@ -44,8 +44,15 @@ function themeStyle(theme: SlideTheme | undefined): CSSProperties {
 }
 
 /** bg 值是否為圖片背景（url(...)）——決定要不要加 scrim 保住文字對比。 */
-function bgIsImage(theme: SlideTheme | undefined): boolean {
+export function bgIsImage(theme: SlideTheme | undefined): boolean {
   return typeof theme?.bg === "string" && theme.bg.trimStart().startsWith("url(");
+}
+
+/** `.slide` 的完整 class 字串（單一真相；SlideRenderer 與 EditableSlide 共用，`extra` 可附 slide--editing 等）。 */
+export function slideClass(slide: SlideSpec, size: string, ...extra: string[]): string {
+  return ["slide", `slide--${slide.template}`, `slide--${size}`, bgIsImage(slide.theme) ? "slide--bgimg" : "", ...extra]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /**
@@ -53,19 +60,11 @@ function bgIsImage(theme: SlideTheme | undefined): boolean {
  * 這就是本元件的 sanitize 策略：LLM 生成或匯入內容永遠不會被當成 HTML 解析。
  */
 export function SlideRenderer({ slide, size }: SlideRendererProps) {
-  const cls = [
-    "slide",
-    `slide--${slide.template}`,
-    `slide--${size}`,
-    bgIsImage(slide.theme) ? "slide--bgimg" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
   return (
-    <div className={cls} style={themeStyle(slide.theme)}>
+    <div className={slideClass(slide, size)} style={themeStyle(slide.theme)}>
       <div className="slide__body">
         {slide.eyebrow ? <div className="slide__eyebrow">{slide.eyebrow}</div> : null}
-        {slide.blocks.map((block, index) => renderBlock(block, index))}
+        {slide.blocks.map((block, index) => renderSlideBlock(block, index))}
       </div>
       {slide.theme?.logo ? (
         // eslint-disable-next-line @next/next/no-img-element -- dataUri 品牌 logo，非 Next 靜態資產
@@ -77,7 +76,8 @@ export function SlideRenderer({ slide, size }: SlideRendererProps) {
 
 export default SlideRenderer;
 
-function renderBlock(block: SlideBlock, key: number): ReactNode {
+/** 單一 block → 顯示 DOM（純函式，單一顯示真相；SlideRenderer 與 EditableSlide 的非編輯態共用，確保像素一致）。 */
+export function renderSlideBlock(block: SlideBlock, key: number): ReactNode {
   switch (block.type) {
     case "heading":
       return (
@@ -156,9 +156,9 @@ function renderBlock(block: SlideBlock, key: number): ReactNode {
     case "two-col":
       return (
         <div key={key} className="slide-block slide-block--two-col">
-          <div className="two-col__left">{block.left.map((child, childIndex) => renderBlock(child, childIndex))}</div>
+          <div className="two-col__left">{block.left.map((child, childIndex) => renderSlideBlock(child, childIndex))}</div>
           <div className="two-col__right">
-            {block.right.map((child, childIndex) => renderBlock(child, childIndex))}
+            {block.right.map((child, childIndex) => renderSlideBlock(child, childIndex))}
           </div>
         </div>
       );
