@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { StartTrainSessionResult, TrainDifficulty, TrainTurn } from "@meetcopilot/shared";
 import { TrainLiveClient, type LivePartials, type TrainCallState } from "@/lib/train/liveClient";
 
@@ -49,6 +49,8 @@ export function TrainCall({
   const [partials, setPartials] = useState<LivePartials>({ rep: "", ai: "" });
   const [captions, setCaptions] = useState<Caption[]>([]);
   const [micLevel, setMicLevel] = useState(0);
+  // 語速拉桿：本場的前端播放倍速（0.5–2，預設 1×）；拖動即套用到當前 client，重開新一場回到 1.0×。
+  const [rate, setRate] = useState(1);
   const [elapsed, setElapsed] = useState(0);
   const [resumedAt, setResumedAt] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -80,9 +82,17 @@ export function TrainCall({
       },
     );
     clientRef.current = client;
+    setRate(1); // 新一場（新 client，playbackRate 預設 1）→ 拉桿回到 1.0×
     void client.start();
     return () => client.stop("ended");
   }, [session]);
+
+  // 語速拉桿：拖動即時套用到當前場的 client（barge-in 後的新回合 source 也會套此倍速）。
+  function onRateChange(e: ChangeEvent<HTMLInputElement>) {
+    const v = Number(e.target.value);
+    setRate(v);
+    clientRef.current?.setPlaybackRate(v);
+  }
 
   // Freeze the clock once the call ends (record the end instant exactly once).
   useEffect(() => {
@@ -203,6 +213,22 @@ export function TrainCall({
       ) : null}
 
       <footer className="mc-call__foot">
+        {isLive ? (
+          <label className="mc-trainspeed" title="調整對方語音播放速度（會變聲）">
+            <span className="mc-trainspeed__label">語速</span>
+            <input
+              className="mc-trainspeed__range"
+              type="range"
+              min="0.5"
+              max="2"
+              step="0.05"
+              value={rate}
+              onChange={onRateChange}
+              aria-label="語速倍率"
+            />
+            <span className="mc-trainspeed__val">{rate.toFixed(1)}×</span>
+          </label>
+        ) : null}
         {isLive ? (
           <button type="button" className="mc-btn mc-btn--danger-solid mc-call__hangup" onClick={hangUp}>
             掛斷並查看評分

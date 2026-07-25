@@ -36,6 +36,13 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-25 19:32 | 語速做法：前端播放倍速拉桿（無段即時）——推翻 prompt 三段
+- **誰決定**: 使用者（AskUserQuestion 拍板）
+- **決策**: 對練語速要**無段拉桿、可對練中即時拖**。先前已做的 prompt 三段（慢/正常/快，靠 persona prompt pace 指示）不符「無段」→**整組退掉**，改**前端播放倍速**（`AudioBufferSourceNode.playbackRate`，0.5–2.0× 連續、拉桿即時生效）。拉桿放對練中畫面（TrainCall），純前端、不需 server/token。
+- **脈絡與理由**: 我先說明直播語音的技術限制（AI 語音即時串流生成、不像錄音檔可自由精準倍速：>1× 會 underrun、<1× 延遲累積、前端改速會變聲），給 3 選（prompt 無段但近似｜前端播放倍速精確但有取捨｜維持三段）。使用者選**前端播放倍速**，明確接受變聲與直播微瑕，換取真·無段＋即時可拖。
+- **考慮過的替代**: prompt 無段（送 AI「大概速度」，近似非精確、不能即時；被否）；pitch-preserving time-stretch（否——重、加延遲，違背低延遲）；維持三段（否——非無段）。
+- **影響**: apps/web liveClient（setPlaybackRate＋playPcm rate＋nextPlayTime/rate）＋TrainCall（拉桿）＋globals.css；退掉 shared TrainSpeed／server persona-pace／web launch chips（未上線故無痕）；CHANGE_TRACKER 1 筆。未 commit／未部署（待核准）。
+
 ### 2026-07-25 15:16 | 對練語言可設定＋評分報告跟 i18n＋全中文兼容英文專有名詞
 - **誰決定**: 使用者（2 個 AskUserQuestion＋mid-turn 補充覆蓋）
 - **決策**:

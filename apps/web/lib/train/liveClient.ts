@@ -156,6 +156,8 @@ export class TrainLiveClient {
   // playback scheduling / barge-in
   private nextPlayTime = 0;
   private readonly activeSources = new Set<AudioBufferSourceNode>();
+  // 語速拉桿（前端播放倍速）：AI 語音的即時倍速，clamp 到 [0.5, 2]，預設 1×。
+  private playbackRate = 1;
 
   // caption accumulation
   private repPartial = "";
@@ -299,12 +301,27 @@ export class TrainLiveClient {
     buf.copyToChannel(f32, 0);
     const src = ctx.createBufferSource();
     src.buffer = buf;
+    // 語速拉桿：新 source 一律套當前倍速（barge-in 清佇列後的新回合也適用）。
+    src.playbackRate.value = this.playbackRate;
     src.connect(ctx.destination);
     const startAt = Math.max(ctx.currentTime, this.nextPlayTime);
     src.start(startAt);
-    this.nextPlayTime = startAt + buf.duration;
+    // 無縫排程隨倍速調整：source 實際播放時長＝buf.duration / rate（rate>1 播得快、時長短），
+    // 故下一 chunk 背靠背接在此後，仍不重疊、不留縫。
+    this.nextPlayTime = startAt + buf.duration / this.playbackRate;
     this.activeSources.add(src);
     src.onended = () => this.activeSources.delete(src);
+  }
+
+  /**
+   * 語速拉桿：即時設定 AI 語音的前端播放倍速（AudioBufferSourceNode.playbackRate），無段可調。
+   * 直播串流下 >1× 可能偶爾 underrun（播得比串流快），<1× 該回合延遲會累積（AI 講完的停頓會被排掉）；
+   * 變聲為此做法的已知取捨（使用者選定）。clamp 到 [0.5, 2]，並即時套用到目前正在播的 sources。
+   */
+  setPlaybackRate(rate: number): void {
+    const clamped = Math.min(2, Math.max(0.5, Number.isFinite(rate) ? rate : 1));
+    this.playbackRate = clamped;
+    for (const s of this.activeSources) s.playbackRate.value = clamped;
   }
 
   /** Barge-in / interrupt: stop everything currently scheduled. */

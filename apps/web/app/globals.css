@@ -1073,8 +1073,14 @@ img {
 .mc-caption__text { font-size: 14px; line-height: 1.5; }
 
 .mc-call__error { padding: 12px 14px; border: 1px solid rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.08); border-radius: var(--mc-radius); color: var(--mc-danger); font-size: 14px; }
-.mc-call__foot { display: flex; justify-content: center; }
+.mc-call__foot { display: flex; justify-content: center; align-items: center; gap: 16px; flex-wrap: wrap; }
 .mc-call__hangup { min-width: 220px; }
+
+/* 語速拉桿（前端播放倍速；compact，對練中即時拖動） */
+.mc-trainspeed { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--mc-border); border-radius: 999px; background: var(--mc-card); color: var(--mc-text-2); cursor: pointer; }
+.mc-trainspeed__label { font-size: 12px; font-weight: 600; color: var(--mc-text-muted); }
+.mc-trainspeed__range { width: 120px; accent-color: var(--mc-accent); cursor: pointer; }
+.mc-trainspeed__val { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; color: var(--mc-text); }
 
 /* ── score report ───────────────────────────────────────────── */
 .mc-report { display: flex; flex-direction: column; gap: 16px; }

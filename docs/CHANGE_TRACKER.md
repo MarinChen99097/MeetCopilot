@@ -34,6 +34,17 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-25 19:32 | 對練加「語速拉桿」（前端播放倍速、無段即時可拖）——取代先前 prompt 三段語速（未部署）
+- **工作區**: apps/web
+- **類型**: feat
+- **檔案**: `apps/web/lib/train/liveClient.ts`, `apps/web/components/train/TrainCall.tsx`, `apps/web/app/globals.css`
+- **改了什麼**:
+  - **背景**: 先前「慢/正常/快」三段（prompt pace 指示）已整組退掉（git checkout，回 HEAD 27021b2）。使用者要**無段拉桿、可對練中即時拖**的精確倍速。native-audio Live 無 rate 參數、prompt 非無段 → 改**前端播放倍速**（AudioBufferSourceNode.playbackRate；AskUserQuestion 選定，接受變聲與直播微瑕）。
+  - **`liveClient.ts`**: 加 `playbackRate=1`；`setPlaybackRate(rate)`（clamp [0.5,2]＋`Number.isFinite` 防呆＋**即時套用到 `activeSources`** 的 `s.playbackRate.value`）；`playPcm` 新 source 設 `src.playbackRate.value=this.playbackRate`；**無縫排程隨 rate 調整** `nextPlayTime = startAt + buf.duration / playbackRate`（rate>1 時長短、連續 chunk 仍背靠背）。barge-in/stopPlayback 不動（打斷後新回合仍套當前 rate）。
+  - **`TrainCall.tsx`**: 對練中畫面（`mc-call__foot`，僅 isLive 顯示）加精簡語速拉桿（`<input type=range min=0.5 max=2 step=0.05>` 預設 1＋`{rate.toFixed(1)}×`）；`onRateChange`→`setRate`＋`clientRef.current?.setPlaybackRate(v)` 拖動即時生效；新一場歸 1.0×。`globals.css` 加 `.mc-trainspeed*`＋`.mc-call__foot` flex。
+- **為什麼**: 使用者要拉桿式無段調速、對練中即時調。純前端音訊播放層，不動 server/shared/token/契約、不動 deck/approval/HUD（I1/I2/I3）、不破壞 barge-in。已知取捨：變聲、直播下 >1× 偶爾 underrun、<1× 該回合延遲累積（AI 講完停頓會排掉）——使用者選定。
+- **驗證**: `apps/web tsc --noEmit` EXIT 0＋`next build` EXIT 0。未 commit。
+
 ### 2026-07-25 16:18 | 修 /train 對練實機兩 bug：AI 無聲（playbackCtx 未 resume）＋使用者逐字簡體（opencc 簡→繁）（未部署）
 - **工作區**: apps/web
 - **類型**: fix
