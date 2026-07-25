@@ -34,6 +34,14 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-25 19:50 | 對練語速拉桿移到頂部狀態列（原底部 foot 要捲到底才看到，使用者找不到）（未部署）
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/components/train/TrainCall.tsx`
+- **改了什麼**: 語速拉桿（`.mc-trainspeed`）由 `mc-call__foot`（底部、與掛斷鈕同排、頁長要捲到底）**移到 `mc-call__bar` 頂部狀態列**（難度 badge 後、`style marginLeft:auto` 靠右），`isLive` 顯示——一連上就在視野內、不用捲。footer 只留掛斷鈕。純 JSX 位移，rate state/onRateChange/setPlaybackRate 接線不變。
+- **為什麼**: 使用者實機回報「找不到拉桿」——底部位置＋頁面長要捲＝失敗（違反低門檻一眼可見）。搬頂部即解。
+- **驗證**: `apps/web tsc --noEmit` EXIT 0。未 commit。
+
 ### 2026-07-25 19:32 | 對練加「語速拉桿」（前端播放倍速、無段即時可拖）——取代先前 prompt 三段語速（未部署）
 - **工作區**: apps/web
 - **類型**: feat

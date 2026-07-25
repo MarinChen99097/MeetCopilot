@@ -147,6 +147,22 @@ export function TrainCall({
         </span>
         <span className="mc-badge mc-badge--muted">難度：{DIFFICULTY_LABEL[difficulty]}</span>
         {resumedAt ? <span className="mc-call__resumed" role="status">已續連</span> : null}
+        {isLive ? (
+          <label className="mc-trainspeed" title="調整對方語音播放速度（會變聲）" style={{ marginLeft: "auto" }}>
+            <span className="mc-trainspeed__label">語速</span>
+            <input
+              className="mc-trainspeed__range"
+              type="range"
+              min="0.5"
+              max="2"
+              step="0.05"
+              value={rate}
+              onChange={onRateChange}
+              aria-label="語速倍率"
+            />
+            <span className="mc-trainspeed__val">{rate.toFixed(1)}×</span>
+          </label>
+        ) : null}
       </header>
 
       <div className="mc-call__stage">
@@ -213,22 +229,6 @@ export function TrainCall({
       ) : null}
 
       <footer className="mc-call__foot">
-        {isLive ? (
-          <label className="mc-trainspeed" title="調整對方語音播放速度（會變聲）">
-            <span className="mc-trainspeed__label">語速</span>
-            <input
-              className="mc-trainspeed__range"
-              type="range"
-              min="0.5"
-              max="2"
-              step="0.05"
-              value={rate}
-              onChange={onRateChange}
-              aria-label="語速倍率"
-            />
-            <span className="mc-trainspeed__val">{rate.toFixed(1)}×</span>
-          </label>
-        ) : null}
         {isLive ? (
           <button type="button" className="mc-btn mc-btn--danger-solid mc-call__hangup" onClick={hangUp}>
             掛斷並查看評分
