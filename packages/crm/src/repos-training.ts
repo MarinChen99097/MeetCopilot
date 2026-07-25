@@ -12,9 +12,11 @@ import type {
   TrainReport,
   NewTrainReport,
   TrainDifficulty,
+  TrainMode,
   TrainScores,
   TrainHighlight,
 } from "@meetcopilot/shared";
+import { TRAIN_MODES } from "@meetcopilot/shared";
 import { uuidv7 } from "./uuid.js";
 
 // ─────────────────────────────────────────────────────────────
@@ -27,11 +29,12 @@ export class SqliteTrainingRepository implements TrainingRepository {
     const now = Date.now();
     const id = uuidv7();
     const difficulty: TrainDifficulty = input.difficulty ?? "neutral";
+    const mode: TrainMode = input.mode ?? "sales";
     await this.db.run(
       `INSERT INTO training_sessions
-         (id, org_id, contact_id, deal_id, difficulty, started_at, ended_at, transcript_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, orgId, input.contactId, input.dealId ?? null, difficulty, now, null, null, now],
+         (id, org_id, contact_id, deal_id, difficulty, mode, started_at, ended_at, transcript_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, orgId, input.contactId, input.dealId ?? null, difficulty, mode, now, null, null, now],
     );
     return (await this.findSession(orgId, id))!;
   }
@@ -106,6 +109,8 @@ function mapSession(r: Record<string, unknown>): TrainSession {
     contactId: r.contact_id as string,
     dealId: (r.deal_id as string | null) ?? undefined,
     difficulty: r.difficulty as TrainDifficulty,
+    // 舊列（migration 022 之前）無 mode 欄；DEFAULT 'sales' 回填，讀取時再兜底一次防 null。
+    mode: (r.mode as TrainMode | null) ?? "sales",
     startedAt: (r.started_at as number | null) ?? undefined,
     endedAt: (r.ended_at as number | null) ?? undefined,
     transcript: transcriptJson ? (JSON.parse(transcriptJson) as TrainTurn[]) : undefined,
@@ -116,8 +121,36 @@ function mapSession(r: Record<string, unknown>): TrainSession {
 function mapReport(r: Record<string, unknown>): TrainReport {
   const highlightsJson = r.highlights_json as string | null;
   return {
-    scores: JSON.parse(r.scores_json as string) as TrainScores,
+    scores: parseScores(r.scores_json as string),
     highlights: highlightsJson ? (JSON.parse(highlightsJson) as TrainHighlight[]) : [],
     summary: (r.summary as string | null) ?? "",
   };
+}
+
+/** 舊列 legacy object 的四鍵順序＝ TRAIN_MODES.sales.dimensions 順序（異議處理／需求挖掘／清晰度／收尾）。 */
+const LEGACY_SCORE_KEYS = ["objectionHandling", "discovery", "clarity", "closing"] as const;
+
+/**
+ * scores_json 向後相容解析（A3）：
+ *  - **新列**＝`TrainScoreDimension[]`（labeled 陣列）→ 直接用。
+ *  - **舊列（legacy）**＝object `{objectionHandling,discovery,clarity,closing}` → 用 `TRAIN_MODES.sales.dimensions`
+ *    的 label 依序轉成陣列（[{label:"異議處理",score:objectionHandling},…]），避免 A3 之前產生的報告壞掉。
+ */
+function parseScores(json: string): TrainScores {
+  const parsed = JSON.parse(json) as unknown;
+  if (Array.isArray(parsed)) return parsed as TrainScores; // 新格式：labeled 陣列，直通
+  if (parsed && typeof parsed === "object") {
+    const legacy = parsed as Record<string, unknown>;
+    return TRAIN_MODES.sales.dimensions.map((dim, i) => ({
+      label: dim.label,
+      score: toScore(legacy[LEGACY_SCORE_KEYS[i]!]),
+    }));
+  }
+  return [];
+}
+
+/** legacy 分數兜底：非有限數→0（0–100 clamp 由評分端已保證，此處僅防型別意外）。 */
+function toScore(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
 }

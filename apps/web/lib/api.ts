@@ -44,6 +44,8 @@ import type {
   PersonaOption,
   StartTrainSessionResult,
   TrainDifficulty,
+  TrainMode,
+  TrainLang,
   TrainReport,
   TrainTurn,
   TrainObjective,
@@ -661,6 +663,10 @@ export function startTrainSession(input: {
   contactId: string;
   dealId?: string;
   difficulty?: TrainDifficulty;
+  /** 情境模式（sales/partnership/government/interview）；server 依此決定 persona 框架＋評分維度，預設 sales。 */
+  mode?: TrainMode;
+  /** 對練語言（zh 全繁中／en 全英文／auto 跟隨對方）；server 決定 AI 回覆語言，預設 zh。 */
+  lang?: TrainLang;
   /** 本次對練情境目的（銷售目標／面談目的）；server 注入 persona prompt。 */
   objective?: TrainObjective;
 }): Promise<StartTrainSessionResult> {
@@ -683,9 +689,15 @@ export function createSyntheticPersona(body: NewSyntheticPersona): Promise<Creat
 export function saveTrainTranscript(sessionId: string, turns: TrainTurn[]): Promise<void> {
   return request<void>(`/api/train/sessions/${sessionId}/transcript`, { method: "POST", body: { turns } });
 }
-/** Finish → triggers scoring → { reportId }. */
-export function finishTrainSession(sessionId: string): Promise<{ reportId: string }> {
-  return request<{ reportId: string }>(`/api/train/sessions/${sessionId}/finish`, { method: "POST" });
+/**
+ * Finish → triggers scoring → { reportId }. `locale`＝當前 app i18n 語系（next-intl locale，如 'zh-TW'/'en'）；
+ * server 依此決定評分報告文字語言（zh-TW→繁中、en→英文；缺省→繁中）。
+ */
+export function finishTrainSession(sessionId: string, locale?: string): Promise<{ reportId: string }> {
+  return request<{ reportId: string }>(`/api/train/sessions/${sessionId}/finish`, {
+    method: "POST",
+    body: { locale },
+  });
 }
 export function getTrainReport(reportId: string): Promise<TrainReport> {
   return request<TrainReport>(`/api/train/reports/${reportId}`);

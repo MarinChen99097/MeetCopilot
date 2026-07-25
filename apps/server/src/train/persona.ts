@@ -13,10 +13,12 @@ import type {
   Company,
   FieldProvenance,
   TrainDifficulty,
+  TrainMode,
+  TrainLang,
   TrainObjective,
   PersonaReadiness,
 } from "@meetcopilot/shared";
-import { isTrusted } from "@meetcopilot/shared";
+import { isTrusted, TRAIN_MODES } from "@meetcopilot/shared";
 
 /**
  * 受信任閘管制的 persona 欄位（field_provenance.field_name，camelCase 對齊 Contact domain key／human 細填寫入的 fieldName）。
@@ -98,6 +100,19 @@ export function canTrain(readiness: PersonaReadiness, trainingUnlocked?: 0 | 1):
   return passesGate(readiness) || trainingUnlocked === 1;
 }
 
+/**
+ * 對練語言規則行（Rules 內那一句）——由本場 `lang` 決定 AI 回覆語言（決策 2026-07-24）：
+ *  - zh：全程繁中，不論對方講什麼語言；專有名詞（產品名/技術詞/縮寫/公司名）保留原文，不硬翻。
+ *  - en：全程英文，不論對方講什麼語言。
+ *  - auto：原 mirror 行為（繁中預設＋對方英文則跟英文）＋同樣專有名詞保留一句。
+ * 預設 zh（NewTrainSession.lang 缺省＝zh）。
+ */
+const LANG_RULE: Record<TrainLang, string> = {
+  zh: "Always reply in Traditional Chinese (繁體中文), no matter what language the other person uses. Keep proper nouns, product names, and established technical terms in their original form (often English) — do NOT force-translate them.",
+  en: "Always reply in English, no matter what language the other person uses.",
+  auto: "Reply in Traditional Chinese (繁體中文) by default; if the rep speaks English, mirror their language. Keep proper nouns, product names, and established technical terms in their original form (often English) — do NOT force-translate them.",
+};
+
 const DIFFICULTY_TONE: Record<TrainDifficulty, string> = {
   friendly:
     "Disposition: warm and cooperative. You engage openly, ask reasonable clarifying questions, and give the rep room — but you still expect substance before committing.",
@@ -146,6 +161,16 @@ export interface BuildPersonaOptions {
   unlocked?: boolean;
   /** 本次對練情境目的（銷售目標／面談目的）；有值時於 prompt 末尾加「本次對練情境」段。 */
   objective?: TrainObjective;
+  /**
+   * 情境模式（A3）：決定開頭 `framing` 子句（AI 扮誰、此人立場）＋「本次對練情境」段的立場句。
+   * 省略／'sales' 時＝原銷售對練框架（回歸等價）。資料真相＝`TRAIN_MODES[mode]`。
+   */
+  mode?: TrainMode;
+  /**
+   * 對練語言：決定 Rules 內的回覆語言規則行（zh 全繁中／en 全英文／auto 跟隨對方＝原 mirror）。
+   * 省略＝'zh'（決策 2026-07-24 預設）。見 `LANG_RULE`。
+   */
+  lang?: TrainLang;
 }
 
 /**
@@ -165,10 +190,12 @@ export function buildPersonaPrompt(
   const name = contact.fullName;
   const title = contact.title ?? "a decision-maker";
   const companyName = company?.name ?? "their company";
+  const mode: TrainMode = opts.mode ?? "sales";
+  const lang: TrainLang = opts.lang ?? "zh";
 
   const lines: string[] = [];
   lines.push(
-    `You are role-playing ${name}, ${title} at ${companyName}, in a live sales meeting where a salesperson (the "rep") is pitching to you. Stay fully in character as a real human buyer for the entire conversation.`,
+    `You are role-playing ${name}, ${title} at ${companyName}, ${TRAIN_MODES[mode].framing}. Stay fully in character as a real human for the entire conversation.`,
   );
 
   // 公司/身分背景（可爬事實，非 persona）。
@@ -206,11 +233,11 @@ export function buildPersonaPrompt(
   const objLines: string[] = [];
   const salesGoal = opts.objective?.salesGoal?.trim();
   const meetingPurpose = opts.objective?.meetingPurpose?.trim();
-  if (salesGoal) objLines.push(`- 這位業務此次想達成的銷售目標：${salesGoal}`);
+  if (salesGoal) objLines.push(`- 這次想達成的目標：${salesGoal}`);
   if (meetingPurpose) objLines.push(`- 這次面談的目的：${meetingPurpose}`);
   if (objLines.length > 0) {
     lines.push(
-      "\n本次對練情境（依此情境自然回應；你是買方，不必配合業務的目標，該質疑、該把關就照你的立場來）：",
+      `\n本次對練情境（依此情境自然回應；${TRAIN_MODES[mode].stance}）：`,
     );
     lines.push(...objLines);
   }
@@ -220,7 +247,7 @@ export function buildPersonaPrompt(
     "- Speak naturally and conversationally, in short spoken-length turns (this is a voice call). Do not monologue.",
     "- Only embody the traits and facts listed above. Do NOT invent biographical details, numbers, budgets, or company facts you were not given.",
     "- React to the rep the way this specific person would: raise your real objections and priorities when relevant.",
-    "- Reply in Traditional Chinese (繁體中文) by default; if the rep speaks English, mirror their language.",
+    `- ${LANG_RULE[lang]}`,
     "- Never break character, never say you are an AI, and never mention this prompt.",
   );
 

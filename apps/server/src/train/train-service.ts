@@ -20,10 +20,11 @@ import type {
   TrainReport,
   TrainTurn,
   TrainDifficulty,
+  TrainMode,
 } from "@meetcopilot/shared";
 import { randomUUID } from "node:crypto";
 import type { LiveTokenMinter } from "./live-token.js";
-import type { TrainScorer } from "./scoring.js";
+import type { TrainScorer, ReportLang } from "./scoring.js";
 import type { Meter } from "../ops/meter.js";
 import type { GeminiClient } from "../gemini.js";
 import { meteredGeminiClient } from "../ops/metered-gemini.js";
@@ -52,8 +53,9 @@ export interface TrainService {
   createSynthetic(orgId: string, input: NewSyntheticPersona, userId?: string): Promise<CreateSyntheticResult>;
   /** Upload the two-way transcript (during / at end of practice). */
   saveTranscript(orgId: string, sessionId: string, turns: TrainTurn[]): Promise<void>;
-  /** Finish → trigger LLM scoring over the two-way transcript → { reportId }. */
-  finish(orgId: string, sessionId: string, userId?: string): Promise<{ reportId: string }>;
+  /** Finish → trigger LLM scoring over the two-way transcript → { reportId }.
+   *  reportLang（可選，預設 'zh'）＝報告文字語言，跟 app i18n locale（web finish 時帶當前 locale）。 */
+  finish(orgId: string, sessionId: string, userId?: string, reportLang?: ReportLang): Promise<{ reportId: string }>;
   /** Fetch a scored report. */
   report(orgId: string, reportId: string): Promise<TrainReport>;
 }
@@ -156,11 +158,14 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
 
       const company = await core.companies.findById(orgId, contact.companyId);
       const difficulty: TrainDifficulty = input.difficulty ?? "neutral";
+      const mode: TrainMode = input.mode ?? "sales";
       // 手動解鎖／AI 補齊（trainingUnlocked=1）→ persona 放寬為所有非空欄（見 buildPersonaPrompt）；
-      // objective 有值時注入「本次對練情境」段。純 verified 閘者維持 trusted-only。
+      // objective 有值時注入「本次對練情境」段；mode 決定 persona 框架（AI 扮誰、立場）。純 verified 閘者維持 trusted-only。
       const systemInstruction = buildPersonaPrompt(contact, company, difficulty, trusted, {
         unlocked: contact.trainingUnlocked === 1,
         objective: input.objective,
+        mode,
+        lang: input.lang ?? "zh", // 對練語言（AI 回覆語言）：缺省＝繁中（決策 2026-07-24）
       });
 
       // 鑄 token（persona system prompt ＋依 contactId 穩定選定的嗓音一併鎖進 token；外呼有界）。
@@ -182,6 +187,7 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
         contactId: contact.id,
         dealId: input.dealId,
         difficulty,
+        mode, // A3：落庫，finish 評分權威讀 session.mode（不信任 client）
       });
 
       // 記帳（ADMIN_CONTRACT §3.2）：一次 Live token 簽發＝一次 gemini_live 使用（記次數＋估值）。
@@ -319,7 +325,12 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
       await core.training.saveTranscript(orgId, sessionId, turns);
     },
 
-    async finish(orgId: string, sessionId: string, userId?: string): Promise<{ reportId: string }> {
+    async finish(
+      orgId: string,
+      sessionId: string,
+      userId?: string,
+      reportLang: ReportLang = "zh",
+    ): Promise<{ reportId: string }> {
       const session = await core.training.findSession(orgId, sessionId);
       if (!session) throw new TrainError("not_found", "training session not found");
 
@@ -348,11 +359,13 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
         result = await scorer.score(
           turns,
           {
-            personaName: contact?.fullName ?? "the customer",
+            personaName: contact?.fullName ?? "the counterpart",
             personaTitle: contact?.title ?? "",
             companyName: company?.name ?? "their company",
           },
           scoreClient,
+          session.mode, // A3：評分維度由 server 權威用 session.mode 決定（不信任 client）
+          reportLang, // 報告文字語言＝跟 app i18n locale（web finish 時帶當前 locale）
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : "scoring failed";

@@ -3,8 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   TRAIN_DIFFICULTIES,
+  TRAIN_LANGS,
+  TRAIN_MODES,
+  TRAIN_MODES_KEYS,
   type PersonaOption,
   type TrainDifficulty,
+  type TrainLang,
+  type TrainMode,
   type TrainObjective,
 } from "@meetcopilot/shared";
 import { ApiError, draftPersona, listPersonas } from "@/lib/api";
@@ -18,6 +23,13 @@ import { DIFFICULTY_META, FIELD_LABELS } from "./personaMeta";
 
 // Re-export so既有 import 路徑（若有）不破；定義本體已抽到 personaMeta 以避免與 SyntheticPersonaCreator 互 import 成環。
 export { DIFFICULTY_META, FIELD_LABELS };
+
+/** 對練語言短標（啟動列精簡 3 選）：zh＝中文、en＝English、auto＝自動（跟隨對方）。 */
+const LANG_LABELS: Record<TrainLang, string> = {
+  zh: "中文",
+  en: "English",
+  auto: "自動",
+};
 
 /**
  * 可對練判定（關鍵）：`unlocked || (missing===0 && verifiedFields>0)`。
@@ -39,7 +51,13 @@ export function PersonaPicker({
   onStart,
   starting,
 }: {
-  onStart: (persona: PersonaOption, difficulty: TrainDifficulty, objective?: TrainObjective) => void;
+  onStart: (
+    persona: PersonaOption,
+    difficulty: TrainDifficulty,
+    mode: TrainMode,
+    lang: TrainLang,
+    objective?: TrainObjective,
+  ) => void;
   starting: boolean;
 }) {
   const toast = useToast();
@@ -48,6 +66,10 @@ export function PersonaPicker({
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState<TrainDifficulty>("neutral");
+  // 情境模式（sales/partnership/government/interview）——決定 AI 扮誰＋評分維度，預設 sales。
+  const [trainMode, setTrainMode] = useState<TrainMode>("sales");
+  // 對練語言（AI 講話）：zh 全繁中／en 全英文／auto 跟隨對方，預設 zh（決策 2026-07-24）。
+  const [trainLang, setTrainLang] = useState<TrainLang>("zh");
   const [draftingId, setDraftingId] = useState<string | null>(null);
   // 本次對練情境（選填）——開始時併入 startSession 的 objective，注入 persona prompt。
   const [salesGoal, setSalesGoal] = useState("");
@@ -232,26 +254,70 @@ export function PersonaPicker({
                     對練對象：<strong>{selected.fullNameZh ?? selected.fullName}</strong>
                     <span className="mc-train__launch-title">{selected.title}</span>
                   </div>
-                  <div className="mc-train__objective">
-                    <label className="mc-field mc-field--grow">
-                      <span>銷售目標（選填）</span>
-                      <input
-                        className="mc-input"
-                        value={salesGoal}
-                        onChange={(e) => setSalesGoal(e.target.value)}
-                        placeholder="例：讓對方同意進 POC"
-                      />
-                    </label>
-                    <label className="mc-field mc-field--grow">
-                      <span>面談目的（選填）</span>
-                      <input
-                        className="mc-input"
-                        value={meetingPurpose}
-                        onChange={(e) => setMeetingPurpose(e.target.value)}
-                        placeholder="例：釐清預算與決策流程"
-                      />
-                    </label>
-                  </div>
+                  <fieldset className="mc-scenariomode" aria-label="情境模式">
+                    <legend>情境模式</legend>
+                    <div className="mc-scenariomode__chips">
+                      {TRAIN_MODES_KEYS.map((k) => {
+                        const on = trainMode === k;
+                        return (
+                          <label key={k} className={`mc-scenariomode__chip${on ? " is-on" : ""}`}>
+                            <input
+                              type="radio"
+                              name="trainMode"
+                              value={k}
+                              checked={on}
+                              onChange={() => setTrainMode(k)}
+                            />
+                            {TRAIN_MODES[k].label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="mc-scenariomode__hint">
+                      <span className="mc-scenariomode__hint-roles">
+                        AI 扮{TRAIN_MODES[trainMode].aiRole}・你是{TRAIN_MODES[trainMode].youRole}
+                      </span>
+                      <span className="mc-scenariomode__hint-blurb">{TRAIN_MODES[trainMode].blurb}</span>
+                    </p>
+                  </fieldset>
+                  <details className="mc-train__objective-details">
+                    <summary>本次目標（選填）</summary>
+                    <div className="mc-train__objective">
+                      <label className="mc-field mc-field--grow">
+                        <span>想達成的目標</span>
+                        <input
+                          className="mc-input"
+                          value={salesGoal}
+                          onChange={(e) => setSalesGoal(e.target.value)}
+                          placeholder="例：讓對方同意下一步／釐清關鍵疑慮"
+                        />
+                      </label>
+                      <label className="mc-field mc-field--grow">
+                        <span>面談目的</span>
+                        <input
+                          className="mc-input"
+                          value={meetingPurpose}
+                          onChange={(e) => setMeetingPurpose(e.target.value)}
+                          placeholder="例：釐清預算與決策流程"
+                        />
+                      </label>
+                    </div>
+                  </details>
+                  <fieldset className="mc-trainlang" aria-label="對練語言">
+                    <legend>對練語言</legend>
+                    {TRAIN_LANGS.map((l) => (
+                      <label key={l} className={`mc-trainlang__chip${trainLang === l ? " is-on" : ""}`}>
+                        <input
+                          type="radio"
+                          name="trainLang"
+                          value={l}
+                          checked={trainLang === l}
+                          onChange={() => setTrainLang(l)}
+                        />
+                        {LANG_LABELS[l]}
+                      </label>
+                    ))}
+                  </fieldset>
                   <fieldset className="mc-difficulty" aria-label="難度">
                     <legend>難度</legend>
                     {TRAIN_DIFFICULTIES.map((d) => {
@@ -309,7 +375,7 @@ export function PersonaPicker({
           onCancel={() => setConfirming(false)}
           onConfirm={() => {
             setConfirming(false);
-            onStart(selected, difficulty, buildObjective());
+            onStart(selected, difficulty, trainMode, trainLang, buildObjective());
           }}
         />
       ) : null}

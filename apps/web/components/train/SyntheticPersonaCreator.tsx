@@ -199,12 +199,12 @@ export function SyntheticPersonaCreator({
 
           <div className="mc-synth__row">
             <label className="mc-field mc-field--grow">
-              <span>銷售目標（選填）</span>
+              <span>本次目標（選填）</span>
               <input
                 className="mc-input"
                 value={salesGoal}
                 onChange={(e) => setSalesGoal(e.target.value)}
-                placeholder="例：讓對方同意進 POC"
+                placeholder="例：讓對方同意下一步／釐清關鍵疑慮"
               />
             </label>
             <label className="mc-field mc-field--grow">

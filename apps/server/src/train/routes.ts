@@ -14,12 +14,14 @@ import type { Request, Response } from "express";
 import type { CrmCore } from "@meetcopilot/crm";
 import type {
   TrainDifficulty,
+  TrainMode,
+  TrainLang,
   TrainTurn,
   TrainObjective,
   PersonaFieldDraft,
   NewSyntheticPersona,
 } from "@meetcopilot/shared";
-import { TRAIN_DIFFICULTIES } from "@meetcopilot/shared";
+import { TRAIN_DIFFICULTIES, TRAIN_MODES_KEYS, TRAIN_LANGS } from "@meetcopilot/shared";
 import { authRequired } from "../auth/jwt.js";
 import { createGeminiClient } from "../gemini.js";
 import type { AppConfig } from "../config.js";
@@ -107,10 +109,22 @@ export function createTrainRouter(
       return;
     }
     const difficulty = (rawDifficulty as TrainDifficulty | null) ?? undefined;
+    const rawMode = str(body.mode);
+    if (rawMode && !TRAIN_MODES_KEYS.includes(rawMode as TrainMode)) {
+      res.status(400).json({ error: `mode must be one of: ${TRAIN_MODES_KEYS.join(", ")}` });
+      return;
+    }
+    const mode = (rawMode as TrainMode | null) ?? undefined; // 缺省 → service 帶 'sales'
+    const rawLang = str(body.lang);
+    if (rawLang && !TRAIN_LANGS.includes(rawLang as TrainLang)) {
+      res.status(400).json({ error: `lang must be one of: ${TRAIN_LANGS.join(", ")}` });
+      return;
+    }
+    const lang = (rawLang as TrainLang | null) ?? undefined; // 缺省 → service 帶 'zh'
     const objective = parseObjective(body.objective);
     try {
       res.json(
-        await service.startSession(orgId, { contactId, dealId, difficulty, objective }, req.auth!.userId),
+        await service.startSession(orgId, { contactId, dealId, difficulty, mode, lang, objective }, req.auth!.userId),
       );
     } catch (err) {
       sendTrainError(res, err);
@@ -180,8 +194,10 @@ export function createTrainRouter(
   router.post("/sessions/:id/finish", async (req: Request, res: Response) => {
     const orgId = req.auth!.orgId;
     const sessionId = req.params.id ?? "";
+    // 報告文字語言＝跟 app i18n locale：web 帶當前 locale（body/query 的 locale 或 lang）→ 'zh'/'en'（決策 2026-07-24）。
+    const reportLang = parseReportLang(req);
     try {
-      res.json(await service.finish(orgId, sessionId, req.auth!.userId));
+      res.json(await service.finish(orgId, sessionId, req.auth!.userId, reportLang));
     } catch (err) {
       sendTrainError(res, err);
     }
@@ -199,6 +215,18 @@ export function createTrainRouter(
   });
 
   return router;
+}
+
+/**
+ * 解析 finish 帶入的 app i18n locale → 報告語言 'zh'|'en'（決策 2026-07-24）。
+ * 取 body 或 query 的 `locale`／`lang`（next-intl locale，如 'zh-TW'/'en'）；`startsWith('zh')→'zh'`，否則 'en'；
+ * 缺省 → 'zh'（預設安全，與 service.finish 預設一致）。
+ */
+function parseReportLang(req: Request): "zh" | "en" {
+  const body = (req.body ?? {}) as Json;
+  const raw =
+    str(body.locale) ?? str(body.lang) ?? str(req.query.locale) ?? str(req.query.lang);
+  return raw && !raw.toLowerCase().startsWith("zh") ? "en" : "zh";
 }
 
 /** 解析對練情境目的（銷售目標／面談目的）。兩者皆空 → undefined（不注入）。 */

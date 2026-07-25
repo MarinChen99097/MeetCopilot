@@ -1,10 +1,13 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { useLocale } from "next-intl";
 import type {
   PersonaOption,
   StartTrainSessionResult,
   TrainDifficulty,
+  TrainLang,
+  TrainMode,
   TrainObjective,
   TrainReport,
   TrainTurn,
@@ -30,6 +33,7 @@ type Phase = "picking" | "calling" | "report";
  */
 export function TrainWorkbench() {
   const toast = useToast();
+  const locale = useLocale(); // 評分報告語言＝跟 app i18n locale（finish 時帶入；zh-TW→繁中、en→英文）
   const [phase, setPhase] = useState<Phase>("picking");
   const [starting, setStarting] = useState(false);
 
@@ -44,9 +48,15 @@ export function TrainWorkbench() {
   const reportIdRef = useRef<string | null>(null);
 
   const onStart = useCallback(
-    (persona: PersonaOption, diff: TrainDifficulty, objective?: TrainObjective) => {
+    (
+      persona: PersonaOption,
+      diff: TrainDifficulty,
+      mode: TrainMode,
+      lang: TrainLang,
+      objective?: TrainObjective,
+    ) => {
       setStarting(true);
-      startTrainSession({ contactId: persona.contactId, difficulty: diff, objective })
+      startTrainSession({ contactId: persona.contactId, difficulty: diff, mode, lang, objective })
         .then((res) => {
           setSession(res);
           setDifficulty(diff);
@@ -74,7 +84,7 @@ export function TrainWorkbench() {
         }
       }
       if (!reportIdRef.current) {
-        const { reportId } = await finishTrainSession(sessionId);
+        const { reportId } = await finishTrainSession(sessionId, locale); // 帶當前 locale → 報告語言跟 app i18n
         reportIdRef.current = reportId;
       }
       setReport(await getTrainReport(reportIdRef.current));
@@ -83,7 +93,7 @@ export function TrainWorkbench() {
     } finally {
       setReportLoading(false);
     }
-  }, []);
+  }, [locale]);
 
   const onEnd = useCallback(
     (turns: TrainTurn[]) => {

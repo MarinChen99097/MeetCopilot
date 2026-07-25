@@ -34,6 +34,32 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-25 15:16 | 對練語言（中文/英文/自動，預設中文）＋評分報告跟 app i18n＋專有名詞兼容（未部署，併 A3 部署）
+- **工作區**: packages/shared, apps/server, apps/web
+- **類型**: feat
+- **檔案**: `packages/shared/src/train.ts`, `apps/server/src/train/persona.ts`, `apps/server/src/train/scoring.ts`, `apps/server/src/train/train-service.ts`, `apps/server/src/train/routes.ts`, `apps/server/src/train/train-lang.test.ts`(新), `apps/web/lib/api.ts`, `apps/web/components/train/PersonaPicker.tsx`, `apps/web/components/train/TrainWorkbench.tsx`, `apps/web/app/globals.css`
+- **改了什麼**:
+  - **契約（shared）**: `TRAIN_LANGS = ["zh","en","auto"]`＋`TrainLang`；`NewTrainSession.lang?`（對練語言，預設 'zh'）。
+  - **對練語言（AI 回覆語言，server）**: `persona.ts` 新 `LANG_RULE: Record<TrainLang,string>`（zh＝全程繁中／en＝全程英文／auto＝原 mirror）；`buildPersonaPrompt` `opts.lang ?? 'zh'` → Rules 語言行改用 `LANG_RULE[lang]`（取代舊寫死 mirror 行）。`train-service` startSession 傳 `lang: input.lang ?? 'zh'`；`routes` POST /sessions 驗 `TRAIN_LANGS`（非法→400）。
+  - **評分報告語言＝跟 app i18n locale（不是固定中文、不是跟對練語言）**: `scoring.ts` 新 `ReportLang='zh'|'en'`＋`buildSystem(mode,reportLang)`（comments/summary 用 en→English/zh→繁中；**維度 label 仍用 TRAIN_MODES 中文 label 不變**）。串接：web `useLocale()` → `finishTrainSession(sessionId, locale)` → `api.ts` body `{locale}` → `routes` `parseReportLang`（body/query locale/lang，`startsWith('zh')?'zh':'en'`，缺省 zh）→ `train-service.finish(...,reportLang)` → `scorer.score(...,reportLang)`。
+  - **專有名詞兼容**: persona zh／auto 規則行 ＋ scoring SYSTEM summary 行皆加「keep proper nouns / product names / technical terms in their original form (often English), do not force-translate」——全中文時保留英文專有名詞不硬翻。
+  - **web 語言選擇（compact，低門檻）**: `PersonaPicker` 啟動列在難度前緊鄰加 `mc-trainlang` 精簡 3 選 chips（中文/English/自動，預設 zh），複用難度版式、同列 compact、不新增大區塊；onStart 帶 lang；`TrainWorkbench` useLocale＋接 lang。
+- **為什麼**: 使用者要能設定全中文/全英文對練（練英文面試/簡報），且報告語言跟 app 語系、全中文要兼容英文專有名詞。決策 2026-07-24/25：對練語言預設中文；報告跟 i18n；專有名詞不硬翻。persona/lang server 權威鎖 token；不動 deck/approval/HUD（I1/I2/I3）。預設對練語言由舊「繁中＋mirror」改為「全繁中」（mirror 行為改由 'auto' 提供）——使用者明示預設中文。
+- **驗證**: typecheck web/server 全 EXIT=0；`server vitest` 53 檔 **306 測全綠**（新 train-lang 8：各 lang 規則行＋預設 zh＋非 mirror＋專有名詞句／reportLang en 用 English、zh 用繁中、label 不受影響；A3 mode 9 測仍綠）。未 commit。
+
+### 2026-07-25 14:51 | 對練情境模式（Phase A3）：sales/partnership/government/interview 可切換＋可變維度評分＋啟動流程簡化（未部署）
+- **工作區**: packages/shared, packages/crm, apps/server, apps/web
+- **類型**: feat
+- **檔案**: `packages/shared/src/train.ts`, `packages/crm/migrations/022_train_mode.sql`(新), `packages/crm/migrations-pg/022_train_mode.sql`(新), `packages/crm/src/repos-training.ts`, `packages/crm/src/repos-training-modes.test.ts`(新), `apps/server/src/train/persona.ts`, `apps/server/src/train/scoring.ts`, `apps/server/src/train/train-service.ts`, `apps/server/src/train/routes.ts`, `apps/server/src/train/train-modes.test.ts`(新), `apps/web/lib/api.ts`, `apps/web/components/train/PersonaPicker.tsx`, `apps/web/components/train/ScoreReport.tsx`, `apps/web/components/train/SyntheticPersonaCreator.tsx`, `apps/web/components/train/TrainWorkbench.tsx`, `apps/web/app/globals.css`
+- **改了什麼**:
+  - **契約（shared）**: `train.ts` 加 `TRAIN_MODES_KEYS`/`TrainMode`（sales/partnership/government/interview）＋`TrainModeDef{key,label,aiRole,youRole,blurb,framing,stance,coachRole,dimensions}`＋**`TRAIN_MODES` 4 模式全文登錄表**（資料驅動、單一真相：web 顯示、server persona 框架、評分 rubric 都讀它，加模式＝加一筆）；`TrainSession.mode`＋`NewTrainSession.mode?`（預設 sales）；**`TrainScores` 由固定四維 object 改 `TrainScoreDimension[]`**（`{label,score}[]`，各模式維度數/名可不同）。
+  - **資料層（crm）**: migration 022（sqlite＋pg）`training_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'sales'`（值域 app 端驗、不加 CHECK 便於擴充）；`repos-training` createSession 落 mode、mapSession 讀 mode（舊列兜底 sales）、**mapReport 向後相容**（`parseScores`：舊 object scores→用 sales.dimensions label 轉陣列，新陣列直通；`toScore` 防 NaN）。
+  - **server**: `persona.ts` `buildPersonaPrompt` 加 `mode?`（開頭句用 `TRAIN_MODES[mode].framing`、立場句用 `.stance`；預設 sales）；`scoring.ts` `score(...,mode?)` 動態組 SYSTEM（coachRole＋逐維 guide）＋schema 改 `{label,score}[]`＋**回傳以模式 dimensions 為權威**（byLabel map→照 dimensions 補齊、缺→0、亂序/多回不影響、clamp 0–100）＋逐字稿標籤泛化 YOU/COUNTERPART；`train-service` startSession 落 mode＋傳 buildPersonaPrompt、finish 用 `session.mode` 評分（**評分模式 server 權威、非 client 於 finish 帶**）；`routes` POST /sessions 解析 mode（驗 TRAIN_MODES_KEYS，非法→400）。
+  - **web**: `api.ts` startTrainSession 加 `mode?`；`PersonaPicker` 啟動列加情境模式選擇；`ScoreReport` 改遍歷 `report.scores`（labeled 陣列）畫維度格＋avg=陣列平均（空→0）；`TrainWorkbench` onStart 帶 mode。
+  - **審查修正＋簡化收斂（同輪）**: (a) objective 用詞中性化——`persona.ts` 注入句「這位業務此次想達成的銷售目標」→「這次想達成的目標」、web「銷售目標」標籤/placeholder 中性化（避免非銷售模式把 sales 框架灌進 persona，審查信心 85）；(b) **啟動流程簡化**（使用者「簡單、低門檻」原則）——情境模式由 4 張三行高卡改**精簡 chips＋一行角色提示**、objective 兩欄收進**預設收合**的 `<details>`「本次目標（選填）」、難度維持精簡；**核心路徑＝選對象→按開始**（mode/難度/目的全預設，不碰也能一鍵開練）。
+- **為什麼**: 使用者要對練對象/情境可切換——不只銷售，還要「尋求合作簡報」「政府簡報」「面試」等（並言明整個項目操作都要簡單、門檻低）。做成可擴充登錄表＋可變維度評分。mode='sales' 立場句與改前逐字相同（回歸鎖定）；framing 因需支援非買方角色而語義擴充（新 canonical）。persona/voice/mode 一律 server 權威（不外流、client 不可竄改），不動 deck/approval/HUD（I1/I2/I3）。
+- **驗證**: Workflow 五視角對抗式審查 8 raw→1 高信心確認（已修）；重建 shared+crm dist 後 typecheck crm/server/web 全 EXIT=0；`server vitest` 52 檔 **298 測全綠**（新 train-modes 9：各 mode framing/stance＋sales 回歸＋維度對齊缺補0/亂序/clamp＋startSession 落 mode＋finish 用 session.mode）；`crm vitest` 9 檔 **70 測全綠**（新 repos-training-modes 3：落 mode＋mapReport legacy→陣列相容）。未 commit（硬規則 10）。
+
 ### 2026-07-24 21:50 | 語音對練 Gemini Live 微調：麥克風 chunk 降延遲＋每 persona 穩定嗓音（對照官方範例）
 - **工作區**: apps/server, apps/web
 - **類型**: refactor

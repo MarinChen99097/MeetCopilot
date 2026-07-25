@@ -1,15 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { TrainReport, TrainScores, TrainTurn } from "@meetcopilot/shared";
+import type { TrainReport, TrainTurn } from "@meetcopilot/shared";
 import { StateBoundary } from "@/components/ui/StateBoundary";
-
-const SCORE_META: { key: keyof TrainScores; label: string; hint: string }[] = [
-  { key: "objectionHandling", label: "異議處理", hint: "面對質疑的回應力" },
-  { key: "discovery", label: "發現需求", hint: "挖掘痛點與動機" },
-  { key: "clarity", label: "表達清晰", hint: "訊息精準易懂" },
-  { key: "closing", label: "成交推進", hint: "推動下一步" },
-];
 
 function scoreTone(v: number): string {
   if (v >= 75) return "ok";
@@ -40,11 +33,11 @@ export function ScoreReport({
   personaName: string;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
-  const avg = report
-    ? Math.round(
-        (report.scores.objectionHandling + report.scores.discovery + report.scores.clarity + report.scores.closing) / 4,
-      )
-    : 0;
+  // 綜合分數＝各維度平均（維度數依模式而異）；空陣列 → 0。
+  const avg =
+    report && report.scores.length > 0
+      ? Math.round(report.scores.reduce((s, d) => s + d.score, 0) / report.scores.length)
+      : 0;
 
   return (
     <section className="mc-report" aria-label="評分報告">
@@ -76,23 +69,22 @@ export function ScoreReport({
               <div className={`mc-report__overall-num mc-report__overall-num--${scoreTone(avg)}`}>{avg}</div>
               <div className="mc-report__overall-cap">
                 <span>綜合分數</span>
-                <small>四維平均（0–100）</small>
+                <small>各維度平均（0–100）</small>
               </div>
             </div>
 
             <div className="mc-scoregrid">
-              {SCORE_META.map((m) => {
-                const v = report.scores[m.key];
+              {report.scores.map((d, i) => {
+                const v = d.score;
                 return (
-                  <div key={m.key} className="mc-scorecell">
+                  <div key={`${d.label}-${i}`} className="mc-scorecell">
                     <div className="mc-scorecell__top">
-                      <span className="mc-scorecell__label">{m.label}</span>
+                      <span className="mc-scorecell__label">{d.label}</span>
                       <span className={`mc-scorecell__num mc-scorecell__num--${scoreTone(v)}`}>{v}</span>
                     </div>
-                    <div className="mc-scorecell__bar" role="meter" aria-valuenow={v} aria-valuemin={0} aria-valuemax={100} aria-label={m.label}>
+                    <div className="mc-scorecell__bar" role="meter" aria-valuenow={v} aria-valuemin={0} aria-valuemax={100} aria-label={d.label}>
                       <span className={`mc-scorecell__fill mc-scorecell__fill--${scoreTone(v)}`} style={{ width: `${v}%` }} />
                     </div>
-                    <small className="mc-scorecell__hint">{m.hint}</small>
                   </div>
                 );
               })}

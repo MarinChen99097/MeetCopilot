@@ -275,3 +275,14 @@
 - **套用（使用者 2 岔路拍板）**：(a) chunk `_target` 1600(100ms)→512(32ms)（對齊官方 20–40ms、barge-in 更靈敏）；(b) 每 persona 依 contactId 穩定選 prebuilt 嗓音（`PERSONA_VOICE_POOL` 8 經典嗓音〔native-audio＋half-cascade 皆支援，確保對 3.1-flash-live 有效〕＋純函式 `pickPersonaVoice`＋`live-token` 把 `speechConfig` 鎖進 ephemeral token，client 不可改）；(c) 修正 liveClient 誤導註解。驗證 web+server tsc=0＋server vitest 51 檔 **289 測全綠**（新 `persona-voice.test.ts` 4 測）。
 - **commit＋部署（使用者核准「套用＋重部署」）**：commit **`d73b1c4`**（9 檔）→ build server `b3d8add8`／web `c6996ff1` 皆 SUCCESS → **server `00024-ngk`／web `00021-5kg`**（server `services update --image` 保 env、web `run deploy` 帶 NEXT_PUBLIC_API_BASE）。**無 migration/env/相依**。冒煙全綠（health/ready 200＋web `/zh-TW`·`/zh-TW/train`·`/zh-TW/crm` 200＋`GEMINI_LIVE_MODEL` 部署後仍 `gemini-3.1-flash-live-preview`）。DEPLOY.md 版本節已更新。
 - **待辦（同上）**：**尚未 `push origin main`**——現累積 2 個未推 commit `2855c46`（train 自助建對象）＋`d73b1c4`（Live 微調），等使用者一聲一起推。
+- **後續（2026-07-25 已處理）**：使用者核准「commit+部屬」→ 推上並部署（server 00023/00024、web 00020/00021），三 commit＋ROM 歸檔已 `push origin main`（至 `41d6d99`）。
+
+## 2026-07-25 session（對練情境模式 Phase A3：把「銷售對練」一般化為可切換場景）
+
+- **緣起**：使用者問「怎麼模擬面試」（原「密室」＝語音轉錄誤植「面試」）。釐清後需求更大——**對練對象/情境要可切換**，不只銷售：還要「尋求合作簡報（報告給對方公司爭取合作）」「政府簡報（報告給政府人員）」「面試」等，且**強調整個項目操作都要簡單、門檻低**（已入長期記憶 [[keep-operations-simple-low-barrier]]）。
+- **設計（Fable 凍契約）**：把寫死 sales 框架＋四維評分，一般化為**資料驅動的情境模式登錄表 `TRAIN_MODES`**（4 模式：sales/partnership/government/interview，每個含 framing/stance/coachRole/dimensions＝單一真相，加模式＝加一筆）＋**評分改可變維度 labeled 陣列 `TrainScoreDimension[]`**（使用者選「可變維度」）。migration 022（training_sessions.mode）。
+- **實作（Workflow 並行 server+web＋五視角對抗式審查）**：server＝repos-training（落 mode＋mapReport 舊 object scores 向後相容轉陣列）／buildPersonaPrompt 依 mode 換框架（sales 立場句逐字回歸）／scoring 動態維度（以模式 dimensions 為權威、缺補 0、亂序不影響）／train-service finish 用 session.mode（server 權威）／routes 驗 mode；web＝啟動列情境模式選擇＋ScoreReport 遍歷 labeled 陣列。**審查 8 raw→1 確認**（objective 用詞「銷售目標/這位業務」對非銷售模式錯位，信心 85）已修中性化。
+- **簡化收斂（使用者原則）**：啟動流程收斂為**「選對象→按開始」**（mode 預設 sales、難度中性、目的空＝不注入，不碰也能一鍵開練）；情境模式由 4 張三行高卡改**精簡 chips＋一行角色提示**；objective 兩欄收進**預設收合**的 `<details>`。
+- **驗證**：typecheck crm/server/web 全 0；`server vitest` 52 檔 **298 測全綠**（+9 mode 測）；`crm vitest` 9 檔 **70 測全綠**（+3）。
+- **對練語言（同批加，2026-07-25）**：使用者要能設全中文/全英文對練＋報告語言跟 app i18n＋全中文兼容英文專有名詞。加 `TrainLang`（zh/en/auto，預設中文）→ persona `LANG_RULE` 決定 AI 回覆語言；評分報告語言＝跟 next-intl locale（web finish 帶 locale→scorer）；zh 時專有名詞保留原文不硬翻（persona＋scoring）。web 啟動列加精簡 3-chip 語言選擇（compact）。server vitest 升至 **306 測全綠**（+8 lang）。見 ROM 2026-07-25 15:16、CHANGE_TRACKER 同時。
+- **狀態**：變更集＝A3 情境模式＋對練語言，共 15 改＋5 新（含 migration 022、train-modes/repos-training-modes/train-lang 測試）＋docs（CRM_UPGRADE_PLAN Phase A3、CHANGE_TRACKER ×2、ROM ×2）。**待 commit＋部署**（migration 022 開機自動套，server＋web 皆重建）。

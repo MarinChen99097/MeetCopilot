@@ -96,6 +96,40 @@
 - **信任層**：#1 草稿**不**升 verified（只翻 trainingUnlocked）；#4 虛擬角色 human provenance 合法（無真人可誤representation）。
 - **測試**：persona-gen 產九欄（mock gemini）；#1 端點寫草稿＋set trainingUnlocked＋不標 verified（斷言 provenance source≠human）；#4 建 is_synthetic contact＋human persona＋可 startSession；buildPersonaPrompt objective 注入斷言；authz 跨 org 憑證對 /draft、/synthetic 應 404/拒絕。
 
+## Phase A3 凍結契約 — 對練情境模式（sales/partnership/government/interview，可擴充）
+
+**使用者決策（2026-07-24，已拍板）**：把「銷售對練」一般化為**可切換情境模式**。首批 **4 個模式**（銷售對練〔現有〕／尋求合作簡報／政府簡報／面試），做成**資料驅動登錄表**（加模式＝加一筆）。評分改**可變維度 labeled 陣列**（各模式維度不同）。
+
+### 已凍型別（`packages/shared/src/train.ts`，已寫入）
+- `TRAIN_MODES_KEYS`／`TrainMode`（"sales"|"partnership"|"government"|"interview"）；`TrainScoreDimensionDef{label,guide}`；`TrainModeDef{key,label,aiRole,youRole,blurb,framing,stance,coachRole,dimensions}`；**`TRAIN_MODES: Record<TrainMode,TrainModeDef>`（4 模式全文＝單一真相：web 顯示、server persona 框架、評分 rubric 都讀它）**。
+- `TrainSession.mode: TrainMode`＋`NewTrainSession.mode?: TrainMode`（預設 sales）。
+- **`TrainScores` 由固定四維 object 改為 `TrainScoreDimension[]`**（`{label,score}[]`）；`TrainReport.scores`/`NewTrainReport.scores` 隨之變陣列。
+- migration `022_train_mode.sql`（sqlite＋pg，`training_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'sales'`）已建（值域由 app `TRAIN_MODES_KEYS` 驗證，不加 CHECK 以便擴充）。
+
+### 待實作（照此，勿改已凍型別）
+1. **`packages/crm/src/repos-training.ts`**：
+   - `createSession` INSERT 加 `mode` 欄（`input.mode ?? 'sales'`）；`mapSession` 讀 `r.mode as TrainMode`（`TrainSession.mode` 必填）。
+   - **`mapReport` 向後相容（關鍵）**：`scores_json` 舊列是 object `{objectionHandling,discovery,clarity,closing}`、新列是 `TrainScoreDimension[]`。parse 後：**是陣列→直接用；是 object（legacy）→用 `TRAIN_MODES.sales.dimensions` 的 label 依序轉成陣列**（[{label:"異議處理",score:objectionHandling},…]），避免舊報告壞掉。
+2. **`apps/server/src/train/persona.ts` `buildPersonaPrompt`**：`BuildPersonaOptions` 加 `mode?: TrainMode`（預設 'sales'）。開頭句由寫死的 sales 句改為 `You are role-playing ${name}, ${title} at ${companyName}, ${TRAIN_MODES[mode].framing}. Stay fully in character…`；「本次對練情境」段的立場句由寫死「你是買方…」改為 `TRAIN_MODES[mode].stance`。**mode='sales' 時輸出與現況等價**（framing/stance 就是原文）——確保回歸。
+3. **`apps/server/src/train/scoring.ts`**：`score(turns, ctx, client?, mode?: TrainMode)`。
+   - SYSTEM 由 `TRAIN_MODES[mode].coachRole` ＋逐維 `dimensions[].label: guide` 動態組（取代寫死 4 維與「B2B sales coach」）。
+   - RESPONSE_SCHEMA 的 scores 改成 **array of {label:STRING, score:INTEGER}**（要求模型對 `TRAIN_MODES[mode].dimensions` 每個 label 各給一分）。回傳前**以模式維度為準**組 `TrainScores`：對每個 `dimensions[i].label` 找模型該 label 的分數（clamp 0–100，缺→0），保證回傳陣列＝該模式維度、順序一致、不受模型亂序影響。
+   - 逐字稿標籤 `rep`→"YOU"（受評者）、`ai`→`TRAIN_MODES[mode].aiRole` 或泛稱 "COUNTERPART"；SYSTEM 明示「score only YOU（受評的報告者/求職者/業務）」。
+4. **`apps/server/src/train/train-service.ts`**：`startSession` 把 `input.mode ?? 'sales'` 傳給 `createSession`（落庫）與 `buildPersonaPrompt`（framing）；`finish` 讀 `session.mode` 傳給 `scorer.score(..., session.mode)`。
+5. **`apps/server/src/train/routes.ts`**：`POST /sessions` 解析 `mode`（驗 `TRAIN_MODES_KEYS.includes`，非法→400 或忽略退 sales）。
+6. **web**：
+   - **模式選擇**：train 頁「開始對練」啟動列（`mc-train__launch`，選定 persona 且可對練時）加**情境模式選擇**（4 張卡/segmented，顯示 `TRAIN_MODES[k].label`＋`aiRole`/`youRole`/`blurb`）；選定值併入 `startTrainSession` 的 `mode`。與既有難度／objective 並列。（模式與 persona 來源〔真人/虛擬〕正交：先選對象，再選情境。）
+   - **`ScoreReport.tsx`**：移除寫死 `SCORE_META`；改**遍歷 `report.scores`（`{label,score}[]`）** 畫維度格；綜合分數 avg＝陣列平均（`sum/length`，空陣列→0）。hint 可省略或不顯示。
+   - **`api.ts`**：`startTrainSession` 加 `mode?: TrainMode`（型別 import shared）。
+7. **記帳/安全**：mode 由 server 權威決定評分（用 `session.mode`，非信任 client）；persona/voice 仍鎖 token；不動 deck/approval/HUD（I1/I2/I3）。
+
+### 測試
+- buildPersonaPrompt 各 mode 開頭句/立場句正確＋**sales 與改前逐字等價**（回歸）。
+- scoring 各 mode 回傳維度＝該模式 dimensions（label 對、缺分補 0、亂序不影響）。
+- repos-training `mapReport` 舊 object scores → 相容轉陣列（sales labels）；新陣列直通。
+- createSession 落 mode、finish 用 session.mode 評分。
+- migration 022 開機自動套（ready:true）。
+
 ## 狀態
 
 - 2026-07-23：計畫建立；Phase A、B 藍圖皆凍結（agent 藍圖）。

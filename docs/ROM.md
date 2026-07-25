@@ -35,3 +35,25 @@
 ---
 
 <!-- ROM_BELOW -->
+
+### 2026-07-25 15:16 | 對練語言可設定＋評分報告跟 i18n＋全中文兼容英文專有名詞
+- **誰決定**: 使用者（2 個 AskUserQuestion＋mid-turn 補充覆蓋）
+- **決策**:
+  1. **對練語言可設定**：加「中文／English／自動跟隨」（`TrainLang` zh/en/auto），**預設中文**（全繁中）；auto＝原 mirror 行為（跟對方語言）。→ AI 講話語言由此決定（鎖進 token）。
+  2. **評分報告語言＝跟 app i18n locale**（mid-turn 覆蓋前面「一律中文」的答案）：報告文字跟 next-intl 語系（zh-TW→繁中、en→英文），web finish 時帶當前 locale 給評分器；**評分維度 label 仍用中文（UI 顯示），只切 comments/summary 語言**。
+  3. **全中文兼容英文專有名詞**：AI 回覆與評分報告在中文時，產品名/技術詞/縮寫/公司名等**保留原文（常為英文）、不硬翻**——加進 persona zh/auto 規則行與 scoring SYSTEM。
+  - 實作取捨：對練語言預設由舊「繁中＋mirror」改為「全繁中」（mirror 移到 auto 選項）＝使用者明示預設中文；報告 locale 走 finish 參數（body/query locale/lang→zh/en）不需新 migration/型別；語言選擇 UI 精簡 3-chip、同難度列 compact（守 [[keep-operations-simple-low-barrier]]）。
+- **脈絡與理由**: 使用者問「可以設定全中文或全英文對練嗎」＋「報告語言跟 i18n，全中文可能遇到專有名詞是英文要兼容」。屬 A3 情境模式的延伸，併同一批部署。
+- **考慮過的替代**: 報告一律中文（初答，被 mid-turn「跟 i18n」覆蓋）；對練語言預設自動跟隨（否——使用者選預設中文）；不加語言設定（否）。
+- **影響**: shared/train.ts（TrainLang）、server persona/scoring/train-service/routes、web api/PersonaPicker/TrainWorkbench/globals.css；CHANGE_TRACKER 1 筆。未 commit／未部署（併 A3 待核准）。
+
+### 2026-07-25 14:51 | 對練一般化為「情境模式」（sales/合作/政府/面試）＋可變維度評分＋全項目「簡單低門檻」原則
+- **誰決定**: 使用者（指定情境類型＋2 個 AskUserQuestion 拍板＋立全項目 UX 原則）＋Fable（登錄表抽象、契約凍結、審查後裁決）
+- **決策**:
+  1. **對練從「銷售」一般化為可切換情境模式**：首批 4 個——銷售對練（現有）／尋求合作簡報（AI＝對方公司高階，你爭取合作）／政府簡報（AI＝政府審查/承辦，你報告過審）／面試（AI＝面試官，你＝求職者）。使用者原話：「也不太像面試那種樣態，也要有像是報告給對方公司的人聽尋求合作、報告給政府人員聽等等模式」。做成**資料驅動登錄表 `TRAIN_MODES`**（framing/stance/coachRole/dimensions 全在一處，加模式＝加一筆，不改邏輯）。
+  2. **評分改可變維度 labeled 陣列**（`TrainScoreDimension[]`，各模式維度不同）——非固定四維 object（AskUserQuestion 選「可變維度」勝「4 槽換標籤」）；舊報告由 repo mapReport 相容轉陣列。
+  3. **全項目 UX 原則（重要，已入長期記憶 [[keep-operations-simple-low-barrier]]）**：使用者立「相關操作要直接簡單明瞭、不要過於複雜門檻過大——不只模擬，整個項目所有功能皆然」。當輪即套用：對練啟動流程收斂為「選對象→按開始」（模式/難度/目的全預設、進階收合），情境模式改精簡 chips。
+  - **Fable 契約/實作取捨**：mode 由 **server 權威**決定評分（finish 用 `session.mode`，非信任 client 於 finish 再帶）；`buildPersonaPrompt`/`scoring` 依 mode 切換、mode='sales' 立場句逐字＝改前（回歸鎖定）、framing 因需支援非買方角色而語義擴充（新 canonical，語義等價或更明確）；scoring 回傳**以模式 dimensions 為權威**（模型缺/亂序/多回不影響）；審查後裁決 objective 用詞中性化（「銷售目標/這位業務」→中性，避免非銷售模式灌 sales 框架）。
+- **脈絡與理由**: 對練引擎本質是通用角色扮演，只是原本寫死 sales 框架＋四維。使用者要多場景（B2B 平台的延伸：合作提案、政府關係、招募）。以「Fable 凍契約→Workflow 並行實作＋五視角對抗式審查→修高信心項→簡化收斂」流程完成。
+- **考慮過的替代**: 評分維持 4 槽換標籤（否——使用者要可變維度更彈性）；先只做前 3 不做面試（否——4 個一起）；情境模式做成必經多步關卡（否——違反簡單原則，改精簡 chips＋預設＋摺疊）；mode 存 report 而非 session（否——mode 屬 session，評分時讀 session.mode）。**審查濾掉 7 誤報**，確認 1（objective 用詞錯位）已修。
+- **影響**: shared/train.ts（TRAIN_MODES 登錄表＋TrainScores 陣列）、migration 022、crm repos-training、server train/*、web train/*＋globals.css；docs/CRM_UPGRADE_PLAN.md（Phase A3 凍結契約節）、CHANGE_TRACKER 1 筆；長期記憶 keep-operations-simple-low-barrier。未 commit／未部署（待核准）。

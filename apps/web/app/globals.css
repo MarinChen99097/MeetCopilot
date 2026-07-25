@@ -966,6 +966,14 @@ img {
 .mc-difficulty__label--danger { color: var(--mc-danger); }
 .mc-difficulty__opt small { color: var(--mc-text-muted); font-size: 11px; }
 
+/* 對練語言（zh/en/auto）：緊鄰難度的精簡 3 選 chips（AI 講話語言，決策 2026-07-24） */
+.mc-trainlang { display: flex; gap: 6px; border: none; margin: 0; padding: 0; align-content: flex-start; }
+.mc-trainlang legend { font-size: 12px; color: var(--mc-text-muted); float: left; width: 100%; margin-bottom: 4px; }
+.mc-trainlang__chip { display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid var(--mc-border); border-radius: 999px; background: var(--mc-card); color: var(--mc-text); font-size: 13px; font-weight: 600; cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s; }
+.mc-trainlang__chip:hover { background: var(--mc-card-hover); }
+.mc-trainlang__chip.is-on { border-color: var(--mc-accent); background: rgba(139, 92, 246, 0.16); }
+.mc-trainlang__chip input { position: absolute; opacity: 0; width: 0; height: 0; }
+
 /* ── 對象來源切換（真人／AI 虛擬人物）＋自助建對象 ───────────── */
 .mc-train__modes { display: inline-flex; gap: 4px; margin: 14px 0 4px; padding: 4px; background: var(--mc-field); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); }
 .mc-seg__btn { padding: 6px 16px; border: 1px solid transparent; border-radius: var(--mc-r-sm); background: transparent; color: var(--mc-text-muted); font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
@@ -975,8 +983,24 @@ img {
 /* persona 卡片動作列（AI 補齊＋「補齊後可對練」深連結；已移出卡片 button，避免 button 巢狀） */
 .mc-personacard__actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 2px 0; }
 
-/* 本次對練情境（objective）輸入：在啟動列自成一行 */
-.mc-train__objective { display: flex; gap: 12px; flex: 1 1 100%; flex-wrap: wrap; }
+/* 本次對練情境（objective）：預設收合的可摺疊區塊，不擋在必經流程上 */
+.mc-train__objective-details { flex: 1 1 100%; min-width: 0; }
+.mc-train__objective-details > summary { font-size: 13px; color: var(--mc-text-muted); cursor: pointer; list-style: revert; padding: 2px 0; user-select: none; }
+.mc-train__objective-details > summary:hover { color: var(--mc-text); }
+.mc-train__objective-details[open] > summary { margin-bottom: 8px; }
+.mc-train__objective { display: flex; gap: 12px; flex-wrap: wrap; }
+
+/* 情境模式選擇（sales/partnership/government/interview）：精簡 segmented chips ＋一行提示 */
+.mc-scenariomode { flex: 1 1 100%; border: none; margin: 0; padding: 0; min-width: 0; }
+.mc-scenariomode legend { font-size: 12px; color: var(--mc-text-muted); margin-bottom: 6px; padding: 0; }
+.mc-scenariomode__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mc-scenariomode__chip { display: inline-flex; align-items: center; padding: 5px 14px; border: 1px solid var(--mc-border); border-radius: 999px; background: var(--mc-card); color: var(--mc-text); font-size: 13px; font-weight: 600; cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s; }
+.mc-scenariomode__chip:hover { background: var(--mc-card-hover); }
+.mc-scenariomode__chip.is-on { border-color: var(--mc-accent); background: rgba(139, 92, 246, 0.16); color: var(--mc-text); }
+.mc-scenariomode__chip input { position: absolute; opacity: 0; width: 0; height: 0; }
+.mc-scenariomode__hint { display: flex; align-items: baseline; gap: 8px; margin: 6px 2px 0; font-size: 12px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.mc-scenariomode__hint-roles { color: var(--mc-text); flex: 0 0 auto; }
+.mc-scenariomode__hint-blurb { color: var(--mc-text-muted); overflow: hidden; text-overflow: ellipsis; }
 
 /* AI 虛擬人物 自助建對象表單 */
 .mc-synth { margin-top: 8px; }
