@@ -161,6 +161,10 @@ export class TrainLiveClient {
   private repPartial = "";
   private aiPartial = "";
 
+  // Bug 1 — lazy-loaded, cached simplified→traditional (zh-TW) converter for the rep's ASR transcript.
+  private s2tConvert: ((text: string) => string) | null = null;
+  private s2tLoading = false;
+
   // resumption + lifecycle
   private resumeHandle: string | null = null;
   private reconnects = 0;
@@ -182,6 +186,9 @@ export class TrainLiveClient {
   async start(): Promise<void> {
     this.startedAt = Date.now();
     this.setState("connecting");
+    // Bug 1 — pre-warm the opencc dictionary in parallel with mic init + the Live handshake, so it's
+    // ready before the first rep transcription chunk arrives (shrinks the raw-passthrough window).
+    this.ensureS2TConverter();
     try {
       await this.initAudio();
     } catch (err) {
@@ -244,6 +251,16 @@ export class TrainLiveClient {
     source.connect(this.captureNode);
     this.captureNode.connect(sink);
     sink.connect(this.captureCtx.destination);
+
+    // Bug 2 — resume BOTH contexts while we're still inside the user-gesture chain (the click that
+    // called start()). getUserMedia/createMediaStreamSource implicitly wakes the capture context
+    // (so the mic + input transcript worked), but nothing wakes the PLAYBACK context — under the
+    // autoplay policy it stays `suspended`, so playPcm's src.start() schedules silently and the AI
+    // has captions but no voice. resume() here is permitted because we hold a user gesture.
+    await Promise.all([
+      this.captureCtx.resume().catch(() => undefined),
+      this.playbackCtx.resume().catch(() => undefined),
+    ]);
   }
 
   private onCaptureChunk(buffer: ArrayBuffer): void {
@@ -273,6 +290,9 @@ export class TrainLiveClient {
   private playPcm(int16: Int16Array): void {
     const ctx = this.playbackCtx;
     if (!ctx) return;
+    // Bug 2 — best-effort lazy wake: if the system suspended the playback context mid-call
+    // (tab backgrounded, OS audio focus change, etc.), resume it so scheduled buffers still sound.
+    if (ctx.state === "suspended") void ctx.resume().catch(() => undefined);
     const f32 = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) f32[i] = int16[i]! / 0x8000;
     const buf = ctx.createBuffer(1, f32.length, PLAYBACK_SAMPLE_RATE);
@@ -381,7 +401,9 @@ export class TrainLiveClient {
       }
       const inText = sc.inputTranscription?.text;
       if (inText) {
-        this.repPartial += inText;
+        // Bug 1 — convert per-chunk before accumulating, so both the live partial and the finalized
+        // rep turn (repPartial) are Traditional. Only the rep's input is converted; AI output isn't.
+        this.repPartial += this.toTraditional(inText);
         this.emitPartials();
       }
       if (sc.turnComplete) {
@@ -445,6 +467,31 @@ export class TrainLiveClient {
   }
 
   // ── captions / transcript ──────────────────────────────────────
+
+  /** Kick off the one-time lazy load of the opencc simplified→traditional converter (Bug 1). */
+  private ensureS2TConverter(): void {
+    if (this.s2tConvert || this.s2tLoading) return;
+    this.s2tLoading = true;
+    void import("opencc-js")
+      .then((OpenCC) => {
+        this.s2tConvert = OpenCC.Converter({ from: "cn", to: "tw" });
+      })
+      .catch(() => {
+        /* converter unavailable — rep captions fall back to raw (Simplified) text, no crash */
+      })
+      .finally(() => {
+        this.s2tLoading = false;
+      });
+  }
+
+  /**
+   * Convert the rep's (input) ASR text to Traditional zh-TW. Non-Chinese characters pass through
+   * unchanged (English drills unaffected); raw passthrough until the dictionary finishes loading.
+   */
+  private toTraditional(text: string): string {
+    this.ensureS2TConverter();
+    return this.s2tConvert ? this.s2tConvert(text) : text;
+  }
 
   private emitPartials(): void {
     this.cb.onPartial({ rep: this.repPartial, ai: this.aiPartial });

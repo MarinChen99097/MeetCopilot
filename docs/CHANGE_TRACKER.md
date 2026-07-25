@@ -34,6 +34,16 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-25 16:18 | 修 /train 對練實機兩 bug：AI 無聲（playbackCtx 未 resume）＋使用者逐字簡體（opencc 簡→繁）（未部署）
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/lib/train/liveClient.ts`, `apps/web/package.json`, `package-lock.json`
+- **改了什麼**:
+  - **Bug 2（AI 有文字逐字稿但無聲音）**: 根因＝`initAudio` 建的 `playbackCtx`（24k AudioContext）autoplay 政策下停在 `suspended`、無來源喚醒（`captureCtx` 因 `getUserMedia`/`createMediaStreamSource` 被隱式喚醒故麥克風正常）→ `playPcm` 的 `src.start()` 只排程不出聲。修：`initAudio` 尾端（graph 接好、仍在 start() 使用者手勢窗內）`Promise.all` resume 兩個 context；`playPcm` 開頭若 `ctx.state==='suspended'` 惰性 `resume()`（防中途被系統 suspend）。barge-in/`nextPlayTime` 排程/`stopPlayback` 未動。
+  - **Bug 1（使用者自己語音的逐字顯示簡體）**: Gemini `inputAudioTranscription` 的 ASR 預設輸出簡體（AI 的 `outputTranscription` 已繁中不動）。`@google/genai` `AudioTranscriptionConfig` 只有 `languageHints`（辨識語言提示）無簡/繁腳本選項，故走 **opencc-js**（`^1.4.1`）：`ensureS2TConverter()`（`OpenCC.Converter({from:'cn',to:'tw'})` 動態 import 惰性載入、只建一次 cache、`s2tLoading` 去重）＋`toTraditional()`；`onMessage` 的 `inputTranscription.text` **每 chunk 先轉繁**再累積 `repPartial`（partial 顯示與 finalize 的 rep turn/`saveTranscript` 皆繁體）；**只轉 rep-input，AI-output 不動**；未載完前 rep 原樣 passthrough，`start()` 預熱載入縮短窗口。opencc 動態 import 不進初始 bundle（`/train` 137/139kB 未含）、無 SSR 爆。
+- **為什麼**: 使用者線上實跑對練回報「對方沒語音只有文字」「我的逐字是簡體（i18n 是繁中）」。純 web 端音訊/顯示修正，不動 server/契約/deck/approval/HUD（I1/I2/I3）。
+- **驗證**: **/simplify**（code-simplifier）套 1（精簡註解）＋其餘依「不改行為」跳過；**/code-review**（Workflow 2 視角對抗式：音訊正確性、opencc＋建置）raw 5→**0 高信心確認**；`apps/web tsc --noEmit` EXIT 0＋`next build` EXIT 0（opencc 惰性 import 不破 build）。未 commit（記後即 commit＋push，本輪使用者要 commit+push、未指示部署）。
+
 ### 2026-07-25 15:47 | 修 /train 麥克風無法啟動（CSP script-src 缺 blob:→AudioWorklet 被擋）＋GSI style-src＋錯誤細分（未部署）
 - **工作區**: apps/web
 - **類型**: fix
