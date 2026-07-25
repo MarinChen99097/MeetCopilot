@@ -36,6 +36,18 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-25 20:13 | 移除「帳號密碼登入」、純用 Google 登入（範圍 web+admin；深度先只拔前端 UI，後端 endpoint 暫留）
+- **誰決定**: 使用者（原話「把這個帳號密碼的部分先移除，純用 google 登入」；範圍與深度經 2 個 AskUserQuestion＋mid-turn 補充拍板）
+- **決策**:
+  1. **範圍＝web＋admin 兩處登入都移除帳密 UI**（使用者選「web + admin 後台都移除」）。
+  2. **深度＝這次只拔前端 UI**（使用者答「只隱藏前端 UI，後端先留著」＋mid-turn「先把前端的帳密登入移除即可」覆蓋確認）——後端 `POST /api/auth/login`、`/register` handler **保留不動**（[apps/server/src/auth/routes.ts](../apps/server/src/auth/routes.ts)），DB `users.password_hash` 欄與 provision 的 `unusablePasswordHash` 也不動。
+  3. **前端改動**：`AuthForm.tsx`（web）與 admin `login/page.tsx` 移除 Email/密碼/顯示名稱/組織名欄位、送出鈕、「用密碼登入」toggle、登入⇄註冊切換連結及相關 state/handler/import（不刪 lib/api.ts 的 apiLogin/apiRegister 函式定義，僅停止呼叫）；只留 GoogleSignInButton＋標題＋錯誤區。
+  4. **防呆**：`googleOn=false`（未設 `NEXT_PUBLIC_GOOGLE_CLIENT_ID`）時改顯示「Google 登入尚未設定」提示，不再退回帳密、也不留空白頁。
+- **脈絡與理由**: 產品既有設計已把 Google 當主路徑、密碼藏在 toggle 後（AuthForm `showPassword` 初值 `!googleOn`）。使用者要更進一步：前端純 Google。DB 不需 migration，因 Google 流程 `provisionUser` 只靠 email find-or-create、`password_hash NOT NULL` 由 `unusablePasswordHash` 填。
+- **考慮過的替代**: (a) 深度＝連後端 endpoint 一併拔（使用者否，選「先只拔前端」——保留可還原、避免一併改大量用到 /login /register 的測試）；(b) 範圍＝只動 web（使用者否，選 web+admin 一起）；(c) Google 未設時維持帳密 fallback（否——與「純 Google」矛盾，改顯示提示）。
+- **風險（已向使用者揭示）**: 拔帳密後每個環境（含本機開發）都必須設好 `GOOGLE_CLIENT_ID`＋`NEXT_PUBLIC_GOOGLE_CLIENT_ID`，否則無法登入；用「非 Google email」註冊過的舊帳號會被鎖在外（後端 endpoint 仍在，屬暫留可救）。
+- **影響**: apps/web `components/auth/AuthForm.tsx`＋(auth)/login、register 頁；apps/admin `src/app/login/page.tsx`；CHANGE_TRACKER 待 coder 回報後補 1 筆。未 commit／未部署（硬規則 10，待核准）。
+
 ### 2026-07-25 19:32 | 語速做法：前端播放倍速拉桿（無段即時）——推翻 prompt 三段
 - **誰決定**: 使用者（AskUserQuestion 拍板）
 - **決策**: 對練語速要**無段拉桿、可對練中即時拖**。先前已做的 prompt 三段（慢/正常/快，靠 persona prompt pace 指示）不符「無段」→**整組退掉**，改**前端播放倍速**（`AudioBufferSourceNode.playbackRate`，0.5–2.0× 連續、拉桿即時生效）。拉桿放對練中畫面（TrainCall），純前端、不需 server/token。

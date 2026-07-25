@@ -34,6 +34,17 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-25 20:13 | 登入頁移除帳號密碼 UI、改純 Google 登入（web + admin；後端 endpoint 暫留）（未部署）
+- **工作區**: apps/web, apps/admin
+- **類型**: refactor
+- **檔案**: `apps/web/components/auth/AuthForm.tsx`, `apps/admin/src/app/login/page.tsx`
+- **改了什麼**:
+  - **`AuthForm.tsx`（web，改 Google-only）**: 移除 Email/密碼/顯示名稱/組織名稱四輸入框、送出鈕與 `onSubmit`、`showPassword` toggle（「用密碼登入」）、登入⇄「建立組織」切換連結、`redirectTarget`；移除 state `email/password/displayName/orgName/busy/showPassword`（保留 `error`——Google 失敗仍顯示）；移除 import `apiLogin/apiRegister/setToken/authErrorKey/Spinner/useTranslations/useRouter/Link/FormEvent`（**未動 `lib/api.ts` 函式定義**，僅停止呼叫）。prop 簽名保留 `{mode; next?}`（兩 thin page 仍傳，不破編譯），內部只用 `mode` 決定標題。**Before**: `googleOn` 為 false 時 GoogleSignInButton render null → 整頁退回帳密表單；**After**: 顯示「Google 登入尚未設定，請設定 NEXT_PUBLIC_GOOGLE_CLIENT_ID。」提示（不再有帳密 fallback、不留白）。Google-only render `AuthForm.tsx:33-45`。
+  - **`admin/src/app/login/page.tsx`（改 Google-only）**: 移除 Email/密碼輸入框、密碼 `onSubmit`（呼叫 `apiLogin`）、`showPassword` toggle、`busy` state；移除 import `apiLogin/errMessage/Spinner/FormEvent`（保留 `ApiError/getHealth/setToken`）。**保留** `verifyAndEnter`——拿 Google token 後探測 `/api/admin/health` 確認 platformAdmin、非管理員清 token 並提示的邏輯完整不動。`googleOn` false 時顯示提示。Google-only render `page.tsx:52-58`、錯誤區 `:60-64`。
+  - web `(auth)/login/page.tsx` 與 `register/page.tsx` 未改（仍傳 `mode`+`next`，AuthForm 保留簽名故自動變 Google-only）。
+- **為什麼**: 使用者「把帳號密碼的部分先移除，純用 Google 登入」（範圍 web+admin、深度先只拔前端；決策見 ROM 2026-07-25 20:13）。後端 `/api/auth/login`、`/register` 及 DB `password_hash`／`unusablePasswordHash` 暫留不動，屬可還原。純登入 UI 改動，不涉 deck patch/approval/HUD，不違反 I1/I2/I3。⚠️ 部署前提：各環境（含本機）須設 `GOOGLE_CLIENT_ID`＋`NEXT_PUBLIC_GOOGLE_CLIENT_ID`，否則無法登入。
+- **驗證**: coder 自檢 `apps/web` 與 `apps/admin` `npx tsc --noEmit` 皆 EXIT 0；grep `type="password"/setPassword/showPassword/apiLogin` 於兩登入區零殘留。另派 fresh-context agent read-back 複驗（結果見同輪）。未 commit（硬規則 10）。
+
 ### 2026-07-25 19:50 | 對練語速拉桿移到頂部狀態列（原底部 foot 要捲到底才看到，使用者找不到）（未部署）
 - **工作區**: apps/web
 - **類型**: fix
