@@ -185,6 +185,7 @@ export class TrainLiveClient {
     try {
       await this.initAudio();
     } catch (err) {
+      console.error("[train] audio/mic init failed:", err); // 真錯誤原本被吞掉，印出來以便診斷
       this.fail(this.micErrorMessage(err));
       return;
     }
@@ -488,6 +489,9 @@ export class TrainLiveClient {
     const name = err instanceof DOMException ? err.name : "";
     if (name === "NotAllowedError" || name === "SecurityError") return "麥克風權限被拒，請在瀏覽器允許麥克風後重試。";
     if (name === "NotFoundError") return "找不到麥克風裝置，請確認已接上麥克風。";
+    if (name === "NotReadableError") return "麥克風被其他程式佔用，請關閉其他使用麥克風的程式後重試。";
+    // AbortError：AudioWorklet blob 模組載入失敗（多半是 CSP script-src 未含 blob:；已於 next.config CSP 修）。
+    if (name === "AbortError") return "無法載入音訊處理模組，請重新整理後再試。";
     return "無法啟動麥克風，請重試。";
   }
 }

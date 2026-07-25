@@ -34,6 +34,17 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-25 15:47 | 修 /train 麥克風無法啟動（CSP script-src 缺 blob:→AudioWorklet 被擋）＋GSI style-src＋錯誤細分（未部署）
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/next.config.mjs`, `apps/web/lib/train/liveClient.ts`
+- **改了什麼**:
+  - **根因（實機確認）**: 對練按開始後**麥克風權限視窗不跳**、只顯示「無法啟動麥克風」。使用者在 console 跑 MIC-TEST 三步（①AudioContext ②AudioWorklet.addModule(blob) ③getUserMedia）→ **卡在 ②**：`AbortError: Unable to load a worklet's module`。根因＝線上 CSP `script-src` **未含 `blob:`**（只有 `worker-src` 有），而 Chrome 對 `AudioWorklet.addModule` 是用 **`script-src`** 檢查 → blob worklet 被擋 → 在 `getUserMedia` 之前就 throw（故權限視窗根本沒機會跳）。
+  - **修**: `next.config.mjs` `scriptSrc` 加 `blob:`（prod／dev 皆）——`liveClient.initAudio` 的 PCM 擷取 worklet 從 blob: URL 載入所需。順手 `style-src` 加 `${GSI_ORIGIN}`（Google 登入按鈕從 accounts.google.com/gsi/style 注入樣式表，原被 CSP 擋，即使用者 console 看到的另一條紅字）。
+  - **診斷韌性**: `liveClient.ts` `start()` catch 加 `console.error`（原本真錯誤被吞、只顯示 UI 訊息）；`micErrorMessage` 加 `NotReadableError`（麥克風被佔用）與 `AbortError`（音訊模組載入失敗）分支訊息。
+- **為什麼**: 首次真的在線上跑對練麥克風才現形的 CSP 洞（HTTP 冒煙測不到）。blob: 進 script-src 是 blob worker/worklet 的標準需求，低風險（blob URL 為同源生成）。不動 server/契約；I1/I2/I3 未涉及。
+- **驗證**: 待 web 重建部署後，`curl -sI` 確認回應 `script-src ... blob:`；實機重跑對練應跳麥克風權限視窗。（本地：next.config 為 headers()、`next build` 會驗其可解析。）未 commit。
+
 ### 2026-07-25 15:16 | 對練語言（中文/英文/自動，預設中文）＋評分報告跟 app i18n＋專有名詞兼容（未部署，併 A3 部署）
 - **工作區**: packages/shared, apps/server, apps/web
 - **類型**: feat

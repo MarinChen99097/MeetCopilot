@@ -24,12 +24,17 @@ const GEMINI = "https://generativelanguage.googleapis.com wss://generativelangua
 const GSI_ORIGIN = "https://accounts.google.com";
 const GSI_SCRIPT = "https://accounts.google.com/gsi/client";
 const isProd = process.env.NODE_ENV === "production";
-const scriptSrc = isProd ? "'self' 'unsafe-inline'" : "'self' 'unsafe-inline' 'unsafe-eval'";
+// blob: is REQUIRED for the /train voice bridge: liveClient loads its PCM-capture AudioWorklet from a
+// blob: URL, and Chrome enforces `script-src` (NOT worker-src) for AudioWorklet.addModule — without blob:
+// here the worklet load throws `AbortError: Unable to load a worklet's module` and the mic never even
+// prompts (fails before getUserMedia). See lib/train/liveClient.ts:initAudio.
+const scriptSrc = isProd ? "'self' 'unsafe-inline' blob:" : "'self' 'unsafe-inline' 'unsafe-eval' blob:";
 
 const csp = [
   "default-src 'self'",
   `script-src ${scriptSrc} ${GSI_SCRIPT} ${GSI_ORIGIN}`,
-  "style-src 'self' 'unsafe-inline'",
+  // GSI_ORIGIN in style-src: Google Sign-In injects its button stylesheet from accounts.google.com/gsi/style.
+  `style-src 'self' 'unsafe-inline' ${GSI_ORIGIN}`,
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   `connect-src 'self' ${API_BASE} ${WS_BASE} ${GEMINI} ${GSI_ORIGIN}`,
