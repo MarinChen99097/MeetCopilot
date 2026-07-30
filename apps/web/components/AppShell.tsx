@@ -9,9 +9,13 @@ import { ToastProvider } from "@/components/ui/Toast";
 
 /**
  * AppShell — authed workbench chrome: ToastProvider + AuthGuard + a collapsible left sidebar.
- * Deliberately scoped to workbench routes only (crm/studio/train/settings/home) — NOT in the root
- * [locale] layout — so /present, /copilot and /hud inherit ZERO copilot chrome (invariant I3).
- * present/copilot/hud are reached from the "會中進行" group as target=_blank standalone tabs.
+ * Deliberately scoped to workbench routes only (crm/studio/train/settings/home/copilot/present-start) —
+ * NOT in the root [locale] layout — so /present and /hud inherit ZERO copilot chrome (invariant I3).
+ *
+ * NAV MODEL (2026-07-28 決策)：「會中進行」的兩個入口都是**同分頁 app 內導覽**，不再 target=_blank——
+ * 「會議簡報」指向準備頁 /present/start（選 deck → 才進乾淨舞台 /present），「MeetCopilot」指向 /copilot
+ * cockpit（掛本 shell；帳號 B 永不被分享，所以掛側欄安全）。唯一保留的新分頁是 cockpit 裡使用者**主動**按
+ * 的「在另一台裝置看 HUD」。/present 與 /hud 仍**絕不**掛本 shell（I3）。
  */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -103,7 +107,6 @@ interface NavItem {
   href: string;
   labelKey: string;
   icon: IconName;
-  external?: boolean;
 }
 interface NavGroup {
   kickerKey: string;
@@ -125,8 +128,9 @@ const NAV_GROUPS: NavGroup[] = [
     kickerKey: "nav.live",
     live: true,
     items: [
-      { key: "present", href: "/present", labelKey: "nav.present", icon: "stage", external: true },
-      { key: "copilot", href: "/copilot", labelKey: "nav.copilot", icon: "headset", external: true },
+      // 同分頁導覽：/present/start 是 app 內準備頁（選 deck → 播放），不是裸 /present（無 deckId 必死路）。
+      { key: "present", href: "/present/start", labelKey: "nav.present", icon: "stage" },
+      { key: "copilot", href: "/copilot", labelKey: "nav.copilot", icon: "headset" },
     ],
   },
   { kickerKey: "nav.practice", items: [{ key: "train", href: "/train", labelKey: "train.title", icon: "mic" }] },
@@ -144,8 +148,7 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-function isActive(pathname: string, href: string, external?: boolean): boolean {
-  if (external) return false; // present/copilot/hud open in a new tab — never marked active
+function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
@@ -195,24 +198,18 @@ function Sidebar({
               </span>
               {group.items.map((item) => {
                 const label = t(item.labelKey);
-                const active = isActive(pathname, item.href, item.external);
+                const active = isActive(pathname, item.href);
                 return (
                   <Link
                     key={item.key}
                     href={item.href}
                     className={`mc-sidebar__item${active ? " is-active" : ""}`}
-                    title={rail ? label : item.external ? t("nav.newTab") : undefined}
+                    title={rail ? label : undefined}
                     aria-current={active ? "page" : undefined}
                     onClick={onNavigate}
-                    {...(item.external ? { target: "_blank", rel: "noopener" } : {})}
                   >
                     <Icon name={item.icon} />
                     <span className="mc-sidebar__label">{label}</span>
-                    {item.external ? (
-                      <span className="mc-sidebar__ext" aria-hidden="true">
-                        ↗
-                      </span>
-                    ) : null}
                   </Link>
                 );
               })}

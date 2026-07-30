@@ -7,8 +7,11 @@ import { Icon, type IconName } from "@/components/AppShell";
 
 /**
  * HomeDashboard — the authed workspace landing. Renders a three-phase "meeting flow" (PRE → LIVE → DRILL)
- * where each phase links to its consumer surfaces. present/copilot/hud are opened as target=_blank
- * standalone tabs (they carry zero copilot chrome — I3). The single flow-rail pulse is the only animation.
+ * where each phase links to its consumer surfaces. The single flow-rail pulse is the only animation.
+ *
+ * 2026-07-28：LIVE 兩張卡與側欄同步改為**同分頁導覽**（不再 target=_blank／↗）——「會議簡報」指向 app 內準備頁
+ * /present/start（選 deck 後才進乾淨舞台 /present），「MeetCopilot」指向 /copilot cockpit。乾淨舞台 /present
+ * 與 /hud 本身仍不掛 AppShell（I3）。
  */
 interface Surface {
   key: string;
@@ -16,7 +19,6 @@ interface Surface {
   titleKey: string;
   descKey: string;
   icon: IconName;
-  external?: boolean;
 }
 
 const PRE: Surface[] = [
@@ -24,8 +26,8 @@ const PRE: Surface[] = [
   { key: "studio", href: "/studio", titleKey: "studio.title", descKey: "home.studioDesc", icon: "slides" },
 ];
 const LIVE: Surface[] = [
-  { key: "present", href: "/present", titleKey: "nav.present", descKey: "home.presentDesc", icon: "stage", external: true },
-  { key: "copilot", href: "/copilot", titleKey: "nav.copilot", descKey: "home.copilotDesc", icon: "headset", external: true },
+  { key: "present", href: "/present/start", titleKey: "nav.present", descKey: "home.presentDesc", icon: "stage" },
+  { key: "copilot", href: "/copilot", titleKey: "nav.copilot", descKey: "home.copilotDesc", icon: "headset" },
 ];
 const DRILL: Surface[] = [
   { key: "train", href: "/train", titleKey: "train.title", descKey: "home.trainDesc", icon: "mic" },
@@ -90,24 +92,12 @@ export function HomeDashboard() {
 function SurfaceCard({ surface }: { surface: Surface }) {
   const t = useTranslations();
   return (
-    <Link
-      href={surface.href}
-      className="mc-surfacecard"
-      title={surface.external ? t("nav.newTab") : undefined}
-      {...(surface.external ? { target: "_blank", rel: "noopener" } : {})}
-    >
+    <Link href={surface.href} className="mc-surfacecard">
       <span className="mc-surfacecard__icon">
         <Icon name={surface.icon} size={20} />
       </span>
       <span className="mc-surfacecard__main">
-        <span className="mc-surfacecard__title">
-          {t(surface.titleKey)}
-          {surface.external ? (
-            <span className="mc-surfacecard__ext" aria-hidden="true">
-              ↗
-            </span>
-          ) : null}
-        </span>
+        <span className="mc-surfacecard__title">{t(surface.titleKey)}</span>
         <span className="mc-surfacecard__desc">{t(surface.descKey)}</span>
       </span>
       <span className="mc-surfacecard__chev" aria-hidden="true">

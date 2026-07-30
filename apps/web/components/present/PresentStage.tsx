@@ -8,6 +8,8 @@
  * 允許 import：SlideRenderer（純渲染）、lib/api（getDeck / API_BASE）、lib/ws（connect）、@meetcopilot/shared 型別、
  *   next-intl（useTranslations，僅文案）、@/i18n/navigation（Link，僅 locale-aware 導覽——非 HUD、且只在「無投影片可播」的終態顯示）。
  *   → 這份 import 清單即 I3 的機械保證；擴充前務必確認新增 import 不含 HUD 詞彙（transcript/suggestion/signals/copilot…）。
+ *   2026-07-28 加入的全螢幕與滑鼠翻頁**只用瀏覽器原生 API**（requestFullscreen/exitFullscreen、onClick），
+ *   **未新增任何 import**——I3 的 import 白名單維持原狀。
  *
  * 不變量：I1（deck 只從尾端 APPEND 長出，deck_update 靜默接尾）、I2（只有已批准內容才會經 deck_update 抵達）。
  *
@@ -41,6 +43,17 @@ const LOAD_TIMEOUT_MS = 12000;
  */
 const ASSET_URL_REFRESH_MS = 30 * 60_000;
 
+// ── 全螢幕 vendor-prefix helpers（模組層純函式；只在瀏覽器事件/Effect 內呼叫，SSR 不觸及）────
+// as-轉型與「目前是否全螢幕」判定各只寫一次，支援偵測 effect 與 toggleFullscreen 共用。
+type FsDocument = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => unknown };
+type FsRootElement = HTMLElement & { webkitRequestFullscreen?: () => unknown };
+function fsElement(): FsRootElement {
+  return document.documentElement as FsRootElement;
+}
+function fsActive(): boolean {
+  return Boolean(document.fullscreenElement ?? (document as FsDocument).webkitFullscreenElement);
+}
+
 export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   const t = useTranslations("present");
   const [slides, setSlides] = useState<SlideSpec[]>([]);
@@ -51,6 +64,15 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   const [reloadKey, setReloadKey] = useState(0); // 重試：bump 後重跑 deck 載入 effect。
   const [wsNonce, setWsNonce] = useState(0); // 連線重試：bump 後重跑 WS effect（重置重連預算）。
   const [hasOriginals, setHasOriginals] = useState(false); // deck 有原始頁（簽章 URL）→ 啟用週期性續簽。
+  // 全螢幕（同分頁播放；瀏覽器原生 API，無新 import）。fsOk=瀏覽器支援 → 才顯示觸發鈕。
+  const [fs, setFs] = useState(false);
+  const [fsOk, setFsOk] = useState(false);
+  // 首次進入的鍵盤提示（數秒後自動淡出；任何翻頁動作也立刻收掉）。
+  const [hint, setHint] = useState(true);
+  // 控制層（翻頁 ‹ › ＋ 全螢幕）顯隱。用「指標有動作才顯示、靜止數秒淡出」而不是純 CSS `:hover`——
+  // 因為 `.mc-present` 是 position:fixed;inset:0 的滿版元素，指標只要在視窗內 `:hover` 就恆為真，
+  // 「平時不顯眼」根本不會成立（這個分頁會被分享進 Meet，控制列不該一直亮著）。播放軟體慣例作法。
+  const [uiOn, setUiOn] = useState(false);
 
   // committedIndex：本地已播出的最高頁（送 page_commit 用；單調遞增，只增不減）。
   const committed = useRef(-1);
@@ -128,6 +150,7 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
 
   const go = useCallback(
     (next: number) => {
+      setHint(false); // 使用者已經會翻頁了 → 提示可以收掉
       setIndex((cur) => {
         const clamped = Math.max(0, Math.min(next, Math.max(0, total - 1)));
         if (clamped > cur) commitPage(clamped);
@@ -136,6 +159,68 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
     },
     [commitPage, total],
   );
+
+  // ── 全螢幕（同分頁）─────────────────────────────────────────
+  // 決策 2026-07-28：會議簡報一律同分頁，全螢幕改用 Fullscreen API。**不自動要求全螢幕**——瀏覽器要求
+  // requestFullscreen 必須發生在使用者手勢裡，自動呼叫必被 reject（且會嚇到報告者）；故只提供一個低調的觸發。
+  // 支援偵測 + Promise rejection 一律吞掉 → 失敗就靜默降級成普通全視窗播放，絕不 throw／白畫面。
+  useEffect(() => {
+    const el = fsElement();
+    setFsOk(typeof el.requestFullscreen === "function" || typeof el.webkitRequestFullscreen === "function");
+    const sync = () => setFs(fsActive());
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+    document.addEventListener("webkitfullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      document.removeEventListener("webkitfullscreenchange", sync);
+    };
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const d = document as FsDocument;
+    const el = fsElement();
+    const active = fsActive();
+    try {
+      // exit/request 兩邊都可能回 Promise（也可能回 undefined，Safari 舊版）→ 統一用 Promise.resolve 包再吞掉 reject。
+      const p = active
+        ? d.exitFullscreen
+          ? d.exitFullscreen()
+          : d.webkitExitFullscreen?.()
+        : el.requestFullscreen
+          ? el.requestFullscreen()
+          : el.webkitRequestFullscreen?.();
+      void Promise.resolve(p).catch(() => {
+        /* 被使用者/瀏覽器拒絕（無手勢、permissions policy、iframe 無 allow="fullscreen"）→ 維持普通全視窗 */
+      });
+    } catch {
+      /* 完全不支援 → 靜默降級 */
+    }
+  }, []);
+
+  // 鍵盤提示：首次進入顯示數秒後淡出（不干擾；被分享出去的舞台不該長期掛著操作說明）。
+  useEffect(() => {
+    if (!hint) return;
+    const id = window.setTimeout(() => setHint(false), 5000);
+    return () => window.clearTimeout(id);
+  }, [hint]);
+
+  // 控制層喚醒：指標移動／按下就顯示，靜止 2.5 秒後淡出（觸控的 pointerdown 也算）。
+  useEffect(() => {
+    let id = 0;
+    const wake = () => {
+      setUiOn(true);
+      window.clearTimeout(id);
+      id = window.setTimeout(() => setUiOn(false), 2500);
+    };
+    window.addEventListener("pointermove", wake);
+    window.addEventListener("pointerdown", wake);
+    return () => {
+      window.clearTimeout(id);
+      window.removeEventListener("pointermove", wake);
+      window.removeEventListener("pointerdown", wake);
+    };
+  }, []);
 
   // ── 鍵盤翻頁（→/Space/PageDown 前進；←/PageUp 後退）─────────
   useEffect(() => {
@@ -160,13 +245,19 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
           e.preventDefault();
           go(total - 1);
           break;
+        case "f":
+        case "F":
+          // F＝全螢幕開關（此 keydown 本身就是使用者手勢，requestFullscreen 合法）。
+          e.preventDefault();
+          toggleFullscreen();
+          break;
         default:
           break;
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [go, index, total]);
+  }, [go, index, total, toggleFullscreen]);
 
   // ── 伺服器訊息（present 角色僅消費 deck_update / session_state / error）──
   const onMessage = useCallback((msg: ServerMessage) => {
@@ -348,6 +439,8 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       );
     }
     // 沒帶 deck、或 deck 為空且非 live：死路→給出口。
+    // 2026-07-28：出口從首頁 `/` 改指**準備頁** `/present/start`——原文案叫人「從 App 開啟一份簡報」卻只把人丟回
+    // 首頁，等於再繞一圈；準備頁就是「選一份簡報開始播放」的地方，一步到位。
     return (
       <main className="mc-present">
         <div className="mc-present__stage">
@@ -355,8 +448,8 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
             <p className="mc-present__notice-title">{t("emptyTitle")}</p>
             <p className="mc-present__notice-desc">{t("emptyDesc")}</p>
             <div className="mc-present__notice-actions">
-              <Link href="/" className="mc-btn mc-btn--primary">
-                {t("backHome")}
+              <Link href="/present/start" className="mc-btn mc-btn--primary">
+                {t("pickDeck")}
               </Link>
             </div>
           </div>
@@ -370,6 +463,50 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       <div className="mc-present__stage">
         <SlideRenderer slide={current} size="full" />
       </div>
+
+      {/* 操作層（2026-07-28 補基本可用性）：翻頁 ‹ › ＋ 全螢幕。原本舞台**零個滑鼠可操作元素**，只有鍵盤能翻頁，
+          第一次用的人會以為壞了。平時近乎透明（維持乾淨舞台——這個分頁會被分享進 Meet），指標一動就顯著、
+          靜止 2.5 秒淡回去；觸控裝置沒有 hover，CSS 用 @media (hover: none) 讓它常駐半透明。
+          I3：全是瀏覽器原生操作，無任何副駕元素、無新 import。 */}
+      <div className={`mc-present__controls${uiOn ? " is-on" : ""}`}>
+        <button
+          type="button"
+          className="mc-present__navbtn"
+          onClick={() => go(index - 1)}
+          disabled={index <= 0}
+          aria-label={t("prevSlide")}
+          title={t("prevSlide")}
+        >
+          ‹
+        </button>
+        <button
+          type="button"
+          className="mc-present__navbtn"
+          onClick={() => go(index + 1)}
+          disabled={index >= total - 1}
+          aria-label={t("nextSlide")}
+          title={t("nextSlide")}
+        >
+          ›
+        </button>
+        {fsOk ? (
+          <button
+            type="button"
+            className="mc-present__navbtn mc-present__navbtn--fs"
+            onClick={toggleFullscreen}
+            aria-label={t(fs ? "fsExit" : "fsEnter")}
+            title={t(fs ? "fsExit" : "fsEnter")}
+          >
+            {fs ? "⤢" : "⛶"}
+          </button>
+        ) : null}
+      </div>
+
+      {hint ? (
+        <div className="mc-present__hint" role="note">
+          {t("keyHint")}
+        </div>
+      ) : null}
 
       {total > 0 ? (
         <div className="mc-present__pageno" aria-hidden="true">

@@ -427,3 +427,111 @@
   .mc-editor__panel { border-left: none; border-top: 1px solid var(--mc-border); }
   .mc-feat-edit { grid-template-columns: 1fr 1fr; }
 }
+
+/* ── 舞台操作層（2026-07-28 補基本可用性）───────────────────────────────────────────────────
+   原本舞台零個滑鼠可操作元素。加翻頁 ‹ › ＋ 全螢幕鈕，但這個分頁**會被分享進 Meet**，所以平時近乎透明。
+   顯隱用元件的 `.is-on`（指標一動就顯示、靜止 2.5 秒淡出）而**不是** `.mc-present:hover`——`.mc-present`
+   是 position:fixed;inset:0 的滿版元素，指標只要在視窗內 hover 就恆為真，那條規則等於永遠亮著。
+   直接 hover 控制列本身或鍵盤 focus 進去也會亮。觸控裝置沒有 hover → @media (hover: none) 常駐半透明。
+   I3：純導覽/瀏覽器操作，不含任何副駕元素。只加規則，不改上面既有的 .mc-present* 定義。 */
+.mc-present__controls {
+  position: fixed;
+  left: 18px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.16;
+  transition: opacity 0.2s ease;
+}
+.mc-present__controls.is-on,
+.mc-present__controls:hover,
+.mc-present__controls:focus-within { opacity: 1; }
+.mc-present__navbtn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(230, 235, 245, 0.22);
+  border-radius: var(--mc-r-sm);
+  background: rgba(12, 16, 28, 0.62);
+  color: rgba(230, 235, 245, 0.9);
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.mc-present__navbtn:hover:not(:disabled) { background: rgba(30, 38, 58, 0.9); border-color: var(--mc-accent); }
+.mc-present__navbtn:disabled { opacity: 0.35; cursor: default; }
+.mc-present__navbtn--fs { margin-left: 8px; font-size: 15px; }
+@media (hover: none) {
+  /* 觸控：沒有 hover 可以喚出控制，常駐半透明才找得到（仍不搶投影片焦點）。 */
+  .mc-present__controls { opacity: 0.55; }
+  .mc-present__navbtn { width: 42px; height: 42px; font-size: 22px; }
+}
+
+/* 首次進入的鍵盤提示（數秒後由元件卸下；被分享的舞台不該長期掛操作說明）。 */
+.mc-present__hint {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  border: 1px solid rgba(230, 235, 245, 0.16);
+  border-radius: 999px;
+  background: rgba(12, 16, 28, 0.72);
+  color: rgba(230, 235, 245, 0.75);
+  font-size: 12.5px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: mc-present-hint 5s ease forwards;
+}
+@keyframes mc-present-hint {
+  0% { opacity: 0; }
+  6% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-present__hint { animation: none; }
+}
+
+/* ── /present/start 準備頁（掛 AppShell）：選 deck → 播放。沿用 .mc-deckgrid / .mc-deckcard。 ──────── */
+.mc-pstart { display: flex; flex-direction: column; gap: 22px; }
+.mc-pstart__head { display: flex; flex-direction: column; gap: 6px; }
+.mc-pstart__h1 { margin: 0; font-size: 24px; }
+.mc-pstart__lead { margin: 0; color: var(--mc-text-muted); font-size: 14px; max-width: 68ch; }
+.mc-pstart__h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--mc-text-2); }
+/* 選中的 deck 卡：加色框＋淡底（顏色不是唯一訊號——同時有 aria-pressed 與 accent badge）。 */
+.mc-deckcard.is-selected {
+  border-color: var(--mc-accent);
+  background: var(--mc-accent-soft);
+  box-shadow: 0 0 22px -10px rgba(139, 92, 246, 0.45);
+}
+.mc-pstart__launch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 18px 26px;
+  padding: 18px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-r-lg);
+  background: var(--mc-panel);
+}
+.mc-pstart__launch-id { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mc-pstart__launch-label {
+  font-family: var(--mc-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mc-text-muted);
+}
+.mc-pstart__launch-title { margin: 0; font-size: 17px; font-weight: 700; }
+.mc-pstart__launch-meta { margin: 0; font-size: 13px; color: var(--mc-text-muted); }
+.mc-pstart__launch-actions { flex: 2 1 380px; display: flex; flex-wrap: wrap; gap: 16px; }
+.mc-pstart__action { flex: 1 1 200px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mc-pstart__action-hint { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--mc-text-muted); }
+.mc-pstart__action-link { color: var(--mc-accent); font-weight: 600; }
+.mc-pstart__tip { flex: 1 1 100%; margin: 0; padding-top: 4px; border-top: 1px solid var(--mc-border); font-size: 12.5px; color: var(--mc-text-muted); }

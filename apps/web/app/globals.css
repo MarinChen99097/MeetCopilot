@@ -468,7 +468,6 @@ img {
 }
 .mc-sidebar__item .mc-ico { flex: none; }
 .mc-sidebar__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mc-sidebar__ext { flex: none; font-family: var(--mc-font-mono); font-size: 11px; color: var(--mc-text-muted); }
 
 /* foot : org → user → language → logout */
 .mc-sidebar__foot {
@@ -533,7 +532,6 @@ img {
 @media (min-width: 881px) {
   .mc-shell.is-rail .mc-sidebar__wordmark,
   .mc-shell.is-rail .mc-sidebar__label,
-  .mc-shell.is-rail .mc-sidebar__ext,
   .mc-shell.is-rail .mc-sidebar__kicker,
   .mc-shell.is-rail .mc-sidebar__org,
   .mc-shell.is-rail .mc-sidebar__userid,
@@ -1186,6 +1184,9 @@ img {
 .mc-cap__status dd { margin: 3px 0 0; font-size: 14px; font-weight: 600; }
 
 .mc-cap__setupform { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); max-width: 440px; }
+/* 建會表單的次要欄位（會議目標）：摺疊起來，主動線仍是「填標題→建立 session」一步（契約 §9） */
+.mc-cap__objective > summary { font-size: 12px; color: var(--mc-text-muted); cursor: pointer; list-style: revert; padding: 2px 0; user-select: none; }
+.mc-cap__objective > .mc-field { margin-top: 9px; }
 
 /* 擷取端連線終態失敗：清楚的原因 + 重試（取代靜默「未連線」） */
 .mc-cap__connfail { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.35); border-radius: var(--mc-radius); }
@@ -1213,6 +1214,39 @@ img {
 .mc-hud__empty { color: var(--mc-text-muted); font-size: 13px; font-style: italic; margin: 6px 0; }
 .mc-hud__kbd-hint { font-size: 11px; color: var(--mc-text-muted); font-weight: 400; letter-spacing: 0; text-transform: none; }
 kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-radius: var(--mc-r-sm); padding: 1px 6px; font-size: 11px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+
+/* ── 待講清單（MEETING_CHECKLIST_CONTRACT §8；hud only，I3）──────────
+   收合態刻意壓在 48px 內（max-height 是硬保險），才不會把 I2 批准佇列擠出首屏。 */
+.mc-checklist { padding: 7px 10px; }
+.mc-checklist:not(.is-expanded) { max-height: 48px; overflow: hidden; }
+.mc-checklist--note { display: flex; align-items: center; gap: 8px; min-height: 32px; max-height: 48px; overflow: hidden; font-size: 13px; color: var(--mc-text-muted); }
+.mc-checklist--note.is-failed { color: var(--mc-warn); }
+.mc-checklist__notetext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-checklist__spinner { flex: none; width: 13px; height: 13px; border: 2px solid rgba(230, 235, 245, 0.18); border-top-color: var(--mc-accent); border-radius: 50%; animation: mc-spin 0.8s linear infinite; }
+
+.mc-checklist__bar { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 32px; padding: 0; background: none; border: none; font: inherit; text-align: left; cursor: pointer; }
+.mc-checklist__count { flex: none; font-size: 12px; font-weight: 650; color: var(--mc-text-muted); font-variant-numeric: tabular-nums; }
+.mc-checklist__meter { flex: none; width: 56px; height: 5px; border-radius: 999px; background: var(--mc-field); border: 1px solid var(--mc-border); overflow: hidden; }
+.mc-checklist__meterfill { display: block; height: 100%; background: var(--mc-accent); transition: width 0.25s ease; }
+.mc-checklist__next { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-checklist__chev { flex: none; font-size: 11px; color: var(--mc-text-muted); }
+
+.mc-checklist__groups { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--mc-border); display: flex; flex-direction: column; gap: 12px; max-height: 46vh; overflow-y: auto; }
+.mc-checklist__grouptitle { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--mc-text-muted); }
+.mc-checklist__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.mc-checklist__item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: var(--mc-r-sm); background: var(--mc-field); border: 1px solid var(--mc-border); }
+.mc-checklist__item.is-now { border-color: var(--mc-accent-line); background: var(--mc-accent-soft); }
+.mc-checklist__item.is-inflight { opacity: 0.55; }
+.mc-checklist__label { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.mc-checklist__box { flex: none; width: 17px; height: 17px; margin-top: 1px; accent-color: var(--mc-accent); cursor: pointer; }
+.mc-checklist__text { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 13px; line-height: 1.45; }
+.mc-checklist__item.is-covered .mc-checklist__titletext { text-decoration: line-through; color: var(--mc-text-muted); }
+.mc-checklist__item.is-skipped .mc-checklist__titletext { color: var(--mc-text-muted); }
+.mc-checklist__now { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 11px; color: var(--mc-accent); border: 1px solid var(--mc-accent-line); }
+.mc-checklist__tag { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 11px; color: var(--mc-text-muted); border: 1px solid var(--mc-border-strong); }
+.mc-checklist__detail { flex: 1 0 100%; font-size: 11px; color: var(--mc-text-muted); line-height: 1.5; }
+.mc-checklist__skip { flex: none; background: none; border: none; color: var(--mc-text-muted); font-size: 11px; padding: 2px 4px; cursor: pointer; }
+.mc-checklist__skip:hover { color: var(--mc-text); text-decoration: underline; }
 
 /* transcript */
 .mc-hud__transcript { display: flex; flex-direction: column; }
@@ -1442,7 +1476,6 @@ kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-ra
 }
 .mc-surfacecard__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .mc-surfacecard__title { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 14px; }
-.mc-surfacecard__ext { font-family: var(--mc-font-mono); font-size: 11px; color: var(--mc-text-muted); }
 .mc-surfacecard__desc { font-size: 12px; color: var(--mc-text-muted); line-height: 1.45; }
 .mc-surfacecard__chev { flex: none; align-self: center; color: var(--mc-text-muted); font-size: 18px; line-height: 1; }
 
@@ -1483,7 +1516,6 @@ kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-ra
 .mc-cockpit__second-desc { margin: 0; color: var(--mc-text-muted); font-size: 13px; max-width: 62ch; }
 .mc-cockpit__second-empty { margin: 0; color: var(--mc-text-muted); font-size: 13px; font-style: italic; }
 .mc-cockpit__second-share { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
-.mc-cockpit__second-qr { display: grid; place-items: center; width: 104px; height: 104px; padding: 8px; border: 1px solid var(--mc-border); border-radius: var(--mc-r-md); background: var(--mc-elev); color: var(--mc-text-muted); flex: 0 0 auto; }
 .mc-cockpit__second-linkrow { display: flex; gap: 8px; align-items: center; flex: 1 1 260px; min-width: 0; }
 .mc-cockpit__second-link { flex: 1 1 auto; min-width: 0; font-family: var(--mc-font-mono); font-size: 12px; padding: 8px 10px; border: 1px solid var(--mc-border); border-radius: var(--mc-r-md); background: var(--mc-elev); color: var(--mc-text); }
 
@@ -1507,4 +1539,13 @@ kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-ra
 /* <1100px: stack vertically with the capture control on top (single-column narrow layout). */
 @media (max-width: 1100px) {
   .mc-cockpit__grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── 2026-07-28：/copilot 改為掛 AppShell（帳號 B 分頁永不被分享 → 掛側欄不觸及 I3）。 ────────────────
+   只加不改：以下規則全部 scoped 在 .mc-shell__body 之下，standalone 用法（若還有）完全不受影響。
+   (1) 側欄吃掉 248px 寬 → cockpit 的兩欄 grid 必須比 standalone 的 1100px 斷點更早堆疊，否則右欄被壓爛。
+   (2) shell body 已經有自己的置中 max-width 與 28px padding → 移掉 cockpit 自帶的那一層，避免雙重內距。 */
+.mc-shell__body .mc-cockpit { max-width: none; margin: 0; padding: 0 0 8px; }
+@media (max-width: 1348px) {
+  .mc-shell__body .mc-cockpit__grid { grid-template-columns: minmax(0, 1fr); }
 }

@@ -570,7 +570,7 @@ function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: 
             掛 mc-cockpit__hud → 內嵌 HUD 走單欄（globals.css :1448），否則落回 1fr/1fr 兩欄在窄面板擠成細長條。 */}
         <div className="mc-card mc-cockpit__hud" style={{ ...cardStyle, padding: "0.5rem", minHeight: 360 }}>
           <p style={{ margin: "0 0 0.4rem", fontSize: "0.8rem", color: "var(--mc-text-dim, #9aa3b8)" }}>
-            會中副駕（建議出現後按「接受」即 append 到簡報尾端 →）
+            MeetCopilot（建議出現後按「接受」即 append 到簡報尾端 →）
           </p>
           <HudInner embedded creds={creds} rootTag="section" />
         </div>

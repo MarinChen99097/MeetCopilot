@@ -3,7 +3,7 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 
 /**
- * 共用 markdown 渲染（會中副駕情報卡/深查卡、CRM 筆記等共用；抽自 NotesTab 的原設定）。
+ * 共用 markdown 渲染（MeetCopilot 情報卡/深查卡、CRM 筆記等共用；抽自 NotesTab 的原設定）。
  *
  * 安全模型（與 NotesTab 一致，不得放寬）：
  * - 不裝 rehype-raw → body 內原始 HTML 天然被跳脫，不會執行（XSS 縱深第一道）。
