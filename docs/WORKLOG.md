@@ -299,3 +299,37 @@
 - **冒煙全綠**：server health/ready 200；web `/`→307·`/zh-TW`→200·`/zh-TW/login`→200；admin `/`→200·`/login`→200。
 - **仍待使用者一次性動作**：Google OAuth Console 把 admin 網址 `https://meetcopilot-admin-54139295474.asia-east1.run.app` 加進該 client「已授權 JavaScript 來源」（不可結尾 `/`、約 5 分鐘生效），否則 admin Google 登入 `origin_mismatch`。
 - **狀態**：DEPLOY.md 版本節＋現況（live）已更新（加 admin service）。**docs 部署紀錄待 commit**；**尚未 push origin**。小債：兩個 `GoogleSignInButton.tsx` 註解仍寫「未設 env 退回帳密」已過時（純註解、無害），可日後清。
+
+## 2026-07-28～30 session（新產品線：會中待講清單 ＋「會中進行」兩入口改造）
+
+> ⏱️ 本節單一 session 但**跨三天實際時間**（2026-07-28 16:54 開工 → 07-30 收尾）：多輪對抗式 workflow 各耗 30 分鐘級，中途撞到週用量上限需等待。ROM 內 07-28 之後幾則的時間戳已依 workflow epoch 校正為 07-30（詳見 ROM「時間戳校正註」）。
+
+- **使用者需求 1（新功能）**：「meet copilot 除了提供對方/我方公司內容，也應該像做 checklist 那樣讓報告者知道哪些已經講了哪些還沒。checklist 比較像是 AI 自行根據**會議內容與 PPT** 生成的，要先判斷哪些內容需要講會**有利於會議目標的達成**，然後生成 checklist，然後隨著會議內容與簡報內容**逐一劃掉**。」
+- **兩路 Opus 偵察定位接點**（會中管線＋deck/播放進度），揪出三個硬障礙：
+  1. **匯入的 pptx/pdf deck 在系統裡只有點陣圖、沒有文字**（`import/conversion-job.ts:40-50`，`extractSlideText` 對它回空字串）→ 只有站內 AI 生成的 deck 有可讀文字。舊的 pptx/pdf 文字解析器還在（`import/parse-worker.ts:24,28`）但無人呼叫。
+  2. **`meetings` 表無 `deck_id` 無目標欄**，deck 綁定只活在記憶體 binding（`hub.ts:59`，`disposeSession` 就刪）→ 重啟即失聯；且主入口 cockpit 建會**只填一個標題**（`CopilotView.tsx:408`）。
+  3. **「翻到第 N 頁」≠「講完第 N 頁」**，且 `committedIndex` 是高水位、往回翻 server 不知道。
+  好消息：翻頁事件**早就在廣播**（`session_state.committedIndex`）只是 HUD 收到就丟掉；每 5 秒的分析 LLM 呼叫可直接擴 schema 做勾稽（零額外成本）。
+- **使用者四項岔路全拍板**（AskUserQuestion，全選推薦項；ROM 2026-07-28 16:54）：清單**三類全包**（必講/必問/必回應，不只是簡報大綱）／匯入簡報走**解析器＋Gemini 讀圖 fallback**／會議目標**AI 先擬、可改**／**AI 自動劃＋可手動改**。
+- **契約凍結**：`docs/MEETING_CHECKLIST_CONTRACT.md` v1.0（不變量落點、migration 023 雙份、repo 介面、shared 型別、wire 兩型別、生成端、三路勾稽、HUD 版面、建會表單、7 項最低測試、C2 範圍、明確不做清單）。分 **C1 核心閉環**（本輪）＋ **C2 匯入 deck 餵料**（migration 023 已預留 `deck_slides.text_extract`，C2 只改程式）。
+- **三包實作（Opus，契約凍結後派工）**：
+  1. **包 A 資料層**：migration 023 雙份（`meetings.deck_id`/`objective`、`deck_slides.text_extract`、新表 `meeting_checklist_items` 16 欄＋4 CHECK＋索引）、`packages/shared/src/checklist.ts`、protocol 兩 wire 型別、`ChecklistRepository`＋`SqliteChecklistRepository`（`markCovered` 只動 pending 且回「真的被改動的項目」＝天然冪等）、`CrmCore.checklist` 註冊。**crm 76 測全綠**（基準 70）、**SQLite 實跑 001→023 兩次證冪等**。
+  2. **包 B server**：`generation/checklist-gen.ts`（responseSchema 強制、deadline 45s、MAX_TOKENS 砍半重試、sanitize 保三類覆蓋＋0 起連號 idx）＋`buildDeckOutline` 抽出（`reviseSlides` outline 輸出**逐字等價**，有回歸測試鎖定）＋`draft-objective` 端點＋建會落庫與**背景 fire-and-forget 生成**（絕不讓建會失敗）＋**對話勾稽併進既有分析呼叫**（schema 加 `coveredItemIds`、pending 空就不加 prompt 節、sanitize 丟幻覺 id、窗口/節流/單飛鎖一字未動）＋翻頁勾稽（停留 ≥20 秒才判 covered）＋`checklist_action` presenter 閘＋300ms debounce 的 **hud-only** 全量 snapshot 廣播。**server 55 檔 329 測全綠**（基準 53/306）。
+  3. **包 C web**：`hud/ChecklistPanel.tsx`（收合態進度條＋下一個待辦／展開態三組／「正在講」標記）＋`HudView` **replace 型 reducer**（本檔唯一覆寫型，其餘 append/dedupe）＋建會表單綁 deck/company/objective（三欄**全可留空、全空時行為與改動前逐字相同**）。**tsc 0、build 18 路由、i18n parity 274/274**；實機證明**收合態 48.0px 且批准佇列留在首屏**、掐斷 `WebSocket.send` 後點 checkbox **不樂觀更新**（I2 真相來源＝server snapshot）。
+- **包 B 自己抓到一個契約沒想到的隱私衝突**（已採納）：`evidence` 欄落庫逐字稿片段，在 `persistTranscript=false` 的 ephemeral 場次等於偷偷持久化 → 改為只取 `route.persist?.text`（已 redact 且該場已同意持久化的同一份文字），ephemeral 場次恆 `undefined`＝**零新增持久化面**。
+- **使用者需求 2（同 session 續，附側欄截圖）**：「會中進行」兩入口 (1) 改名成**會議簡報**跟 **MeetCopilot**；(2) **點進去的 UI 互動要重新設計，太不直覺**；(3) 兩個都不要一點進去就另開新分頁，**僅 MeetCopilot 需要開新分頁、也不是立刻開**。
+- **偵察證實「不直覺」是硬缺陷不是主觀感受**（ROM 2026-07-28 19:40）：側欄「簡報舞台」href 是**裸 `/present` 不帶 deckId**（`AppShell.tsx:128`）→ `PresentStage.tsx:62-66`→`:350-365` **必定**落在「沒有可播放的簡報」終態＝**這個入口 100% 是死路**，還先開一個新分頁才讓人撞牆；真正入口藏在 `/studio` 編輯器裡。另：present 全庫 **0 個 fullscreen 呼叫、0 個滑鼠可操作元素**；`/copilot` 新分頁內 **0 個回 App 連結**＝把人關在外面；「在另一台裝置看 HUD」的 **QR 是不能掃的裝飾**（註解自承）但文案叫人「掃描 QR」；同一功能有**三種叫法**（側欄／`present.title`／元件內硬編碼中文）。
+- **改造實作（Opus）**：兩入口移除 `external`（↗／`target=_blank`／`nav.newTab` 隨之消失、active 高亮恢復）＋`HomeDashboard` 同款清單同步；**新 `/present/start` 準備頁**（掛 AppShell、列 deck、單機播放／連線會議播放、無 creds 時 live 鈕停用並指去 MeetCopilot、無 deck 時空狀態指 `/studio`、一律 `router.push` 不開新分頁）；**`/copilot` 掛 AppShell**（帳號 B 永不被分享故安全）而 **`/present`、`/hud` 維持不掛**（I3）；PresentStage 加 Fullscreen（rejection／不支援靜默降級）＋滑鼠翻頁＋鍵盤提示 5 秒淡出＋**死路出口改指 `/present/start`**；**移除誤導性假 QR**＋文案誠實化；三種叫法統一、硬編碼中文改走 i18n。**tsc 0、build 19 路由、parity 300/300、console 0 error、22 張截圖**、改名 grep 全庫乾淨。
+  - **一處設計偏離經指揮官認可**：原規格「hover 才顯著」在 `position:fixed;inset:0` 滿版元素上恆為真（指標在視窗內即 hover）→ 改「指標一動就顯示、靜止 2.5 秒淡回 0.16」，對「這個分頁會被分享進 Meet」的場景更正確。
+- **同分頁導覽的附帶好處**：瀏覽器上一頁本身就是離開路徑，這是原本「一律另開分頁」設計缺失的東西。
+- **/code-review＋三輪對抗式修正（使用者指示「做完之後 /code-review + /simplify」）**：
+  1. **審查**（13 agents：5 鏡頭→8 finding 各派反駁者）：raw 8→confirmed 1。**關鍵教訓 L20**：最重要的 slideIdx 座標系 bug 被**四個鏡頭獨立命中**（80/76/73/70）但只有一個過 80 門檻；第二條真問題（evidence TTL 缺口，58 分）是**從 killed 清單撈上來升級修的**——裁決要看 killed 中 `refuted:false`。
+  2. **修正輪 1**（slideIdx 頁碼集合＋evidence TTL＋進度分母排除 skipped）→ 對抗復驗抓到**我的修法有洞**：`setStatus` 換來源不清 evidence＝繞過 purge 白名單條件，且**新測試正好把洞寫成回歸鎖定**（L19）；另抓 draft-objective 未顯式記帳（但 ROM 初版把它寫成「完全沒記帳」——實際 019 安全網有接住，**事實已更正**，L21）。
+  3. **修正輪 2**（purge 改排除法＋setStatus 換來源清 evidence＋顯式 metered）→ 隱私 probe 獨立實測 PASS；記帳復驗再抓 4 條：**建會端點是最貴 LLM 端點卻無限流**、uncheck 會被分析窗殘留逐字打地鼠、清單生成漏 userId、同來源重勾重置 TTL 時鐘。
+  4. **修正輪 3**（4 條全修，含契約 §7.5 新增 uncheck 冷卻期）→ 兩路復驗 PASS（限流用**真 server 打真 HTTP**＋突變測試）；殘留 1 條＝**我的契約漏寫時鐘域**（冷卻用牆鐘 vs 分析窗用音訊時鐘→撤回同意 2 分鐘就失效）→ 契約更正 **v1.2**（音訊時鐘＋fail-safe 掛帳）並修妥（突變驗證兩版都咬得住）。
+- **/simplify**：四鏡頭 15 候選→**套 10 項行為不變**（isMaxTokensError 三份收斂進 gemini.ts、hub metered/wire 單一建構點、排序 comparator 收斂 shared、setStatus 死三元、全螢幕 prefix 收斂、死 CSS×4、replaceAll 回傳值省一次 SELECT、onPageCommitted 改直呼＋補測試替身、textExtract 入 DeckSlide 型別免 as-cast）／跳 3 項有理（不碰剛驗過的隱私 SQL 等）。**零測試斷言被動**。
+- **最終回歸**：shared/crm build 0＋crm **80 測**、server tsc 0＋**60 檔 355 測**、web tsc 0＋build **19 路由**、i18n parity **301/301**。
+- **commit＋push（使用者核准「好了就先 commit+推上去」）**：`a022c80` feat(checklist)（40 檔，+4515/−81）＋`a9243d5` feat(web) 兩入口改造（11 檔）＋docs 收尾 commit，push origin main。CHANGE_TRACKER 已歸檔 `change_archives/archive_2026-07-30.md`（43 筆 597 行）。
+- **部署（另待核准，本輪未做）**：動了 shared/crm/server/web → **server＋web 都要重建**；**migration 023 開機自動套**；**部署前建議**：對 Cloud SQL 先跑 `TEST_DB_DRIVER=pg` 的 crm 測試（023 與 evidence purge 的 PG 方言未經真實 PG 實跑）＋部署首日看 log 有無 `[retention] purge failed`。
+- **C2 待做（下一輪）**：匯入 pptx/pdf 抽文字進 `deck_slides.text_extract`（parser 重啟＋Gemini 讀圖 fallback，schema 已預留）——**在此之前匯入 deck 的 checklist 只有必問/必回應兩類**。
+- **記債**：SQLite `tx()` 無互斥（生產 PG 不受影響，但 023 背景生成讓本機 dev 併發建會可觸發 tx-in-tx，ROM 07-30 13:42 決策 2）；MAX_TOKENS 分支已耗 token 不記帳（meter 系統性行為，另開一輪）；`setPendingChecklist`/`latestWindowT` optional（遷就測試替身）；真 QR encoder；deck 縮圖；`trust.ts:2` 舊名註解；`POST //api/meetings` 雙斜線回 HTML 404（純一致性瑕疵）。

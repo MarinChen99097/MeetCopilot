@@ -111,6 +111,33 @@
 - **補完（2026-07-09 /simplify altitude 鏡頭揪出）**：只讓 register「不發旗標」**不完整**——攻擊者仍可自助 register allowlist email（設自己密碼）→再 login，login 照樣發 platformAdmin。**治本＝從源頭擋帳號建立：register 直接拒絕 allowlist 內的 email（403 reserved）**，合法管理員走 Google（經 provision 不經 register）或 out-of-band 建帳號。通則：**「排除特權」要排在所有發證路徑的最上游（帳號建立），不是只排某一條發證路徑**——否則攻擊者換另一條路徑照樣拿到。
 - 影響檔案：`apps/server/src/auth/routes.ts`（register 不走 payloadFor＋拒絕 allowlist email）、`register-admin.test.ts`。與硬規則 7（授權用攻擊者憑證測）同源。
 
+## L19 修 bug 時「新寫的測試」也會把錯誤前提固化成回歸鎖定（2026-07-28，實踩）
+- 情境：checklist 的 `evidence` 欄會落庫逐字稿片段，但 TTL purge 不涵蓋新表。我升級修這條，修法＝purge 加一條 `WHERE covered_by = 'transcript'`，並要求 agent 補測試。
+- 踩了什麼：**修法本身有繞過路徑，而新測試正好在保護那個洞。** `setStatus('covered', by)` 會改 `covered_by` 但**不動 `evidence`**；snapshot 廣播有 300ms debounce，這段時間 HUD 上該項仍顯示 pending，報告者點 checkbox → `covered_by` 由 `'transcript'` 變 `'manual'`、evidence 留著 → 永不符 purge 的 WHERE → 逐字稿永久留存。而新增的 `transcript-retention.test.ts:81` 斷言「manual 的 evidence 不會被清成 NULL」——**它假設 manual 的 evidence 恆為 NULL（錯的前提），於是把洞寫成回歸鎖定**。測試全綠、回歸驗證 agent 也 pass，只有**被明確指示「預設立場＝修正有漏、主動去找漏洞」的對抗路 agent** 抓到（還寫 probe 腳本實跑，輸出 `!!! TRANSCRIPT TEXT SURVIVED TTL !!!`）。
+- 正確做法：
+  1. **修 bug 時新增的測試，本身要被對抗驗證**——問「這條斷言的前提是什麼？有沒有路徑能讓前提不成立？」測試綠不代表洞補好，可能只代表洞被鎖進契約。
+  2. **「必須清乾淨」的資料（隱私/保留）用排除法，不用列舉法**：白名單式條件（只清 X）只要有任何路徑把狀態改成 X 以外的值就漏出範圍；改成「預設清、只排除明確安全的」（本例＝只排除 `'slide'` 的「第 N 頁」）。同時**源頭一併堵**（狀態轉換時清掉舊來源的證據），縱深兩層。
+  3. **驗證要分兩路且角色明確**：回歸路（確認改了、測試綠、無退步）與對抗路（假設有漏、主動攻擊、預設立場是誤報/有洞）抓到的東西**完全不同**。單跑回歸路會漏。這是 L7「用攻擊者憑證測」在**驗證流程**層面的推廣。
+- 影響檔案：`apps/server/src/realtime/transcript-retention.ts`＋其測試、`packages/crm/src/repos-checklist.ts`（`setStatus` 轉換時清 evidence）。與 L16（安全修正要回歸驗證）、L17（自建驗收≠免跑 code-review）同源：三條都是「驗證的鏡頭不對，就看不到問題」。
+
+## L20 跨鏡頭交叉命中的 finding，比單一鏡頭的高分更值得信（2026-07-28）
+- 情境：`/code-review` 五鏡頭平行審 checklist 三包＋兩入口改造，8 個 finding 各派對抗式反駁者評分，門檻 ≥80 才 confirmed。結果 confirmed 1／killed 7。
+- 踩了什麼：（方法論，非程式踩雷）**最重要的那個 bug 差點被門檻機制淡化**。`checklist-gen.ts` 的 slideIdx 座標系 bug 被**五個鏡頭中的四個獨立抓到**，四個 verifier 全部 `refuted:false`，但分數是 80／76／73／70——**只有一個過門檻**。若只讀 confirmed 清單，會誤判成「單一鏡頭發現、勉強過關」而輕忽它。另一條真問題（evidence 的 retention 缺口）拿 58 分被 killed，卻是 verifier 自己寫「值得補一條 SQL」的——**它是從 killed 清單撈上來的**，而後續對抗復驗證明它牽出更深的洞（見 L19）。
+- 正確做法：
+  1. 讀審查結果時**必看 killed 清單裡 `refuted:false` 的項目**——那代表「驗證過是真問題，只是影響半徑被評為邊際」，不是誤報。真正的誤報是 `refuted:true` 或分數落在 0–49 帶。
+  2. **同一位置被多個獨立鏡頭命中＝強訊號**，優先度應高於單一鏡頭的分數。分數衡量的是「影響半徑」，交叉命中衡量的是「存在性的確定度」，兩者不可互換。
+  3. 門檻（≥80）是**降噪工具，不是裁決依據**。指揮官要對 50–79 帶逐條裁決「修 vs 記債」，判準是**修法成本 vs 留債後果**（本例：一條 SQL vs 「哪天開放 opt-in 就靜默違反保留政策」→ 修）。
+- 影響檔案：`.claude/skills/code-review/SKILL.md`（可補「裁決時必讀 killed 中 refuted:false」一節）、`JUDGMENT_RUBRICS.md`。
+
+## L21 別把 agent 的「觀察」外推成「因果結論」寫進制度紀錄（2026-07-28，實踩・我自己犯）
+- 情境：review agent 正確觀察到「`checklistGenDeps()` 回傳未包 meter 的 raw gemini client」，我據此裁決要修，並在 ROM／CHANGE_TRACKER 寫下理由：「這條路徑的 token **完全不進** `usage_events`、costUsd 少計、無法歸屬 org」。
+- 踩了什麼：**外推錯了。** 019 的安全網早就接住了這條路徑——`meterBoundary` 中間件用 `runWithMetering` 包住整個 handler，而 raw 的公開 `generateJson` 內部**無條件** `safetyNetRecord`，orgId／userId 都正確落帳，既有測試 `metering-safety-net.test.ts:51-58` 就在鎖這條。agent 看到的是「raw client」（**真**），我寫下的是「零記帳」（**假**）。修正本身仍有價值（explicit 優於 fallback），但**嚴重性被高估、成因被寫錯**。後果不是程式壞掉，而是**制度紀錄污染**：未來 session 讀 ROM 會以為「這條路徑曾有一段成本黑洞」而去回填／對帳歷史 usage_events，或以為安全網不管用而重造輪子。
+- 正確做法：
+  1. **制度紀錄裡把「觀察到的事實」與「推導出的後果」分開寫**，並且只有查證過的後果才寫成斷言。沒查證的寫成待驗假設（「疑似…待確認」），不要寫成既成事實。
+  2. **有安全網／兜底機制的系統，「某處漏包」不等於「該處無效果」**——下結論前先問「有沒有更外層的機制接住它？」本專案的 metering 就有兩層（explicit wrapper ＋ `meterBoundary` 安全網），SSRF 也有兩層（DNS-pin ＋ per-request 私網守衛）。
+  3. **同一輪的復驗 agent 要被明確要求查核「制度紀錄的敘述是否與程式相符」**——本條就是記帳復驗 agent 主動抓出來的（它的任務裡有「逐跳追」，順手發現我的敘述與 8 跳實況不符）。這個鏡頭很便宜、很值得常設。
+- 影響檔案：`docs/ROM.md` 2026-07-28 22:35 決策 2（已加事實更正段）、`docs/CHANGE_TRACKER.md` 同輪理由 B。與 L9「先讀地面真相再動手」同源，但這條是**寫紀錄時**的版本：pattern-match 到「漏包→沒記帳」很順，但地面真相多一層。
+
 ## L11【正面校準】指揮官不下場＋sonnet/high 實測有效（2026-07-04）
 - 情境：全程「主對話只交辦＋收結論，實作/修正/簡化/審查全派 sonnet subagent」蓋完整個 app。
 - 踩了什麼：非踩雷，是校準。原 MODEL_DISPATCH 調度表標「未實測、信心中低」。
