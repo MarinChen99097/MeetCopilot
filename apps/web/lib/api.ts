@@ -631,6 +631,17 @@ export function createMeeting(input: {
   return request<CreateMeetingResult>("/api/meetings", { method: "POST", body: input });
 }
 /**
+ * 觸發匯入 deck 的逐頁文字回填（MEETING_CHECKLIST_CONTRACT §11.5）。靜默 enhancement：
+ * server 自行判斷 no-op（native deck／已全有字→200 {needed:false}；需要跑→202 {started:true}），
+ * 呼叫端一律 fire-and-forget、不加 UI 狀態、不輪詢。
+ */
+export function requestDeckTextExtract(deckId: string): Promise<{ started?: boolean; needed?: boolean }> {
+  return request<{ started?: boolean; needed?: boolean }>(
+    `/api/decks/${encodeURIComponent(deckId)}/extract-text`,
+    { method: "POST" },
+  );
+}
+/**
  * 會議目標草擬（MEETING_CHECKLIST_CONTRACT §6.1）。deck／company 都缺 → server 回 `{ objective: "" }`（不報錯），
  * 呼叫端把空字串當「沒建議」處理即可，不要當失敗。
  */

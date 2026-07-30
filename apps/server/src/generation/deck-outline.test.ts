@@ -111,6 +111,16 @@ describe("buildDeckOutline — checklist 用預設行為（契約 §6.4）", () 
     expect(rows[0]!.text).toBe(" 匯入頁的 純文字 ");
   });
 
+  it("textExtract='' 的負結果標記頁（§11.1 v1.4 讀圖確認無字）與 NULL 同樣不進 outline", () => {
+    const rows = buildDeckOutline([
+      { spec: SLIDES[2]!, textExtract: "" }, // ''＝抽過、確認無字（三態負標記）
+      { spec: SLIDES[2]!, textExtract: "有字的匯入頁" },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.idx).toBe(1); // '' 頁被跳過但頁碼不位移
+    expect(rows[0]!.text).toBe("有字的匯入頁");
+  });
+
   it("spec 有文字時不會被 textExtract 蓋掉", () => {
     const [row] = buildDeckOutline([{ spec: SLIDES[1]!, textExtract: "不該出現" }]);
     expect(row!.text).not.toContain("不該出現");

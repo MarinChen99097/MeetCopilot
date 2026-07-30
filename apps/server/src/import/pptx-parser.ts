@@ -745,3 +745,82 @@ export async function readPptxMeta(buffer: Buffer): Promise<PptxMeta> {
   const theme = await loadBaseTheme(zip, parser, budget);
   return { isPresentation: true, title, theme };
 }
+
+// ─────────────────────────────────────────────────────────────
+// C2 逐頁純文字抽取（MEETING_CHECKLIST_CONTRACT §11.1/§11.2）。
+// 輕量路徑：只回 string[]，**不**走 parsePptx 的 SlideSpec 路徑（那條會把圖片 base64 內嵌進 spec＝純浪費記憶體）。
+// 頁序權威＝presentation.xml 的 sldIdLst（經 _rels 把 r:id 映到 slideN.xml）——上方 parsePptx 用檔名數字排序
+// 是**錯的權威**：使用者在 PowerPoint 重排過投影片時檔名序≠播放序、且頁數相等無從偵測，文字會靜默錯位到別頁。
+// ─────────────────────────────────────────────────────────────
+
+/** 讀 presentation.xml 的 sldIdLst，回依播放序排列的 r:id 清單；解不出（缺節點/無 sldId）回 null。 */
+function readSldIdOrder(parsedPresentation: unknown): string[] | null {
+  const root = parsedPresentation as Record<string, any> | undefined;
+  const sldIdLst = root?.["p:presentation"]?.["p:sldIdLst"];
+  if (!sldIdLst || typeof sldIdLst !== "object") return null;
+  const ids = asArray(sldIdLst["p:sldId"] as Record<string, unknown> | Record<string, unknown>[] | undefined);
+  const out: string[] = [];
+  for (const s of ids) {
+    const rid = (s as Record<string, unknown>)["@_r:id"];
+    if (typeof rid !== "string" || rid.length === 0) return null; // 任一項缺 r:id ＝ 無法對齊
+    out.push(rid);
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** 單張 slide XML 的可見純文字（spTree 所有 shape 的段落文字，依文件序；含群組）。 */
+function slideVisibleText(parsedSlide: unknown): string {
+  const root = parsedSlide as Record<string, any> | undefined;
+  const spTree = root?.["p:sld"]?.["p:cSld"]?.["p:spTree"];
+  const { shapes } = collectShapesAndPics(spTree);
+  const lines: string[] = [];
+  for (const shape of shapes) lines.push(...paragraphTexts(shape));
+  return lines.join("\n").trim();
+}
+
+/**
+ * pptx → 逐頁可見純文字（順序＝**sldIdLst 播放序**，非檔名序）。
+ * 回 `string[]`（每頁一元素，可為空字串）；**對齊無效**（解不出 sldIdLst／rId 無對應 rel／slide 檔缺失）
+ * 一律回 `null`——呼叫端視為「整份逐頁文字不可信」，走讀圖 fallback（契約 §11.2）。
+ * 不抽 notes（text_extract 語意＝頁面可見文字，與讀圖 fallback 讀到的渲染結果同域）。
+ * zip-bomb 守護沿用 parsePptx（readEntryText 位元組上限＋共用 budget＋MAX_SLIDES）。
+ */
+export async function parsePptxText(buffer: Buffer): Promise<string[] | null> {
+  const zip = await JSZip.loadAsync(buffer);
+  const parser = createParser();
+  const budget: SizeBudget = { total: 0 };
+
+  const presFile = zip.file("ppt/presentation.xml");
+  if (!presFile) return null;
+
+  let order: string[] | null;
+  try {
+    order = readSldIdOrder(parser.parse(await readEntryText(presFile, MAX_XML_BYTES, budget)));
+  } catch {
+    return null;
+  }
+  if (!order) return null;
+  if (order.length > MAX_SLIDES) {
+    throw new ZipEntryTooLargeError(`ppt/slides（共 ${order.length} 頁）`, MAX_SLIDES);
+  }
+
+  // r:id → slideN.xml：presentation.xml 自己的 rels（Type 以 /slide 結尾；notesSlide/slideLayout/slideMaster 皆不匹配）。
+  const rels = await loadRelsFor(zip, "ppt/presentation.xml", parser, budget);
+  const slideRelById = new Map(rels.filter((r) => r.type.endsWith("/slide")).map((r) => [r.id, r.target] as const));
+
+  const pages: string[] = [];
+  for (const rid of order) {
+    const target = slideRelById.get(rid);
+    if (!target) return null; // rId 無對應 rel ＝ 對齊無效
+    const slidePath = resolveZipPath("ppt", target);
+    const slideFile = zip.file(slidePath);
+    if (!slideFile) return null; // slide 檔缺失 ＝ 對齊無效
+    try {
+      pages.push(slideVisibleText(parser.parse(await readEntryText(slideFile, MAX_XML_BYTES, budget))));
+    } catch {
+      // 單頁 XML 壞掉：以空字串佔位（不位移後續頁）；該頁交讀圖 fallback。
+      pages.push("");
+    }
+  }
+  return pages;
+}

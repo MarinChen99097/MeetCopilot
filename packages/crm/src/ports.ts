@@ -424,6 +424,14 @@ export interface DeckRepository {
    * 跨 org（開機清系統級殘留，無 org 過濾）。
    */
   failInterruptedImports(): Promise<number>;
+  /**
+   * 023/C2：寫匯入頁逐頁純文字 `deck_slides.text_extract`（MEETING_CHECKLIST_CONTRACT §11.4）。
+   * **獨立 UPDATE，只寫 text_extract、不碰 spec_json、不走 updateSlide**——匯入原始頁 100% 命中
+   * updateSlide 的 OriginalSlideLocked/I1 守門，此方法**刻意繞開**（text_extract 不是 deck 內容變更，
+   * 不影響任何已播/待播頁面的呈現）。orgId 必進 WHERE（跨 org＝命中 0 列，零副作用、不 throw）。
+   * **僅限匯入期與回填 job 呼叫，嚴禁 realtime／會中路徑**（I1 相容性即繫於此）。
+   */
+  setSlideTextExtract(orgId: string, deckId: string, idx: number, text: string): Promise<void>;
   // ── image_jobs（pre-meeting AI 生圖）──
   createImageJob(orgId: string, input: NewImageJob): Promise<ImageJob>;
   findImageJob(orgId: string, id: string): Promise<ImageJob | null>;
@@ -475,6 +483,12 @@ export interface DeckAssetRepository {
   getAsset(assetId: string): Promise<DeckAssetRef | null>;
   /** 取某 deck 的原檔 asset（source_pptx | source_pdf）；未命中回 null。匯出原封合併用。 */
   getSourceAsset(deckId: string): Promise<DeckSourceAsset | null>;
+  /**
+   * 023/C2：依 deckId+pageIndex 取單頁點陣圖（kind='page_image'）bytes；未命中回 null。
+   * 供文字抽取的 Gemini 讀圖 fallback（MEETING_CHECKLIST_CONTRACT §11.3/§11.5）。
+   * 帶 orgId 進 WHERE（此路徑呼叫端持有租戶脈絡，與串流端點的純簽章授權不同，照 crm org-scoping 慣例隔離）。
+   */
+  getPageImage(orgId: string, deckId: string, pageIndex: number): Promise<Buffer | null>;
 }
 
 /**

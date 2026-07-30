@@ -141,6 +141,12 @@ async function main(): Promise<void> {
   const limit = rateLimit(rateLimiter);
   app.post("/api/decks/generate", jwtGuard, limit);
   app.post("/api/decks/:id/image-jobs", jwtGuard, limit);
+  // C2 抽字回填（MEETING_CHECKLIST_CONTRACT §11.5）：LLM（讀圖）端點，必須用**這一個共用桶**（禁止 router 內自建第二個 limiter）。
+  app.post("/api/decks/:id/extract-text", jwtGuard, limit);
+  // C2 匯入（§11.5 v1.4 更正）：匯入本身就是 LLM 觸發端點（每發最多 TEXT_EXTRACT_VISION_MAX_PAGES 次讀圖），
+  // 且抽字的 in-flight 去重以 deckId 為鍵、每次匯入都是新 deck＝去重永不命中——不掛桶＝合法帳號可連打匯入
+  // 無限燒讀圖。掛在這裡（multer 在 decks router 內、body parser 之後）＝429 發生在 multer 收 50MB 檔之前。
+  app.post("/api/decks/import", jwtGuard, limit);
   app.post("/api/research/enrich", jwtGuard, limit);
   app.post("/api/train/sessions", jwtGuard, limit);
   app.post("/api/train/personas/:contactId/draft", jwtGuard, limit); // #1 AI 補齊真人 persona（gemini_text）

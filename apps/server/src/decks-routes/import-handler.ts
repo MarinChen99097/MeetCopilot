@@ -21,9 +21,11 @@ import type { NewDeck, DeckLanguage, SlideTheme } from "@meetcopilot/shared";
 import { PDFDocument } from "pdf-lib";
 import type { AppConfig } from "../config.js";
 import type { Meter } from "../ops/meter.js";
-import { asyncHandler, orgId } from "../crm-routes/helpers.js";
+import { asyncHandler, orgId, userId } from "../crm-routes/helpers.js";
+import { createGeminiClient } from "../gemini.js";
 import { readPptxMeta } from "../import/pptx-parser.js";
 import { runConversionJob } from "../import/conversion-job.js";
+import { runTextExtract } from "../import/text-extract.js";
 
 const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 const PDF_MIME = "application/pdf";
@@ -73,9 +75,12 @@ function coerceLanguage(v: unknown): DeckLanguage {
 
 export function createImportDeckHandler(
   core: CrmCore,
-  _config: AppConfig,
-  _meter?: Meter,
+  config: AppConfig,
+  meter?: Meter,
 ): RequestHandler {
+  // C2 抽字階段（MEETING_CHECKLIST_CONTRACT §11）：base Gemini client 於工廠期建一次（config 不變）；
+  // 計費（kind='gemini_extract'、orgId/userId、idemPrefix=textextract:${jobId}）在 runTextExtract 內包 metered client。
+  const gemini = createGeminiClient(config.gemini);
   return asyncHandler(async (req, res) => {
     const file = req.file;
     if (!file || !file.buffer || file.buffer.length === 0) {
@@ -87,6 +92,7 @@ export function createImportDeckHandler(
     const fallbackTitle = stripExtension(originalName) || "匯入簡報";
     const language = coerceLanguage((req.body as Record<string, unknown> | undefined)?.language);
     const oid = orgId(req);
+    const uid = userId(req);
 
     // 判來源：magic bytes 為權威（副檔名不可信）。pptx 需 zip + ppt/presentation.xml 雙重確認（擋 docx/xlsx 誤判）。
     let sourceKind: "pptx" | "pdf";
@@ -153,9 +159,15 @@ export function createImportDeckHandler(
     }
 
     // 背景啟動轉檔（fire-and-forget，不 await）：錯誤收進 deck.import_status/job，永不拋回請求。
-    void runConversionJob(core, deck.id, oid, jobId).catch((err) =>
-      console.error("[import] runConversionJob crashed:", err),
-    );
+    // extractText＝C2 抽字階段（§11.1）：conversion-job 於 ready 之後呼叫；失敗只 log，不影響匯入。
+    // userId＝匯入者（§11.3 計費歸屬）；idemPrefix 帶 jobId（每次匯入唯一，頁間由 seq 區分）。
+    void runConversionJob(core, deck.id, oid, jobId, {
+      extractText: (args) =>
+        runTextExtract(
+          { core, gemini, meter, extractModel: config.gemini.extractModel },
+          { orgId: args.orgId, deckId: args.deckId, userId: uid, idemPrefix: `textextract:${args.jobId}` },
+        ),
+    }).catch((err) => console.error("[import] runConversionJob crashed:", err));
 
     res.status(202).json({ deckId: deck.id, jobId });
   });

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import type { CompanySummary, DeckSummary, ServerMessage } from "@meetcopilot/shared";
-import { API_BASE, ApiError, createMeeting, draftMeetingObjective, listCompanies, listDecks } from "@/lib/api";
+import { API_BASE, ApiError, createMeeting, draftMeetingObjective, listCompanies, listDecks, requestDeckTextExtract } from "@/lib/api";
 import { startCapture, CaptureError, type CaptureController } from "@/lib/audio-capture";
 import { useRealtime, wsStatusLabel, type WsStatus } from "@/lib/useRealtime";
 import { readMeetingCreds, saveMeetingCreds, type MeetingCreds } from "@/lib/meeting-session";
@@ -439,6 +439,16 @@ function SetupPanel({ onReady, rootTag = "main", embedded = false }: { onReady: 
       alive = false;
     };
   }, []);
+
+  // 選中 deck → fire-and-forget 觸發匯入 deck 逐頁文字回填（MEETING_CHECKLIST_CONTRACT §11.5；
+  // 與 draft-objective 同時機的唯一前端觸發點）。server 自行判斷 no-op（native deck／已全有字），
+  // 靜默 enhancement：零 UI 狀態、失敗不報錯、不輪詢。
+  useEffect(() => {
+    if (!deckId) return;
+    requestDeckTextExtract(deckId).catch(() => {
+      /* 靜默：回填失敗不影響建會，checklist 走「無簡報文字」既有路徑 */
+    });
+  }, [deckId]);
 
   // 選了簡報或公司 → 自動草擬會議目標（契約 §6.1；資料不足時 server 回空字串，當「沒建議」處理即可）。
   useEffect(() => {

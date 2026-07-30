@@ -73,4 +73,17 @@ export class SqliteDeckAssetRepository implements DeckAssetRepository {
     if (!row) return null;
     return { assetId: row.id, mime: row.mime, bytes: row.bytes };
   }
+
+  /**
+   * 023/C2：依 deckId+pageIndex 取單頁點陣圖 bytes（kind='page_image'；MEETING_CHECKLIST_CONTRACT §11.3/§11.5）。
+   * 帶 orgId 進 WHERE（呼叫端＝匯入/回填 job，持有租戶脈絡；與串流端點的純簽章授權路徑不同）。
+   * 走既有 idx_deck_assets_deck_kind 索引（deck_id, kind）再過濾 page_index。
+   */
+  async getPageImage(orgId: string, deckId: string, pageIndex: number): Promise<Buffer | null> {
+    const row = await this.db.get<DeckAssetRow>(
+      "SELECT * FROM deck_assets WHERE org_id = ? AND deck_id = ? AND kind = 'page_image' AND page_index = ? LIMIT 1",
+      [orgId, deckId, pageIndex],
+    );
+    return row ? row.bytes : null;
+  }
 }

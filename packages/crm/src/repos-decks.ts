@@ -382,6 +382,23 @@ export class SqliteDeckRepository implements DeckRepository {
     return n;
   }
 
+  /**
+   * 023/C2（MEETING_CHECKLIST_CONTRACT §11.4）：寫匯入頁逐頁純文字 text_extract。
+   * 獨立 UPDATE、只碰 text_extract 一欄——**刻意不走 updateSlide**（匯入原始頁 100% 命中其
+   * OriginalSlideLocked/I1 守門；text_extract 不是 deck 內容變更，不影響任何頁面呈現，故繞開是安全的）。
+   * 不碰 spec_json、不 bump decks.updated_at（非內容變更，不應擾動 deck 列表排序）。
+   * orgId 必進 WHERE：跨 org＝命中 0 列（零副作用、不 throw）。
+   * 三態語意（§11.1 v1.4）：`''` 是合法值（負結果標記＝抽過、確認無字），**照寫、不得加「空字串不寫」守衛**；
+   * 讀回經 rowToSlide 的 `?? undefined` 只折 NULL，`''` 原樣存活（deck-text-extract.test.ts 有鎖）。
+   * **僅限匯入期與回填 job 呼叫，嚴禁 realtime／會中路徑。**
+   */
+  async setSlideTextExtract(orgId: string, deckId: string, idx: number, text: string): Promise<void> {
+    await this.db.run(
+      "UPDATE deck_slides SET text_extract = ? WHERE org_id = ? AND deck_id = ? AND idx = ?",
+      [text, orgId, deckId, idx],
+    );
+  }
+
   // ── image_jobs（pre-meeting AI 生圖）──
   async createImageJob(orgId: string, input: NewImageJob): Promise<ImageJob> {
     const id = uuidv7();

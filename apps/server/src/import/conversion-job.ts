@@ -29,6 +29,12 @@ import { extractPaletteFromPng } from "./palette.js";
 export interface ConversionDeps {
   rasterizePptxToImages: (bytes: Buffer) => Promise<Buffer[]>;
   rasterizePdfToImages: (bytes: Buffer) => Promise<Buffer[]>;
+  /**
+   * C2 抽字階段（MEETING_CHECKLIST_CONTRACT §11.1）：在 setImportStatus('ready') **之後**、job done 之前呼叫
+   * （deck 先 ready、前端輪詢即解鎖，UX 不變）。未注入＝跳過（測試/舊呼叫端不受影響）。
+   * 失敗只 log——**絕不**把 import_status 改 failed、絕不影響 job 主流程（圖好了就是 ready）。
+   */
+  extractText?: (args: { deckId: string; orgId: string; jobId: string }) => Promise<void>;
 }
 
 const defaultDeps: ConversionDeps = { rasterizePptxToImages, rasterizePdfToImages };
@@ -54,15 +60,17 @@ function humanError(err: unknown): string {
 }
 
 /**
- * 執行一支轉檔 job。deps 預設用真實點陣化；deckId 為原檔/頁圖歸屬鍵，orgId 供 appendSlide/insertAsset 租戶欄。
+ * 執行一支轉檔 job。deps 可部分注入（缺省補真實點陣化；extractText 預設無＝跳過抽字階段）；
+ * deckId 為原檔/頁圖歸屬鍵，orgId 供 appendSlide/insertAsset 租戶欄。
  */
 export async function runConversionJob(
   core: CrmCore,
   deckId: string,
   orgId: string,
   jobId: string,
-  deps: ConversionDeps = defaultDeps,
+  partialDeps: Partial<ConversionDeps> = {},
 ): Promise<void> {
+  const deps: ConversionDeps = { ...defaultDeps, ...partialDeps };
   try {
     await core.importJobs.setJobStatus(jobId, "running");
 
@@ -98,6 +106,17 @@ export async function runConversionJob(
     // 前段鎖定原始頁數＝N；isOriginal(i)=i<originalCount（前端唯一判定來源）。
     await core.decks.setOriginalCount(deckId, images.length);
     await core.decks.setImportStatus(deckId, "ready");
+
+    // C2 抽字階段（§11.1）：deck 已 ready 才跑；整段自帶 try/catch——任何例外只 log，
+    // 絕不把 import_status 改 failed、絕不影響 job 主流程（下方 catch 收不到這裡的錯誤）。
+    if (deps.extractText) {
+      try {
+        await deps.extractText({ deckId, orgId, jobId });
+      } catch (err) {
+        console.error(`[import] text-extract for deck ${deckId} failed (deck stays ready):`, err);
+      }
+    }
+
     await core.importJobs.setJobStatus(jobId, "done");
   } catch (err) {
     const human = humanError(err);

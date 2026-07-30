@@ -147,6 +147,19 @@ describe("限流接線鎖定（修正 A 接線面）", () => {
     expect(index.indexOf('app.post("/api/meetings/draft-objective", jwtGuard, limit);')).toBeLessThan(parserAt);
   });
 
+  it("C2（§11.5 v1.4）：/api/decks/import 與 /api/decks/:id/extract-text 都在共用名單、掛在 body parser 之前", () => {
+    // 匯入端點是 LLM 觸發端點（每發最多 TEXT_EXTRACT_VISION_MAX_PAGES 次讀圖）且每次匯入都是新 deck
+    // ＝in-flight 去重永不命中——名單漏了這條就回不去（v1.4 契約更正的回歸鎖）。
+    expect(index).toContain('app.post("/api/decks/import", jwtGuard, limit);');
+    expect(index).toContain('app.post("/api/decks/:id/extract-text", jwtGuard, limit);');
+
+    // 層序：限流在 body parser 之前 → 429 發生在 multer 收 50MB 檔之前。
+    const parserAt = index.indexOf('app.use(express.json({ limit: "2mb" }))');
+    expect(parserAt).toBeGreaterThan(0);
+    expect(index.indexOf('app.post("/api/decks/import", jwtGuard, limit);')).toBeLessThan(parserAt);
+    expect(index.indexOf('app.post("/api/decks/:id/extract-text", jwtGuard, limit);')).toBeLessThan(parserAt);
+  });
+
   it("整個 apps/server/src 只有一個 TokenBucketRateLimiter 實例（router 不得另開一桶）", () => {
     const files = readdirSync(SRC_DIR, { recursive: true, encoding: "utf8" })
       .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))

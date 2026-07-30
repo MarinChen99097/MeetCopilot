@@ -268,10 +268,76 @@ export async function generateChecklist(deps, input: {
 6. 翻頁勾稽：停留 <20 秒不 cover、≥20 秒才 cover。
 7. `buildDeckOutline` 抽出後 `reviseSlides` 的 outline 輸出**逐字等價**（回歸鎖定）。
 
-## 11. C2（本輪不做，schema 已預留）
+## 11. C2：匯入 deck 餵料（v1.3 凍結，2026-07-30；C1 時僅預留 schema）
 
-匯入 deck 餵料：`conversion-job.ts` 轉圖後額外跑 `pptx-parse`／`pdf-parse`（`parse-worker.ts:24,28` 現存但無人呼叫）抽逐頁純文字 → 寫 `deck_slides.text_extract`；抽出 <20 字的頁（純圖/掃描）用 Gemini 多模態讀 PNG 補。
-- 需新增 repo 方法 `setSlideTextExtract(orgId, deckId, idx, text)`：**只寫 `text_extract` 欄、不碰 `spec_json`、不做 I1 檢查**（因為它不是 deck 內容變更）——但**必須在函式 doc comment 明文寫死「僅限匯入期呼叫，嚴禁會中路徑」**。
+> 目標：匯入的 pptx/pdf 也能供 checklist 取材。逐頁純文字寫 `deck_slides.text_extract`；
+> 抽不到字的頁用 Gemini 讀該頁 PNG 補。**任何失敗都不得影響匯入本身**（圖好了就是 ready）。
+
+### 11.1 抽字管線（掛在 `conversion-job.ts`，於 `setImportStatus('ready')` **之後**）
+
+- 順序：轉圖→落 slides→**deck 先 ready**（前端輪詢即解鎖，UX 不變）→ 抽字階段 → job `done`。
+- 抽字階段整段自帶 try/catch，**逐頁隔離**；任何例外只 log，**絕不**把 `import_status` 改 failed、絕不影響 job 主流程。
+- 文字純抽取路徑：**新增只回 `string[]` 的輕量函式**（`parsePptxText`／`parsePdfText`），**不得**走既有
+  `parsePptx/parsePdf` 的 SlideSpec 路徑（那條會把圖片 base64 內嵌進 spec＝純浪費記憶體）。經 `runInWorker` 跑（沿用逾時/terminate）。
+  **buffer detach 警告**：`runInWorker` 對 buffer 做 zero-copy transfer，transfer 後主執行緒該 buffer 會 detach——
+  抽字必須在點陣化完成之後執行，且傳入 worker 的 buffer 用複本（`Buffer.from(bytes)`）。
+- 每頁寫入前：trim、**上限 8000 字/頁**（超出截斷）。
+- **三態語意（v1.4 更正，2026-07-30——原「空字串一律不寫」是契約漏洞）**：
+  `NULL`＝**尚未抽過**；`''`（空字串）＝**抽過、確認無字**（負結果標記）；非空＝逐頁文字。
+  規則：parser 抽出空 → **留 NULL**（交給讀圖 fallback 判定）；**讀圖回空 → 寫入 `''`**。
+  否則讀圖確認無字的頁永遠是 NULL → `needsText` 永遠判「還沒抽」→ 每次觸發回填都重付讀圖成本
+  （對抗驗證實測：5 頁純圖 deck 每輪重燒 5 次呼叫、永不收斂），且 `slice(0, maxPages)` 每輪取同樣前 20 頁
+  → 第 21 頁以後**永久飢餓**。負結果標記讓已確認頁跳過、下一輪自然輪到後面的頁，兩個問題一併解。
+  下游相容：`buildDeckOutline` 對空文字頁本來就跳過（`''` 與 NULL 同樣被略），checklist 行為不變。
+
+### 11.2 頁序對齊（最高風險，兩個守門缺一不可）
+
+- **pptx 的頁序權威＝`presentation.xml` 的 `sldIdLst`**（經 `_rels` 把 rId 映到 `slideN.xml`）。
+  既有 `parsePptx` 用檔名數字排序是**錯的權威**——使用者在 PowerPoint **重排過**投影片時，檔名序≠播放序、
+  且頁數相等**無從偵測**，文字會靜默錯位到別頁 → 翻頁勾稽劃錯項目（誤劃）。`parsePptxText` 必須解 `sldIdLst`；
+  解不出 → 視為**對齊無效**。
+- **pdf 逐頁收集必須以頁索引為鍵**（不得順序 push——`pdf-parse` 的 pagerender 對單頁失敗會靜默吞頁造成整體位移）；
+  無法可靠取得頁索引 → 只能靠數量守門。
+- **數量守門**：解析頁數 ≠ PNG 頁數（隱藏頁、吞頁）→ **對齊無效**。
+- **對齊無效時**：整份逐頁文字**全部丟棄**（一頁都不寫），該 deck 的頁走 §11.3 讀圖路徑（PNG 上的字 Gemini 讀得到，
+  結果天然對齊）。**寧可付讀圖成本，不可寫入可能錯位的文字。**
+
+### 11.3 Gemini 讀圖 fallback（成本硬上限）
+
+- 觸發：該頁對齊後的文字 **< `TEXT_EXTRACT_MIN_CHARS`（預設 20）**，或整份對齊無效。
+- 用既有 `GenerateJsonOptions.images`（`gemini.ts:20-21`，裸 base64）＋`config.gemini.extractModel`＋responseSchema `{text:string}`；
+  prompt＝「逐字轉錄頁面可見文字、依閱讀順序、**保留原文語言不翻譯不摘要**、無文字回空字串」。
+- **硬上限（env 化）**：`TEXT_EXTRACT_VISION_MAX_PAGES`（預設 **20**，超出的頁跳過留 NULL 並 log 截斷筆數——掃描型
+  100 頁 PDF 不得變 100 次呼叫；checklist outline 全份也才 12,000 字，20 頁綽綽有餘）；並行 `TEXT_EXTRACT_VISION_CONCURRENCY`
+  （預設 **2**）；`attempts: 1`（失敗該頁留 NULL，不重試——這是 enhancement 不是關鍵路徑）。
+- **計費（必記）**：`meteredGeminiClient`，kind＝**`gemini_extract`**（admin 標籤本來就寫「Gemini 擷取（匯入解析）」，
+  至今無人用——名至實歸），orgId＝job 脈絡、**userId＝匯入者**（`import-handler` 現在只傳 orgId，要補傳 userId）、
+  idemPrefix＝`textextract:${jobId}`（jobId 每次匯入唯一，頁間由 seq 區分）。
+
+### 11.4 repo 方法
+
+`setSlideTextExtract(orgId, deckId, idx, text)`：**獨立 UPDATE，只寫 `text_extract`、不碰 `spec_json`、不走 `updateSlide`**
+（匯入原始頁 100% 命中 updateSlide 的 OriginalSlideLocked/I1 守門，此方法刻意繞開——因為它不是 deck 內容變更）。
+orgId **必進 WHERE**。doc comment 明文：「**僅限匯入期與回填 job 呼叫，嚴禁 realtime／會中路徑**」。
+
+### 11.5 既有 deck 回填（v1.3 新增；C1 之前匯入的 deck 全是 NULL）
+
+- 端點：`POST /api/decks/:id/extract-text` → 需要跑＝`202 {started:true}`；不需要（native deck／已全有字／匯入未完成）＝`200 {needed:false}`。
+- org-scoped＋**掛進 index.ts 共用 rate-limit 桶**（禁止 router 內自建第二個 limiter）。
+- **`POST /api/decks/import` 也必須掛同一個桶（v1.4 更正——原稿只要求回填端點，是契約漏洞）**：C2 之後匯入
+  本身就是 LLM 觸發端點（每發最多 `TEXT_EXTRACT_VISION_MAX_PAGES` 次讀圖），且 in-flight 去重以 deckId 為鍵、
+  每次匯入都是新 deck＝去重永不命中；不掛桶＝合法帳號可連打匯入無限燒讀圖。
+- **fill-empty 冪等**：只處理 `text_extract IS NULL` 且 spec 文字為空的頁；同 deck 併發去重（in-memory in-flight Set 即可，
+  Cloud Run max-instances=1）。**無 job 列、前端不輪詢**——這是靜默 enhancement，沒有進度 UI。
+- 回填的讀圖路徑需要「依 deckId+pageIndex 取 page_image」：`DeckAssetRepository` 現缺此方法（DB 欄與索引都在），補之。
+- **前端唯一觸發點**（守低門檻，零新按鈕）：`CopilotView` 建會表單**選中 deck 時** fire-and-forget 打一次
+  （與既有 draft-objective 自動觸發同時機；server 自行判斷 no-op）。不加任何 UI 狀態。
+
+### 11.6 C2 明確不做
+
+- 不做「文字部分缺」的第三種匯入狀態（degraded 時 checklist 走「本場未綁簡報」既有路徑，可接受）。
+- 不做表格/SmartArt/圖表的 XML 深抽（`p:sp` 抽不到的內容交給讀圖 fallback 天然覆蓋——它讀的是渲染後的 PNG）。
+- 不動 `parsePptx`/`parsePdf` 既有 SlideSpec 路徑與其呼叫者。
 
 ## 12. 明確不做（範圍界線）
 

@@ -38,6 +38,7 @@ import { createPptxExporter } from "../generation/pptx-exporter.js";
 import { createImageService } from "../decks/image-service.js";
 import { extractFromUrl } from "../import/extract.js";
 import { runInWorker } from "../import/run-in-worker.js";
+import { maybeStartTextExtract } from "../import/text-extract.js";
 import {
   asyncHandler,
   orgId,
@@ -392,6 +393,31 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
         return;
       }
       res.json({ status: job.status, dataUri: job.dataUri, error: job.error });
+    }),
+  );
+
+  // ── POST /decks/:id/extract-text（C2 既有 deck 逐頁文字回填；MEETING_CHECKLIST_CONTRACT §11.5） ──
+  // 靜默 enhancement：無 job 列、前端不輪詢。fill-empty 冪等＋同 deck in-flight 去重都在 text-extract 模組。
+  // rate limit：掛 index.ts 共用桶（app.post("/api/decks/:id/extract-text", jwtGuard, limit)），禁止在此自建第二個 limiter。
+  router.post(
+    "/decks/:id/extract-text",
+    asyncHandler(async (req, res) => {
+      const oid = orgId(req);
+      const deckId = param(req, "id");
+      const deck = await core.decks.findById(oid, deckId);
+      if (!deck) {
+        notFound(res, "deck not found");
+        return;
+      }
+      const outcome = await maybeStartTextExtract(
+        { core, gemini, meter, extractModel: config.gemini.extractModel },
+        { orgId: oid, deckId, userId: userId(req), idemPrefix: `textextract:${randomUUID()}` },
+      );
+      if (outcome === "not-needed") {
+        res.json({ needed: false }); // native deck／已全有字／匯入未完成
+        return;
+      }
+      res.status(202).json({ started: true }); // started 或 in-flight（同 deck 已在跑＝視同已啟動）
     }),
   );
 

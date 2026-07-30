@@ -11,7 +11,7 @@ import type { SlideSpec } from "@meetcopilot/shared";
 
 interface WorkerData {
   ext: "ts" | "js";
-  task: "pptx" | "pdf" | "pdf-extract";
+  task: "pptx" | "pdf" | "pdf-extract" | "pptx-text" | "pdf-text";
   buffer: ArrayBuffer;
 }
 
@@ -27,6 +27,15 @@ async function run(): Promise<unknown> {
   if (task === "pdf") {
     const mod = (await import("./pdf-parser." + ext)) as { parsePdf: (b: Buffer) => Promise<SlideSpec[]> };
     return mod.parsePdf(buf);
+  }
+  // C2 逐頁純文字抽取（string[] | null；null＝對齊無效訊號，原樣透傳）。
+  if (task === "pptx-text") {
+    const mod = (await import("./pptx-parser." + ext)) as { parsePptxText: (b: Buffer) => Promise<string[] | null> };
+    return mod.parsePptxText(buf);
+  }
+  if (task === "pdf-text") {
+    const mod = (await import("./pdf-parser." + ext)) as { parsePdfText: (b: Buffer) => Promise<string[] | null> };
+    return mod.parsePdfText(buf);
   }
   // pdf-extract：抽純文字（供 grounding），非 1:1 匯入成頁。
   const mod = (await import("./extract." + ext)) as { extractFromPdf: (b: Buffer) => Promise<{ text: string }> };

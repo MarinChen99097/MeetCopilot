@@ -36,6 +36,29 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-30 16:42 | C2 對抗驗證裁決：兩條契約漏洞（v1.4 更正）＋實作四項自主決策追認
+- **誰決定**: Fable（依 C2 雙路復驗結果裁決；本 session 第四次由對抗路抓到我方設計/契約缺陷）
+- **C2 實作與契約復驗結果**：契約六小節逐條 pass（信心 90–95）；對抗路 10 個惡意 pptx fixture（重排/孤兒頁/隱藏頁/缺 rel/壞 XML/重複 rId…）**零錯位寫入路徑**——§11.2 的對齊守門設計成立；併發去重、計費覆蓋、I1/I3 鄰接面、buffer detach 全數實測乾淨。crm 87 測＋server 61 檔 370 測＋web 19 路由。
+- **決策 1（修，契約 v1.4）——空結果頁無限重讀（85 分）**：§11.1 原寫「空字串不寫、留 NULL」是**契約漏洞**——讀圖確認無字的頁留 NULL → `needsText` 永遠判「還沒抽」→ 使用者每次在建會表單選中圖片型 deck 就重燒最多 20 次讀圖（對抗實測 5 頁純圖 deck 每輪重燒、永不收斂），且 `slice(0,20)` 每輪取同批 → 第 21 頁後**永久飢餓**。→ **三態語意**：NULL=未抽、`''`=抽過確認無字（負結果標記）、非空=文字；parser 空留 NULL（交讀圖）、**讀圖空寫 `''`**。負結果標記同時解掉飢餓（已確認頁跳過、下輪自然輪到後面）。下游相容：`buildDeckOutline` 對空文字頁本就跳過。
+- **決策 2（修，契約 v1.4）——`POST /api/decks/import` 未掛限流桶（75 分）**：§11.5 原稿只要求**回填端點**掛桶，漏了匯入本身——C2 後匯入就是 LLM 觸發端點（每發 ≤20 次讀圖），且 in-flight 去重以 deckId 為鍵、每次匯入都是新 deck＝**去重永不命中**。→ 入 index.ts 共用桶（與 meetings×2/extract-text 同桶）。
+- **決策 3（不修）——job running 窗口拉長與隱藏頁**：對抗路自評非阻斷——(a) 抽字期間重啟會讓 job 被 reaper 標 failed 但 deck 已 ready，前端只看 importStatus、無使用者可見影響、回填天然補救；(b) 隱藏頁兩種點陣化行為（含/不含）都不會錯位、僅成本差——守門設計已涵蓋。
+- **決策 4（追認實作四項自主決策）**：`getPageImage` 帶 orgId 縱深；pdf.js pooled Buffer byteOffset 陷阱修在源頭（`new Uint8Array(buffer)` 精確拷貝——測試真實踩到 'bad XRef entry'，prod 路徑 0-offset 僥倖不觸發）；讀圖帶 `temperature:0`＋`thinkingBudget:0`；`setSlideTextExtract` 不 bump `decks.updated_at`（非內容變更、不擾動列表排序）。全數合理，追認入帳。
+- **方法論**: 本 session 對抗路的第四次命中（evidence purge 白名單→冷卻期時鐘域→本次兩條），四次全是**指揮官層的設計/契約缺陷而非實作偏差**——「實作照契約做對了，但契約本身有洞」是這個專案最穩定的失敗模式。對抗驗證必須把**契約本身**當攻擊面（L19 已記，本次再證）。
+- **影響**: `text-extract.ts`（負結果寫 `''`＋needsText 三態判定）、`index.ts`（限流名單 +1 行）、對應測試更新；契約 §11.1/§11.5 已更正 v1.4。
+
+### 2026-07-30 15:40 | C2 契約凍結（v1.3）：匯入 deck 抽字＋讀圖 fallback＋回填——頁序對齊定為最高風險
+- **誰決定**: 使用者（「C2」一聲啟動；抽字＋讀圖 fallback 的大方向是 2026-07-28 16:54 四岔路已拍板的）＋Fable（偵察後的風險設計與範圍凍結）
+- **決策（寫進 MEETING_CHECKLIST_CONTRACT §11 v1.3，六節）**:
+  1. **抽字掛在 conversion-job、deck 先 ready 再抽字**：前端輪詢 importStatus 即解鎖、UX 不變；抽字任何失敗只 log、絕不把匯入標 failed（圖好了就是好了）。
+  2. **頁序對齊是 C2 最高風險，兩道守門**：(a) pptx 頁序權威改為 `presentation.xml sldIdLst`（偵察證實既有 parser 用 slideN.xml 檔名數字排序＝錯的權威——使用者重排過投影片時檔名序≠播放序、頁數相等無從偵測、文字靜默錯位→翻頁勾稽**誤劃**）；(b) 數量守門（隱藏頁/pdf 吞頁→頁數不等→對齊無效）。**對齊無效＝整份逐頁文字全丟、改走讀圖路徑**（PNG 上的字 Gemini 讀得到、天然對齊）——**寧付讀圖成本，不寫可能錯位的文字**。
+  3. **讀圖 fallback 成本硬上限**：每 deck 上限 20 頁（env）、並行 2、attempts 1；掃描型 100 頁 PDF 不得變 100 次呼叫（outline 全份也才 12k 字）。計費 kind＝`gemini_extract`（admin 標籤本來就寫「匯入解析」、至今無人用）、補傳 userId、idemPrefix=jobId。
+  4. **既有 deck 回填**（契約 §11 原稿沒有、本次擴充）：`POST /api/decks/:id/extract-text`，fill-empty 冪等、共用限流桶、**無 job 列無進度 UI**（靜默 enhancement）；前端唯一觸發＝建會表單選 deck 時 fire-and-forget（與 draft-objective 同時機、零新按鈕，守 [[keep-operations-simple-low-barrier]]）。原稿 §11 doc comment「僅限匯入期呼叫」同步放寬為「匯入期＋回填 job，嚴禁 realtime 路徑」。
+  5. **輕量文字路徑**：新增只回 `string[]` 的 `parsePptxText`/`parsePdfText`，不得走既有 SlideSpec 路徑（會把圖片 base64 內嵌＝純浪費記憶體）；worker transfer 用複本防 detach。
+  6. **明確不做**：第三種「文字部分缺」匯入狀態；表格/SmartArt XML 深抽（讀圖天然覆蓋）；不動既有 parsePptx/parsePdf 及其呼叫者。
+- **脈絡與理由**: 偵察（單路 opus）確認：Gemini 讀圖能力已存在（`GenerateJsonOptions.images`）、兩解析器都逐頁、新匯入 PNG 在記憶體零額外讀取、`buildDeckOutline`/`rowToSlide`/`gatherChecklistContext` C1 已就緒——C2 純 server 工程＋一行前端。最大的坑不是能力而是**對齊正確性**與**成本失控**（100 頁掃描 PDF）。
+- **考慮過的替代**: 全部頁一律讀圖不用 parser（否——parser 免費且常態正確，讀圖只當 fallback）；對齊無效時仍寫「可能錯位」的文字（**絕對否**——誤劃比漏劃傷害大，checklist 全設計的底線）；回填做成有進度的 job＋UI（否——靜默 enhancement 就夠，違反低門檻原則）；修 pdf-parse 吞頁（否——第三方庫行為，用索引鍵＋數量守門繞開）。
+- **影響**: `import/`（conversion-job、pptx-parser 加 parsePptxText、pdf-parser 加 parsePdfText、parse-worker、import-handler 補 userId）、`repos-decks`（setSlideTextExtract）、`repos-deck-assets`（依頁取圖）、`ports`、`decks-routes`（回填端點）、`index.ts`（限流名單）、web `CopilotView` 一行觸發。
+
 ### 2026-07-30 13:42 | 契約 §7.5 更正到 v1.2（時鐘域）＋第三輪殘留 4 條裁決：修 1、記債 3
 - **誰決定**: Fable（依限流／冷卻兩路 fresh-context 復驗的殘留 finding 裁決）
 - **第三輪修正本體已驗收**（4 條全成立）：建會端點納入共用限流桶、uncheck 冷卻期、清單生成補 `userId`、同來源重勾不刷 `covered_at`。兩路復驗 `pass`，且驗證做得比前幾輪更硬——限流是**用真的 `index.ts` 起真 server 打真 HTTP**（刻意不採信修正 agent 自己寫的測試），並做了**突變測試**（故意把修正改壞確認測試轉紅再還原）。最終 server 60 檔 351 測、crm 10 檔 80 測。

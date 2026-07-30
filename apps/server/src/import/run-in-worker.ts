@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export type ImportTask = "pptx" | "pdf" | "pdf-extract";
+export type ImportTask = "pptx" | "pdf" | "pdf-extract" | "pptx-text" | "pdf-text";
 
 interface WorkerOk<T> {
   ok: true;

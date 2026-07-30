@@ -75,6 +75,7 @@
 | POST | `/api/decks/:id/image-jobs` | `{slideIndex, kind:'background'\|'full', prompt?}` → `202 {jobId}`（**pre-meeting** AI 生圖；OpenAI gpt-image-2，~10–80s） |
 | GET | `/api/image-jobs/:id` | `{status:'queued'\|'running'\|'done'\|'failed'\|'refused', dataUri?, error?}`（`refused`＝內容審核拒絕 → 前端顯示 fallback 漸層已套用） |
 | GET | `/api/decks/:id/export.pptx` | 檔案下載（RFC5987 檔名） |
+| POST | `/api/decks/:id/extract-text` | 匯入 deck 逐頁文字回填（checklist 餵料，MEETING_CHECKLIST_CONTRACT §11.5）：需要跑→`202 {started:true}`（背景 fire-and-forget，**無 job 列、不輪詢**）；native deck／已全有字／匯入未完成→`200 {needed:false}`。fill-empty 冪等、同 deck 併發去重；org-scoped（非本 org → 404）；**rate-limited（index.ts 共用桶）**。讀圖 fallback 計費 kind=`gemini_extract` |
 | POST | `/api/extract-url` | `{url}` → `{title?, text}`（wizard grounding；SSRF-guarded） |
 | POST | `/api/extract-pdf` | multipart → `{text}` |
 
