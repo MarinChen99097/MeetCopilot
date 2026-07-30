@@ -247,6 +247,15 @@ async function withRetry<T>(
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
+/**
+ * finishReason=MAX_TOKENS 判定：generateJson 對截斷輸出丟出的錯誤訊息含 "finishReason=MAX_TOKENS"
+ *（見下方 createGeminiClient 內的 C1 分流）。訊息字串的真相在本檔，判定式也住在本檔——
+ * 呼叫端（checklist-gen／deep-extractor 的截斷重試）一律 import，不得各自複製 regex。
+ */
+export function isMaxTokensError(e: unknown): boolean {
+  return e instanceof Error && /MAX_TOKENS/.test(e.message);
+}
+
 export function createGeminiClient(cfg: GeminiConfig): GeminiClient {
   let cached: GoogleGenAI | null = null;
   const client = (): GoogleGenAI => {

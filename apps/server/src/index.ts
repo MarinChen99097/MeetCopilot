@@ -145,6 +145,17 @@ async function main(): Promise<void> {
   app.post("/api/train/sessions", jwtGuard, limit);
   app.post("/api/train/personas/:contactId/draft", jwtGuard, limit); // #1 AI 補齊真人 persona（gemini_text）
   app.post("/api/train/synthetic", jwtGuard, limit); // #4 AI 虛擬人物 autoDesign（gemini_text）
+  // 023 待講清單（MEETING_CHECKLIST_CONTRACT §6.1/§6.3）：這兩條都是 LLM 端點，必須用**這一個共用桶**。
+  // - POST /api/meetings 建會成功後背景觸發 generateChecklist（12k 字 outline、4096 out-tokens、45s deadline、
+  //   MAX_TOKENS 還會再打一次）→ 本 repo 目前**最貴的單次請求**，不限流等於讓合法登入者以 HTTP 速度堆
+  //   in-flight Gemini 呼叫。
+  // - POST /api/meetings/draft-objective 便宜得多但同為 LLM。刻意**不**另開 limiter：各自一個
+  //   TokenBucketRateLimiter 會讓同一 org 的額度加倍（DEFAULT_ORG_BUCKET 各自計數），且掛在 router 內就跑在
+  //   body parser 之後（被 429 的請求仍白 parse 2mb body）。
+  // Express 4 的 app.post(path) 是**完整路徑精確比對**：`/api/meetings` 不會吃到 `/api/meetings/:id`、
+  // `/api/meetings/:id/end`、`/api/meetings/draft-objective`（故後者必須自己列一行）。
+  app.post("/api/meetings", jwtGuard, limit);
+  app.post("/api/meetings/draft-objective", jwtGuard, limit);
 
   // Multimodal deck generation posts a logo + a few style-ref photos as base64 JSON (a real photo is
   // 1.5–5MB, +33% as base64), which blows past the default 2mb cap → 413. Give ONLY this route a higher

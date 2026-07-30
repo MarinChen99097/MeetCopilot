@@ -45,6 +45,7 @@ function makeFakeHub() {
     getRuntime: vi.fn(() => runtime),
     broadcastState,
     setDeckCommitted,
+    onPageCommitted: vi.fn(), // page_commit 路徑的勾稽副作用（no-op 替身；本檔只驗 I2 身分閘）
   } as unknown as RealtimeHub;
   return { hub, patchAct, broadcastState, setDeckCommitted };
 }

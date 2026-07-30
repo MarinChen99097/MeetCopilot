@@ -80,7 +80,8 @@
 
 ## 5. Meetings（會議 session）
 
-| POST | `/api/meetings` | `{title, companyId?, dealId?, deckId?}` → `{meeting:{id,...}, wsUrl, wsToken}`（建立 live session；wsToken 短效） |
+| POST | `/api/meetings` | `{title, companyId?, dealId?, deckId?, objective?}` → `{meeting:{id,...}, wsUrl, wsToken}`（建立 live session；wsToken 短效）。`deckId`／`objective` **會落庫**（migration 023）；建會成功後若 `deckId` 或 `companyId` 任一有值 → **背景**生成待講清單（fire-and-forget，不阻塞回應、失敗不影響建會），進度經 WS `checklist` 推 hud。每場只生成一次。**rate-limited**（因背景清單生成是最貴的 LLM 呼叫；與 `draft-objective` **共用** index.ts 的同一個 token bucket，額度不加倍） |
+| POST | `/api/meetings/draft-objective` | `{deckId?, companyId?, title?}` → `{objective:string}`（AI 依簡報＋CRM 擬一句會議目標，繁中 ≤40 全形字，供建會表單預填、使用者可覆寫）。資料不足 → `{objective:""}`（**不報錯**）。org-scoped＋rate-limited（index.ts 共用桶，非 router 自建） |
 | GET | `/api/meetings/:id` | 會後檢視：`{meeting, signals:Signal[], transcript:Segment[], actions}` |
 | POST | `/api/meetings/:id/end` | 結束 session → `{summary?}` |
 | GET | `/api/meetings` | 歷史清單 |
@@ -93,7 +94,7 @@
 ## 6. WS 協定（`/ws?token=<wsToken>&meetingId=&role=`；role＝`capture`｜`hud`｜`present`）
 
 **傳輸**：音訊用 **binary frame**——**raw 16-bit little-endian PCM、16kHz、mono、無標頭**（直接丟 ArrayBuffer，~100–250ms/frame）；時間戳由 server 以到達時間標記（每場會議單一 capture 連線，勿多路混傳）。其餘 JSON text frame。`ping` 的回應＝`session_state`（協定無 pong）。`research_status.status`＝`'queued'|'running'|'done'|'failed'`（同 §3）。
-**授權**：`suggestion_action`、`page_commit` 為 presenter 專屬——依 **wsToken 身分**授權（`userId === presenterUserId`，**純身分判定**），**與連線 role 無關**（role 僅係 server→client 的推播目標，非安全邊界；任何持 token 者本就可自稱任一 role）。會中副駕 cockpit 由 presenter 從 `hud` 連線批准（故 §6 送訊表標 `suggestion_action // hud`）。任何非 presenter 身分的憑證（含跨使用者／跨 org），無論用哪個 role，一律被拒（`forbidden_not_presenter`）；handshake 另擋 token/meeting 不符（`unauthorized`，close 4001）。patch-service 於寫 deck 前再驗一次 presenterAuth（縱深防禦）。
+**授權**：`suggestion_action`、`page_commit`、`checklist_action` 為 presenter 專屬——依 **wsToken 身分**授權（`userId === presenterUserId`，**純身分判定**），**與連線 role 無關**（role 僅係 server→client 的推播目標，非安全邊界；任何持 token 者本就可自稱任一 role）。會中副駕 cockpit 由 presenter 從 `hud` 連線批准（故 §6 送訊表標 `suggestion_action // hud`）。任何非 presenter 身分的憑證（含跨使用者／跨 org），無論用哪個 role，一律被拒（`forbidden_not_presenter`）；handshake 另擋 token/meeting 不符（`unauthorized`，close 4001）。patch-service 於寫 deck 前再驗一次 presenterAuth（縱深防禦）。
 
 ### Client → Server（JSON）
 ```ts
@@ -102,8 +103,10 @@
 {type:'suggestion_action', suggestionId, action:'accept'|'edit'|'reject', editedSlide?:SlideSpec}  // hud
 {type:'deep_research', query:string}                   // hud「深查」→ 觸發 §3 ground（受每場上限）
 {type:'page_commit', index:number}                     // present：已播到第 index 頁（committedIndex 單調遞增）
+{type:'checklist_action', itemId:string, action:'check'|'uncheck'|'skip'}   // hud（**presenter-only**，同 suggestion_action 身分閘）
 {type:'ping'}
 ```
+> `checklist_action`：`check`→`covered`（`covered_by='manual'`）｜`uncheck`→`pending`（清空 `covered_by`/`covered_at`/`evidence`）｜`skip`→`skipped`。處理後重播全量 `checklist` snapshot 給 hud。非 presenter → `error{code:'forbidden_not_presenter'}`。
 
 ### Server → Client（JSON）
 ```ts
@@ -114,9 +117,11 @@
 {type:'suggestion_result', suggestionId, status:'applied'|'discarded', newSlideIndex?}      // hud
 {type:'deck_update', op:{kind:'APPEND', slide:SlideSpec}, index:number}                     // present（批准後 append 到尾端）
 {type:'research_status', jobId, status, remainingQuota:number}                              // hud
+{type:'checklist', status:'generating'|'ready'|'failed', items:ChecklistItem[], currentSlideIdx?:number}  // hud **only**（I3）
 {type:'session_state', consent:boolean, committedIndex:number, connectedRoles:string[]}     // 全角色，連線/重連時同步
 {type:'error', code:string, message:string}
 ```
+> `checklist`（會中待講清單，契約 `docs/MEETING_CHECKLIST_CONTRACT.md` §5）：**一律 `broadcast(meetingId, msg, 'hud')`**，禁止 `'all'`／`'present'`（I3：清單含會議目標與話術，外流給客戶是災難）。**全量 snapshot、replace 語意**（HUD 端整份換掉；斷線重連自我修復，不需增量對帳）；`status:'generating'` 時 `items` 為空陣列；`currentSlideIdx`＝server 已知的簡報高水位（`runtime.committedIndex`），供 HUD 高亮「正在講」。`ChecklistItem`＝`packages/shared/src/checklist.ts`（`{id, idx, category:'talk'|'ask'|'address', title, detail?, slideIdx?, keywords:string[], priority:'must'|'nice', status:'pending'|'covered'|'skipped', coveredBy?:'transcript'|'slide'|'manual', coveredAt?, evidence?}`）。
 
 ## 7. Train（語音模擬訓練）
 

@@ -8,6 +8,7 @@
  */
 import type { SlideSpec } from "./slide-spec.js";
 import type { SignalItem } from "./signals.js";
+import type { ChecklistItem } from "./checklist.js";
 
 /** WS 連線角色（query param `role`）。 */
 export type WsRole = "capture" | "hud" | "present";
@@ -75,6 +76,13 @@ export type ClientMessage =
     }
   | { type: "deep_research"; query: string } // hud「深查」→ 觸發 §3 ground（受每場上限）
   | { type: "page_commit"; index: number } // present：已播到第 index 頁（committedIndex 單調遞增）
+  | {
+      // hud：報告者手動改待講清單項目狀態（**presenter-only**，同 suggestion_action 的身分閘；I2）
+      // check→covered（covered_by='manual'）｜uncheck→pending（清空 covered_by/at/evidence）｜skip→skipped
+      type: "checklist_action";
+      itemId: string;
+      action: "check" | "uncheck" | "skip";
+    }
   | { type: "ping" };
 
 // ── Server → Client（JSON）── API_CONTRACT §6 ──────────────
@@ -86,6 +94,15 @@ export type ServerMessage =
   | { type: "suggestion_result"; suggestionId: string; status: "applied" | "discarded"; newSlideIndex?: number } // hud
   | { type: "deck_update"; op: { kind: "APPEND"; slide: SlideSpec }; index: number } // present（批准後 append 到尾端）
   | { type: "research_status"; jobId: string; status: ResearchJobStatus; remainingQuota: number } // hud
+  | {
+      // hud **only**（I3：清單絕不外流到 present）。全量 snapshot、**replace 語意**（HUD 端整份換掉）——
+      // 斷線重連自我修復，不需增量對帳。status='generating' 時 items 為空陣列。
+      // currentSlideIdx＝server 已知的簡報高水位（runtime.committedIndex），供 HUD 高亮「正在講」。
+      type: "checklist";
+      status: "generating" | "ready" | "failed";
+      items: ChecklistItem[];
+      currentSlideIdx?: number;
+    }
   | { type: "session_state"; consent: boolean; committedIndex: number; connectedRoles: string[] } // 全角色，連線/重連時同步
   | { type: "error"; code: string; message: string };
 

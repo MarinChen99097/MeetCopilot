@@ -8,7 +8,7 @@
  * 只用來源中出現的事實，不臆造（no hallucination）。
  */
 import { Type } from "@google/genai";
-import type { GeminiClient } from "../gemini.js";
+import { isMaxTokensError, type GeminiClient } from "../gemini.js";
 import type {
   Company,
   Contact,
@@ -731,11 +731,6 @@ const PERSON_BG_RETRY_CHARS = 3_000;
 /** 職稱欄長度上限（防污染守衛）：真實職稱極短，超過此長度＝模型把背景灌進職稱欄。EN 職稱寬列 80、zh titleZh 40。 */
 const PERSON_TITLE_MAXLEN = 80;
 const PERSON_TITLEZH_MAXLEN = 40;
-
-/** finishReason=MAX_TOKENS 判定：gemini.ts 對截斷輸出丟出的錯誤訊息含 "finishReason=MAX_TOKENS"。 */
-function isMaxTokensError(e: unknown): boolean {
-  return e instanceof Error && /MAX_TOKENS/.test(e.message);
-}
 
 /**
  * 職稱欄防污染守衛（寧缺勿錯）：職稱本質簡短，若過長／含 URL／含換行＝模型把日期/背景/連結灌進職稱欄的欄位污染

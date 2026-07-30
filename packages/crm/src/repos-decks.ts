@@ -103,6 +103,8 @@ interface SlideRow {
   // ── 018：頁類別＋原始頁指向的 page_image asset（既有列 DEFAULT 'spec'/NULL）──
   kind: string;
   asset_id: string | null;
+  // ── 023：匯入 deck 的逐頁純文字（C2 匯入期寫入；native deck 恆 NULL）──
+  text_extract: string | null;
 }
 
 interface ImageJobRow {
@@ -155,6 +157,7 @@ function rowToSlide(r: SlideRow): DeckSlide {
     spec: JSON.parse(r.spec_json) as SlideSpec,
     createdAt: r.created_at,
     kind: r.kind as DeckSlideKind,
+    textExtract: r.text_extract ?? undefined,
   };
 }
 

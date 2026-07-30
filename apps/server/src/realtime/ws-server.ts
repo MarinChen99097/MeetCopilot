@@ -180,6 +180,9 @@ function handleMessage(ws: WebSocket, hub: RealtimeHub, meta: ConnMeta, msg: Cli
       if (!runtime) return;
       // Monotonic advance only (never rewind a committed head).
       if (typeof msg.index === "number" && msg.index > runtime.committedIndex) {
+        // 023 翻頁勾稽（契約 §7.2）：committedIndex 前進**之前**結算「前一頁」的停留時間；
+        // ≥SLIDE_DWELL_COVER_MS 才把綁前一頁的 pending 項目劃掉（hub 內做，含 lastCommitAt 推進）。
+        hub.onPageCommitted(runtime, runtime.committedIndex);
         runtime.committedIndex = msg.index;
         runtime.deckLength = Math.max(runtime.deckLength, msg.index + 1);
         // deck committed_index is persisted by the M2 DeckRepository (best-effort).
@@ -196,6 +199,26 @@ function handleMessage(ws: WebSocket, hub: RealtimeHub, meta: ConnMeta, msg: Cli
         return;
       }
       hub.patch.act(meta.meetingId, msg.suggestionId, msg.action, true, asEditedSlide(msg.editedSlide));
+      return;
+    }
+
+    case "checklist_action": {
+      // I2 presenter-only（契約 §1/§5）：與 suggestion_action 同一個純身分閘（meta.isPresenter＝
+      // userId === presenterUserId，來自已驗證的 wsToken，永不取自 payload）。報告者是清單的最終權威。
+      if (!meta.isPresenter) {
+        sendError(ws, "forbidden_not_presenter", "checklist_action is presenter-only");
+        return;
+      }
+      if (typeof msg.itemId !== "string" || !msg.itemId) {
+        sendError(ws, "bad_message", "itemId is required");
+        return;
+      }
+      if (msg.action !== "check" && msg.action !== "uncheck" && msg.action !== "skip") {
+        sendError(ws, "bad_message", "action must be check|uncheck|skip");
+        return;
+      }
+      // orgId 取自 token（meta），非 payload；處理後 hub 重播全量 snapshot 給 hud（I3）。
+      hub.checklistAction(meta.orgId, meta.meetingId, msg.itemId, msg.action);
       return;
     }
 

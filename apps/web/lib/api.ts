@@ -625,8 +625,21 @@ export function createMeeting(input: {
   companyId?: string;
   dealId?: string;
   deckId?: string;
+  /** 本場會議目標（MEETING_CHECKLIST_CONTRACT §9）。有 deckId 或 companyId 時 server 會背景生成待講清單。 */
+  objective?: string;
 }): Promise<CreateMeetingResult> {
   return request<CreateMeetingResult>("/api/meetings", { method: "POST", body: input });
+}
+/**
+ * 會議目標草擬（MEETING_CHECKLIST_CONTRACT §6.1）。deck／company 都缺 → server 回 `{ objective: "" }`（不報錯），
+ * 呼叫端把空字串當「沒建議」處理即可，不要當失敗。
+ */
+export function draftMeetingObjective(input: {
+  deckId?: string;
+  companyId?: string;
+  title?: string;
+}): Promise<{ objective: string }> {
+  return request<{ objective: string }>("/api/meetings/draft-objective", { method: "POST", body: input });
 }
 export function getMeeting(id: string): Promise<MeetingDetail> {
   return request<MeetingDetail>(`/api/meetings/${id}`);

@@ -22,6 +22,8 @@ export interface MeetingRef {
   companyId?: string;
   dealId?: string;
   deckId?: string;
+  /** 023：本場會議目標（一句話；待講清單生成的輸入）。 */
+  objective?: string;
   status?: string;
   createdAt?: number;
 }
@@ -35,12 +37,18 @@ export interface NewMeeting {
   persistTranscript?: boolean;
   /** Retention window (days) for persisted transcript; null/undefined → service default (30). */
   retentionDays?: number;
+  /** 023（migration 023 `meetings.deck_id`）：本場綁哪份 deck。此前只存在記憶體 binding，現一併落庫。 */
+  deckId?: string;
+  /** 023（migration 023 `meetings.objective`）：本場會議目標。**不得改用 agenda 欄**（語意＝議程）。 */
+  objective?: string;
 }
 
 interface MeetingRow {
   id: string;
   company_id: string | null;
   deal_id: string | null;
+  deck_id: string | null;
+  objective: string | null;
   title: string | null;
   status: string | null;
   presenter_user_id: string | null;
@@ -72,13 +80,15 @@ export class MeetingStore {
     const now = Date.now();
     // meetings.company_id is NOT NULL (005); the API allows omitting companyId → store '' sentinel.
     // persist_transcript/retention_days (009): ephemeral-by-default → default 0 / NULL when not opted in.
+    // 023：deck_id / objective 一併落庫（此前 deck 綁定只活在 RealtimeHub 記憶體裡，重啟即失）。
     await this.db.run(
       `INSERT INTO meetings
-         (id, org_id, company_id, deal_id, copilot_session_id, title, status, presenter_user_id,
+         (id, org_id, company_id, deal_id, deck_id, objective, copilot_session_id, title, status, presenter_user_id,
           persist_transcript, retention_days, started_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?)`,
       [
-        id, orgId, input.companyId ?? "", input.dealId ?? null, id, input.title, input.presenterUserId,
+        id, orgId, input.companyId ?? "", input.dealId ?? null, input.deckId ?? null, input.objective ?? null,
+        id, input.title, input.presenterUserId,
         input.persistTranscript ? 1 : 0, input.retentionDays ?? null, now, now, now,
       ],
     );
@@ -96,7 +106,7 @@ export class MeetingStore {
 
   async findRef(orgId: string, id: string): Promise<MeetingRef | null> {
     const row = await this.db.get<MeetingRow>(
-      `SELECT id, company_id, deal_id, title, status, presenter_user_id, created_at
+      `SELECT id, company_id, deal_id, deck_id, objective, title, status, presenter_user_id, created_at
          FROM meetings WHERE id = ? AND org_id = ?`,
       [id, orgId],
     );
@@ -116,7 +126,7 @@ export class MeetingStore {
     const total =
       (await this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM meetings WHERE org_id = ?`, [orgId]))?.n ?? 0;
     const rows = await this.db.all<MeetingRow>(
-      `SELECT id, company_id, deal_id, title, status, presenter_user_id, created_at
+      `SELECT id, company_id, deal_id, deck_id, objective, title, status, presenter_user_id, created_at
          FROM meetings WHERE org_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       [orgId, pageSize, (page - 1) * pageSize],
     );
@@ -200,6 +210,8 @@ export class MeetingStore {
       title: row.title ?? undefined,
       companyId: row.company_id ? row.company_id : undefined,
       dealId: row.deal_id ?? undefined,
+      deckId: row.deck_id ?? undefined,
+      objective: row.objective ?? undefined,
       status: row.status ?? undefined,
       createdAt: row.created_at,
     };

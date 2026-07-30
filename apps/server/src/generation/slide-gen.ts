@@ -334,6 +334,87 @@ function buildExtraContext(input: GenerateDeckInput): { context: string; images:
 }
 
 // ─────────────────────────────────────────────────────────────
+// deck 頁面大綱（共用；MEETING_CHECKLIST_CONTRACT §6.4）
+//   reviseSlides 的 prompt 大綱與「會中待講清單」的 deck 全文餵料共用同一組裝邏輯。
+//   ⚠️ 回歸鎖定：以 REVISE_OUTLINE_OPTIONS 呼叫時，輸出必須與抽出前**逐字等價**（deck-outline.test.ts 鎖）。
+// ─────────────────────────────────────────────────────────────
+
+/** 一頁的大綱輸入。`spec`＝native/AI 頁的 SlideSpec；`textExtract`＝匯入 deck 的逐頁純文字（C2 才有值）。 */
+export interface OutlineSlideInput {
+  spec: SlideSpec;
+  textExtract?: string;
+}
+
+/** 大綱一列。`idx`＝**原始頁序**（跳過空頁後仍保留原頁碼，契約 §6.4「保留頁序與頁碼」）。 */
+export interface DeckOutlineRow {
+  idx: number;
+  template: string;
+  text: string;
+}
+
+/** 整份大綱的文字硬上限（契約 §6.4）；超出則逐頁等比截斷。 */
+export const DECK_OUTLINE_TOTAL_MAX_CHARS = 12_000;
+
+export interface BuildDeckOutlineOptions {
+  /** 每頁文字上限；undefined＝不截（整頁全文）。 */
+  perSlideMaxChars?: number;
+  /** 整份文字總量上限；預設 DECK_OUTLINE_TOTAL_MAX_CHARS。超出→逐頁等比截斷。 */
+  totalMaxChars?: number;
+  /** 文字全空的頁是否保留一列；預設 false（契約 §6.4：仍空則跳過該頁）。 */
+  keepEmptyPages?: boolean;
+}
+
+/**
+ * reviseSlides 的既有大綱參數——**回歸鎖定，不得更動**。
+ * 70 字/頁＋保留空頁＋不設總量上限＝抽出前 `slides.map((s,i)=>…).join("\n")` 的逐字行為。
+ */
+export const REVISE_OUTLINE_OPTIONS: BuildDeckOutlineOptions = {
+  perSlideMaxChars: 70,
+  keepEmptyPages: true,
+  totalMaxChars: Number.POSITIVE_INFINITY,
+};
+
+/**
+ * 組裝 deck 頁面大綱（純函式）。逐頁文字取用順序（契約 §6.4）：
+ * `extractSlideText(spec)` → 空則 `textExtract`（匯入 deck，C2 才有值）→ 仍空則跳過該頁。
+ * 空白一律折成單一空格（沿用原 `.replace(/\s+/g," ")`；**刻意不 trim**，以保逐字等價）。
+ */
+export function buildDeckOutline(
+  slides: readonly OutlineSlideInput[],
+  opts: BuildDeckOutlineOptions = {},
+): DeckOutlineRow[] {
+  const { perSlideMaxChars, totalMaxChars = DECK_OUTLINE_TOTAL_MAX_CHARS, keepEmptyPages = false } = opts;
+  const rows: DeckOutlineRow[] = [];
+  slides.forEach((s, idx) => {
+    const spec = extractSlideText(s.spec);
+    // spec 有實質文字（或根本沒有 textExtract 可退）→ 用 spec 原字串，維持逐字等價。
+    const source = spec.trim().length > 0 || !s.textExtract ? spec : s.textExtract;
+    const normalized = source.replace(/\s+/g, " ");
+    const text = perSlideMaxChars != null ? normalized.slice(0, perSlideMaxChars) : normalized;
+    if (!keepEmptyPages && text.trim().length === 0) return; // 兩個來源都沒字 → 跳過該頁
+    rows.push({ idx, template: s.spec.template, text });
+  });
+
+  return capDeckOutlineTotal(rows, totalMaxChars);
+}
+
+/**
+ * 整份大綱超出字數上限 → **逐頁等比截斷**（保留頁序與頁碼；每頁至少留 1 字，避免整頁變空）。
+ * 上限套在逐頁文字總量上（`#頁碼 [版型] ` 前綴屬固定開銷）。未超出則原陣列直接回傳。
+ */
+export function capDeckOutlineTotal(rows: readonly DeckOutlineRow[], totalMaxChars: number): DeckOutlineRow[] {
+  const total = rows.reduce((n, r) => n + r.text.length, 0);
+  if (total <= totalMaxChars || total === 0) return [...rows];
+  const ratio = totalMaxChars / total;
+  return rows.map((r) => ({ ...r, text: r.text.slice(0, Math.max(1, Math.floor(r.text.length * ratio))) }));
+}
+
+/** 大綱 → prompt 用字串（`#頁碼 [template] 文字`，一頁一行）。 */
+export function formatDeckOutline(rows: readonly DeckOutlineRow[]): string {
+  return rows.map((r) => `#${r.idx} [${r.template}] ${r.text}`).join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────
 // reviseSlides：只重做被 QA 標記的頁（一次呼叫，index→新 SlideSpec）
 // ─────────────────────────────────────────────────────────────
 async function reviseSlides(
@@ -343,9 +424,7 @@ async function reviseSlides(
   slides: SlideSpec[],
   flagged: { index: number; issues: string[] }[],
 ): Promise<Map<number, SlideSpec>> {
-  const outline = slides
-    .map((s, i) => `#${i} [${s.template}] ${extractSlideText(s).replace(/\s+/g, " ").slice(0, 70)}`)
-    .join("\n");
+  const outline = formatDeckOutline(buildDeckOutline(slides.map((spec) => ({ spec })), REVISE_OUTLINE_OPTIONS));
   const asks = flagged.map((f) => `#${f.index}（問題：${f.issues.join("、")}）`).join("；");
   const prompt =
     `以下為一份簡報的頁面大綱（#編號）：\n${outline}\n\n` +

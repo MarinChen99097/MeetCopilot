@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import type { InfoCard, ServerMessage, SignalItem, SlideSpec, Suggestion, TranscriptSegment } from "@meetcopilot/shared";
+import type {
+  ChecklistItem,
+  InfoCard,
+  ServerMessage,
+  SignalItem,
+  SlideSpec,
+  Suggestion,
+  TranscriptSegment,
+} from "@meetcopilot/shared";
 import { API_BASE } from "@/lib/api";
 import { useRealtime, wsStatusLabel, type WsStatus } from "@/lib/useRealtime";
 import {
@@ -16,6 +24,7 @@ import { TranscriptStream } from "./TranscriptStream";
 import { InfoCardStream } from "./InfoCardStream";
 import { SuggestionQueue, type SuggestionAction } from "./SuggestionQueue";
 import { DeepResearchBox, type ResearchLine } from "./DeepResearchBox";
+import { ChecklistPanel, type ChecklistActionKind, type ChecklistWireStatus } from "./ChecklistPanel";
 
 const MAX_SEGMENTS = 200;
 const MAX_SIGNALS = 12;
@@ -57,6 +66,10 @@ export function HudInner({
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [quota, setQuota] = useState<number | null>(null);
   const [researchLines, setResearchLines] = useState<ResearchLine[]>([]);
+  // 待講清單（MEETING_CHECKLIST_CONTRACT §8）。null status＝本場沒有清單 → 面板不佔版面。
+  const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
+  const [checklistStatus, setChecklistStatus] = useState<ChecklistWireStatus | null>(null);
+  const [currentSlideIdx, setCurrentSlideIdx] = useState<number | undefined>(undefined);
 
   // Latch "we connected at least once" so we never render the live stream panels (which show
   // "聆聽中，尚無…") for a session that has NEVER connected — that fake "listening" look is the bug.
@@ -103,12 +116,22 @@ export function HudInner({
           setQuota(msg.remainingQuota);
           setResearchLines((prev) => upsertResearch(prev, { jobId: msg.jobId, status: msg.status }));
           break;
+        case "checklist":
+          // **REPLACE 語意**（本檔唯一的整份覆寫 reducer；其餘 case 都是 append/dedupe——別照抄成 append）。
+          // 全量 snapshot＝唯一真相：斷線重連自我修復，也是手動勾選的最終結果來源（I2，前端不樂觀更新）。
+          setChecklistStatus(msg.status);
+          setChecklist(msg.items);
+          // 契約 §5：currentSlideIdx 可選；沒帶時保留既有值（別把高亮清掉）。
+          if (msg.currentSlideIdx !== undefined) setCurrentSlideIdx(msg.currentSlideIdx);
+          break;
         case "session_state":
           // First session_state = a *working* connection (a bad-token socket opens then closes 4001
           // WITHOUT ever sending state). Latch here — NOT on bare socket-open — so a failed auth never
           // flips us into the live-stream view with empty "聆聽中…" panels.
           setEverConnected(true);
           // Reconnect resync: DON'T clear the accumulated streams; server just re-affirms session facts.
+          // committedIndex ＝ checklist snapshot 的 currentSlideIdx 同源（runtime 高水位），拿來 seed「正在講」高亮。
+          setCurrentSlideIdx(msg.committedIndex);
           break;
         case "error":
           toast.push({ kind: "error", message: `${msg.code}: ${msg.message}` });
@@ -152,6 +175,18 @@ export function HudInner({
   const onDeepResearch = useCallback(
     (query: string) => {
       realtime.send({ type: "deep_research", query });
+    },
+    [realtime],
+  );
+
+  /**
+   * 報告者手動改清單項目（I2：presenter-only，授權在 server）。
+   * **刻意不做樂觀更新**——只送訊息，狀態一律等 server 回的全量 `checklist` snapshot 覆蓋；
+   * 非 presenter 會收到 `error{forbidden_not_presenter}`，此時本地狀態沒被動過，畫面自然仍是真相。
+   */
+  const onChecklistAction = useCallback(
+    (itemId: string, action: ChecklistActionKind) => {
+      realtime.send({ type: "checklist_action", itemId, action });
     },
     [realtime],
   );
@@ -214,6 +249,13 @@ export function HudInner({
         )
       ) : null}
 
+      {/* 契約 §8：Checklist 在最上，但收合態刻意 ≤48px——不得把 I2 批准佇列擠出首屏。 */}
+      <ChecklistPanel
+        items={checklist}
+        status={checklistStatus}
+        currentSlideIdx={currentSlideIdx}
+        onAction={onChecklistAction}
+      />
       <SuggestionQueue suggestions={suggestions} onAct={onAct} onExpire={onExpire} />
       <TranscriptStream segments={segments} signals={signals} />
       <InfoCardStream cards={cards} />

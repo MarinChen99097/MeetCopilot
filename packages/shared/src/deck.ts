@@ -129,6 +129,8 @@ export interface DeckSlide {
   createdAt: number;
   /** 018：頁類別。'original' 頁不可經 PATCH 編輯（repo guard → 409）。 */
   kind: DeckSlideKind;
+  /** 023：匯入 deck 的逐頁純文字（C2 **匯入期**寫入；native deck 恆缺）。checklist 生成的餵料備援（契約 §6.4）。 */
+  textExtract?: string;
 }
 
 // ─────────────────────────────────────────────────────────────

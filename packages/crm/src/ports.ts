@@ -74,6 +74,11 @@ import type {
   TrainTurn,
   TrainReport,
   NewTrainReport,
+  // ── 023 會中待講清單（MEETING_CHECKLIST_CONTRACT §3/§4；實作＝repos-checklist.ts）──
+  ChecklistItem,
+  NewChecklistItem,
+  ChecklistStatus,
+  ChecklistCoverSource,
   // ── M5 生產強化（本檔凍結；UsageRepository/InviteRepository/MemberRepository 實作＝M5 build agent）──
   NewUsageEvent,
   UsageRollup,
@@ -487,6 +492,44 @@ export interface ImportJobRepository {
 }
 
 // ─────────────────────────────────────────────────────────────
+// 023 會中待講清單 存取（meeting_checklist_items；MEETING_CHECKLIST_CONTRACT §3）
+// 實作＝SqliteChecklistRepository（repos-checklist.ts，port-agnostic 跑兩驅動）。
+// org-scoping 鐵律：**所有方法第一參數恆為 orgId 且必須進 WHERE**；跨 org 一律回空/null，**不 throw**。
+// ─────────────────────────────────────────────────────────────
+export interface ChecklistRepository {
+  /** 整份取代該場清單（生成端唯一寫入口；同一 tx 內先刪後插）。回落庫後依 idx 排序的結果。 */
+  replaceAll(orgId: string, meetingId: string, items: NewChecklistItem[]): Promise<ChecklistItem[]>;
+  /** 該場全部項目（依 idx 升冪）。跨 org → 空陣列。 */
+  list(orgId: string, meetingId: string): Promise<ChecklistItem[]>;
+  /**
+   * 批次劃掉（自動勾稽 transcript／slide 與手動 check 共用）。
+   * **只更新 status='pending' 的列**（已 covered/skipped 不覆寫、不改 covered_by）→ 天然冪等。
+   * 回傳「這次真的被改動」的項目；**空陣列＝沒有新變化，呼叫端不必廣播**（契約 §7.4）。
+   */
+  markCovered(
+    orgId: string,
+    meetingId: string,
+    itemIds: string[],
+    by: ChecklistCoverSource,
+    evidence?: string,
+  ): Promise<ChecklistItem[]>;
+  /**
+   * 單項狀態設定（手動路徑；報告者最終權威，不限當前狀態）。
+   * 'covered' 記 covered_by=by??'manual'＋covered_at；'pending'/'skipped' 清空 covered_by/at/evidence。
+   * 'covered' 且 **covered_by 實際換人**（如 'transcript'→'manual'）時**必須一併清 evidence**——舊來源的證據
+   * （transcript 來源即逐字稿位元組）不得跟著新來源留存，否則繞過 M5 §A TTL purge。同來源重勾則保留。
+   * 找不到（含跨 org／不同場）→ null，零副作用。
+   */
+  setStatus(
+    orgId: string,
+    meetingId: string,
+    itemId: string,
+    status: ChecklistStatus,
+    by?: ChecklistCoverSource,
+  ): Promise<ChecklistItem | null>;
+}
+
+// ─────────────────────────────────────────────────────────────
 // M4 語音模擬訓練 存取（008_training.sql；M234_CONTRACT §M4）
 // 實作＝M4 build agent（core.ts 目前為 throwing stub）。
 // ─────────────────────────────────────────────────────────────
@@ -576,6 +619,8 @@ export interface CrmCore {
   deckAssets: DeckAssetRepository;
   /** 018 匯入重構：import_jobs（轉檔背景 job）存取。 */
   importJobs: ImportJobRepository;
+  /** 023 會中待講清單：meeting_checklist_items 存取。 */
+  checklist: ChecklistRepository;
   training: TrainingRepository;
   // ── M5（本檔凍結介面；core.ts 目前為 throwing stub，M5 build agent 實作）──
   usage: UsageRepository;

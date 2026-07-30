@@ -35,6 +35,7 @@ import { SqliteTrainingRepository } from "./repos-training.js";
 import { SqliteDeckRepository } from "./repos-decks.js";
 import { SqliteDeckAssetRepository } from "./repos-deck-assets.js";
 import { SqliteImportJobRepository } from "./repos-import-jobs.js";
+import { SqliteChecklistRepository } from "./repos-checklist.js";
 import { SqliteUsageRepository } from "./repos-ops.js";
 
 /** Postgres migrations 目錄（Adapt 階段建立；與 SQLite migrations/ 平行、方言各異）。 */
@@ -80,6 +81,8 @@ function assemble(
     // ── 018：匯入重構——deck_assets（原檔/逐頁圖 bytes）、import_jobs（轉檔 job）──
     deckAssets: new SqliteDeckAssetRepository(port),
     importJobs: new SqliteImportJobRepository(port),
+    // ── 023：會中待講清單（meeting_checklist_items；markCovered 只動 pending）──
+    checklist: new SqliteChecklistRepository(port),
     // ── M4：訓練 repo（008_training.sql）──
     training: new SqliteTrainingRepository(port),
     // ── M5：ops repos（009_ops.sql）──
