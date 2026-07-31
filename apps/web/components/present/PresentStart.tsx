@@ -20,7 +20,6 @@ import { ApiError, listDecks } from "@/lib/api";
 import { fmtRelative } from "@/lib/format";
 import { Link, useRouter } from "@/i18n/navigation";
 import { StateBoundary } from "@/components/ui/StateBoundary";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   buildPresentUrl,
   buildStaticPresentUrl,
@@ -100,117 +99,131 @@ export function PresentStart() {
 
   return (
     <main className="mc-pstart">
-      <header className="mc-pstart__head">
-        <span className="mc-kicker mc-kicker--live">{t("kicker")}</span>
-        <h1 className="mc-pstart__h1">{t("title")}</h1>
-        <p className="mc-pstart__lead">{t("lead")}</p>
+      {/* 頁首走 globals.css 的 .mc-pagehead 版式（studio-present.css 的舊 `.mc-pstart__head`/`__h1`
+          已隨本次清理刪除，此處不再有第二套可選）。 */}
+      <header className="mc-pagehead">
+        <div className="mc-pagehead__id">
+          <span className="mc-kicker mc-kicker--page">{t("kicker")}</span>
+          <h1 className="mc-pagehead__h1">{t("title")}</h1>
+          <p className="mc-pagehead__lead">{t("lead")}</p>
+        </div>
       </header>
 
-      <StateBoundary
-        loading={loading}
-        error={error ? t("loadError") : null}
-        isEmpty={items.length === 0}
-        onRetry={load}
-        skeleton={<GridSkeleton />}
-        emptyTitle={t("emptyTitle")}
-        emptyHint={t("emptyHint")}
-        emptyAction={
-          <Link href="/studio" className="mc-btn mc-btn--primary">
-            {t("emptyCta")}
-          </Link>
-        }
-      >
-        <section className="mc-pstart__pick" aria-label={t("pickTitle")}>
-          <h2 className="mc-pstart__h2">{t("pickTitle")}</h2>
-          <ul className="mc-deckgrid">
-            {items.map((d) => {
-              const on = d.id === selected;
-              return (
-                <li key={d.id}>
-                  <button
-                    type="button"
-                    className={`mc-deckcard${on ? " is-selected" : ""}`}
-                    aria-pressed={on}
-                    onClick={() => setSelected(d.id)}
-                  >
-                    <span className="mc-deckcard__title">{d.title}</span>
-                    <span className="mc-deckcard__meta">
-                      <StatusBadge tone={on ? "accent" : "muted"}>
-                        {d.language === "zh-TW" ? "繁中" : "EN"}
-                      </StatusBadge>
-                      <span>{t("slides", { n: d.slideCount })}</span>
-                    </span>
-                    <span className="mc-deckcard__foot">{t("updated", { when: fmtRelative(d.updatedAt) })}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      </StateBoundary>
+      <section className="mc-pstart__grid">
+        <div className="mc-pstart__pick">
+          <span className="mc-kicker">{t("pickTitle")}</span>
+          <StateBoundary
+            loading={loading}
+            error={error ? t("loadError") : null}
+            isEmpty={items.length === 0}
+            onRetry={load}
+            skeleton={<ListSkeleton />}
+            emptyTitle={t("emptyTitle")}
+            emptyHint={t("emptyHint")}
+            emptyAction={
+              <Link href="/studio" className="mc-btn mc-btn--primary">
+                {t("emptyCta")}
+              </Link>
+            }
+          >
+            <ul className="mc-decklist">
+              {items.map((d) => {
+                const on = d.id === selected;
+                return (
+                  <li key={d.id}>
+                    <button
+                      type="button"
+                      className={`mc-deckrow${on ? " is-selected" : ""}`}
+                      aria-pressed={on}
+                      onClick={() => setSelected(d.id)}
+                    >
+                      {/* 縮圖佔位：後端無 deck 封面圖 → 用頁數的 mono 標記，不放假縮圖。 */}
+                      <span className="mc-deckrow__thumb mc-mono" aria-hidden="true">
+                        {t("slides", { n: d.slideCount })}
+                      </span>
+                      <span className="mc-deckrow__id">
+                        <span className="mc-deckrow__title">{d.title}</span>
+                        <span className="mc-deckrow__meta">
+                          {d.language === "zh-TW" ? "繁中" : "EN"} · {t("updated", { when: fmtRelative(d.updatedAt) })}
+                        </span>
+                      </span>
+                      <span className="mc-deckrow__mark mc-mono">{on ? t("picked") : t("pick")}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </StateBoundary>
+        </div>
 
-      {deck ? (
-        <section className="mc-pstart__launch" aria-label={t("launchTitle")}>
-          <div className="mc-pstart__launch-id">
-            <span className="mc-pstart__launch-label">{t("launchTitle")}</span>
-            <p className="mc-pstart__launch-title">{deck.title}</p>
-            <p className="mc-pstart__launch-meta">
-              {t("slides", { n: deck.slideCount })} · {t("updated", { when: fmtRelative(deck.updatedAt) })}
-            </p>
-          </div>
+        {/* 右欄啟動卡。設計稿的「開始前確認三件事」preflight 需要後端沒有的就緒欄位
+            （收音狀態／手機已連上／要講的事已備好，INVENTORY §D1）→ 不編假勾選，
+            只保留真正存在的判斷：有沒有進行中的會議 session（決定能不能連線播放）。
+            兩條播放路徑（單機／連線）是既有能力，設計稿把它收斂成一顆鈕，實作**保留兩條**。 */}
+        <aside className="mc-launchcard" aria-label={t("launchTitle")}>
+          <span className="mc-kicker">{t("launchTitle")}</span>
+          {deck ? (
+            <>
+              <div className="mc-launchcard__deck">
+                <span className="mc-launchcard__title">{deck.title}</span>
+                <span className="mc-launchcard__meta mc-mono">
+                  {t("slides", { n: deck.slideCount })} · {t("updated", { when: fmtRelative(deck.updatedAt) })}
+                </span>
+              </div>
 
-          <div className="mc-pstart__launch-actions">
-            <div className="mc-pstart__action">
-              <button type="button" className="mc-btn mc-btn--primary" onClick={() => start("static")}>
+              <button type="button" className="mc-btn mc-btn--primary mc-launchcard__go" onClick={() => start("static")}>
                 {t("playStatic")}
               </button>
-              <p className="mc-pstart__action-hint">{t("playStaticHint")}</p>
-            </div>
+              <p className="mc-launchcard__hint">{t("playStaticHint")}</p>
 
-            <div className="mc-pstart__action">
-              {/* 連線會議播放需要會議 session 憑證（POST /api/meetings 產出、由 MeetCopilot cockpit 建立）。
-                  沒有憑證時停用並直接給出口，而不是讓人按下去才發現連不上。 */}
-              <button
-                type="button"
-                className="mc-btn mc-btn--ghost"
-                onClick={() => start("live")}
-                disabled={!creds}
-                title={creds ? undefined : t("noCreds")}
-              >
-                {t("playLive")}
-              </button>
-              <p className="mc-pstart__action-hint">
-                {creds ? (
-                  t("playLiveHint")
-                ) : (
-                  <>
-                    {t("noCreds")}{" "}
-                    <Link href="/copilot" className="mc-pstart__action-link">
-                      {t("noCredsCta")}
-                    </Link>
-                  </>
-                )}
-              </p>
-            </div>
-          </div>
+              <div className="mc-launchcard__alt">
+                <button
+                  type="button"
+                  className="mc-btn mc-btn--ghost"
+                  onClick={() => start("live")}
+                  disabled={!creds}
+                  title={creds ? undefined : t("noCreds")}
+                >
+                  {t("playLive")}
+                </button>
+                <p className="mc-launchcard__hint">
+                  {creds ? (
+                    t("playLiveHint")
+                  ) : (
+                    <>
+                      {t("noCreds")}{" "}
+                      <Link href="/copilot" className="mc-pstart__action-link">
+                        {t("noCredsCta")}
+                      </Link>
+                    </>
+                  )}
+                </p>
+              </div>
+            </>
+          ) : (
+            <p className="mc-launchcard__hint">{t("pickTitle")}</p>
+          )}
 
-          <p className="mc-pstart__tip" role="note">
+          <p className="mc-launchcard__keys" role="note">
             {t("shareTip")}
           </p>
-        </section>
-      ) : null}
+        </aside>
+      </section>
     </main>
   );
 }
 
-function GridSkeleton() {
+function ListSkeleton() {
   return (
-    <ul className="mc-deckgrid" aria-hidden="true">
-      {Array.from({ length: 4 }).map((_, i) => (
+    <ul className="mc-decklist" aria-hidden="true">
+      {Array.from({ length: 3 }).map((_, i) => (
         <li key={i}>
-          <div className="mc-deckcard mc-deckcard--skel">
-            <div className="mc-skel__line" style={{ width: "70%" }} />
-            <div className="mc-skel__line" style={{ width: "40%" }} />
+          <div className="mc-deckrow mc-deckrow--skel">
+            <div className="mc-deckrow__thumb" />
+            <div className="mc-deckrow__id">
+              <div className="mc-skel__line" style={{ width: "60%" }} />
+              <div className="mc-skel__line" style={{ width: "35%" }} />
+            </div>
           </div>
         </li>
       ))}

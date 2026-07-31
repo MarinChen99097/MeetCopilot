@@ -10,12 +10,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getOrgUsage,
+  getOrgUsageByMeeting,
   getOrgUsageEvents,
+  type OrgBudget,
+  type OrgMeetingCostRow,
   type OrgUsage,
   type OrgUsageEvent,
   type OrgUsageGroupBy,
 } from "@/lib/api";
 import { fmtCompact, fmtDate, fmtDateTime, fmtNumber, fmtUsd } from "@/lib/format";
+import { StateBoundary } from "@/components/ui/StateBoundary";
 
 /** 稅率倍率（稅前 → 含稅）。集中一處，改這裡即改全頁。 */
 const TAX_MULTIPLIER = 1.25;
@@ -93,14 +97,27 @@ export function SpendDashboard() {
   const totalEvents = (data?.rows ?? []).reduce((s, r) => s + r.events, 0);
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "1.25rem 1rem 3rem" }}>
-      <header style={{ marginBottom: "1rem" }}>
-        <span className="mc-kicker">管理</span>
-        <h1 style={{ margin: "0.2rem 0 0.3rem", fontSize: "1.5rem" }}>AI 花費</h1>
-        <p style={{ margin: 0, color: "var(--mc-text-dim, #9aa3b8)", fontSize: "0.9rem" }}>
-          本組織的 AI 用量：花了多少 token、用了哪些模型、成本多少（含稅＝稅前 × {TAX_MULTIPLIER}）。
-        </p>
+    <div className="mc-spend">
+      {/* 2026-07-30 重設計（INVENTORY §B10）：kicker ＋「花了多少錢」大數字。
+          2026-07-31 W4-wire：設計稿的「這個月上限 ／ 進度條」在 server 設了 env ORG_MONTHLY_BUDGET_USD
+          後**已有真資料**（GET /api/org/usage 的 budget 欄），故補上預算條——env 沒設就整條不出現。
+          設計稿的「月底預測」「本週還能查幾次」仍**沒有**任何後端來源（無預測、配額無週期），依契約不渲染。
+          「平均一場會議」改以真資料呈現：下方「單場會議成本」表（GET /api/org/usage/by-meeting）。
+          設計稿砍掉的區間選擇／分組／逐筆明細是既有能力，**保留**。 */}
+      <header className="mc-pagehead">
+        <div className="mc-pagehead__id">
+          <span className="mc-kicker mc-kicker--page">{`${fmtDate(from)} – ${fmtDate(to)}`}</span>
+          {/* 首載（data===null）先給「—」佔位：否則大數字會先閃一格 $0.00，被誤讀成「這區間沒花錢」。
+              載完（含空區間）照常顯示 fmtUsd 結果，行為不變。 */}
+          <h1 className="mc-pagehead__h1">{data ? fmtUsd(postTaxTotal) : "—"}</h1>
+          <p className="mc-pagehead__lead">
+            本組織的 AI 用量：花了多少 token、用了哪些模型、成本多少（含稅＝稅前 × {TAX_MULTIPLIER}）。
+          </p>
+        </div>
       </header>
+
+      {/* 月預算條——只有 server 設了 ORG_MONTHLY_BUDGET_USD 才有 budget 欄；沒設就整條不存在。 */}
+      {data?.budget ? <BudgetBar budget={data.budget} /> : null}
 
       {/* 工具列 */}
       <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.9rem" }}>
@@ -155,11 +172,11 @@ export function SpendDashboard() {
           花費明細（依{GROUP_BY_OPTIONS.find((o) => o.value === groupBy)?.label}）
         </h2>
         {loading ? (
-          <p style={{ color: "var(--mc-text-dim, #9aa3b8)" }}>載入中…</p>
+          <p style={{ color: "var(--mc-text-2)" }}>載入中…</p>
         ) : err ? (
-          <p style={{ color: "#e5657f" }}>⚠ 載入失敗：{err}</p>
+          <p style={{ color: "var(--mc-danger)" }}>⚠ 載入失敗：{err}</p>
         ) : !data || data.rows.length === 0 ? (
-          <p style={{ color: "var(--mc-text-dim, #9aa3b8)" }}>此區間沒有 AI 用量紀錄。</p>
+          <p style={{ color: "var(--mc-text-2)" }}>此區間沒有 AI 用量紀錄。</p>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={tableStyle}>
@@ -184,15 +201,7 @@ export function SpendDashboard() {
                     <td style={tdR}>{fmtUsd(r.costUsd)}</td>
                     <td style={{ ...tdR, fontWeight: 600 }}>{fmtUsd(r.costUsdPosttax)}</td>
                     <td style={tdL}>
-                      <div style={{ height: 8, background: "rgba(255,255,255,0.07)", borderRadius: 4, overflow: "hidden" }}>
-                        <div
-                          style={{
-                            width: `${maxCost > 0 ? Math.round((r.costUsd / maxCost) * 100) : 0}%`,
-                            height: "100%",
-                            background: "var(--mc-accent, #7c6cff)",
-                          }}
-                        />
-                      </div>
+                      <MeterBar pct={maxCost > 0 ? Math.round((r.costUsd / maxCost) * 100) : 0} />
                     </td>
                   </tr>
                 ))}
@@ -211,11 +220,14 @@ export function SpendDashboard() {
             </table>
           </div>
         )}
-        <p style={{ margin: "0.7rem 0 0", fontSize: "0.76rem", color: "var(--mc-text-dim, #9aa3b8)" }}>
+        <p style={{ margin: "0.7rem 0 0", fontSize: "0.76rem", color: "var(--mc-text-2)" }}>
           花費為寫入時凍結的<strong>估算值</strong>（依伺服器定價 PRICING__… 計，非帳單金額）。含稅欄＝稅前 × {TAX_MULTIPLIER}
           （稅率）。每次 AI 呼叫（文字/研究/生圖/向量/語音/評分）都會於最底層記帳。
         </p>
       </section>
+
+      {/* 單場會議成本（會中用量 top-N） */}
+      <ByMeetingSection from={from} to={to} />
 
       {/* 明細事件（逐筆 AI 呼叫） */}
       <EventsSection from={from} to={to} />
@@ -223,15 +235,144 @@ export function SpendDashboard() {
   );
 }
 
+/**
+ * 「佔比」欄的橫條（主明細表與單場會議表共用）。純顯示，無 aria——同列已有稅前/含稅數字，
+ * 這條是重複資訊的視覺輔助（預算條那支有 role="progressbar" 的是另一回事，不共用）。
+ * `pct` 由呼叫端算好（分母各自不同：總表用 maxCost、會議表用 max）。
+ */
+function MeterBar({ pct }: { pct: number }) {
+  return (
+    <div style={{ height: 8, background: "var(--mc-sunk)", borderRadius: 999, overflow: "hidden" }}>
+      <div style={{ width: `${pct}%`, height: "100%", background: "var(--mc-accent)" }} />
+    </div>
+  );
+}
+
 function Kpi({ label, value, sub, emphasis }: { label: string; value: string; sub?: string; emphasis?: boolean }) {
   return (
     <div className="mc-card" style={{ ...cardStyle, padding: "0.8rem 0.9rem" }}>
-      <div style={{ fontSize: "0.76rem", color: "var(--mc-text-dim, #9aa3b8)" }}>{label}</div>
-      <div style={{ fontSize: emphasis ? "1.7rem" : "1.4rem", fontWeight: 700, color: emphasis ? "var(--mc-accent, #7c6cff)" : undefined }}>
+      <div style={{ fontSize: "0.76rem", color: "var(--mc-text-2)" }}>{label}</div>
+      <div style={{ fontSize: emphasis ? "1.7rem" : "1.4rem", fontWeight: 700, color: emphasis ? "var(--mc-accent)" : undefined }}>
         {value}
       </div>
-      {sub ? <div style={{ fontSize: "0.74rem", color: "var(--mc-text-dim, #9aa3b8)" }}>{sub}</div> : null}
+      {sub ? <div style={{ fontSize: "0.74rem", color: "var(--mc-text-2)" }}>{sub}</div> : null}
     </div>
+  );
+}
+
+/**
+ * 月預算條。**只在後端回了 budget 才渲染**（env ORG_MONTHLY_BUDGET_USD 有設）。
+ * 窗恆為「本月至今」（UTC 月初 → now），與上方 from/to 查詢區間無關——所以標題必須寫明「本月」，
+ * 否則使用者會把它誤讀成所選區間的用量。分子取含稅（使用者眼睛看到的就是含稅）。
+ */
+function BudgetBar({ budget }: { budget: OrgBudget }) {
+  const spent = budget.spentUsdPosttax;
+  const cap = budget.monthlyUsd;
+  const ratio = cap > 0 ? spent / cap : 0;
+  const pct = Math.round(ratio * 100);
+  const over = spent > cap;
+  const tone = over ? "var(--mc-danger)" : ratio >= 0.8 ? "var(--mc-warn)" : "var(--mc-accent)";
+  const monthLabel = new Date(budget.monthStart).toLocaleDateString("zh-TW", { year: "numeric", month: "long" });
+
+  return (
+    <section className="mc-card" style={{ ...cardStyle, marginBottom: "0.9rem" }} aria-label="本月預算">
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: "0.5rem" }}>
+        <strong style={{ fontSize: "0.92rem" }}>{monthLabel}預算</strong>
+        <span style={{ fontFamily: "var(--mc-font-mono)", fontSize: "0.86rem" }}>
+          {fmtUsd(spent)} / {fmtUsd(cap)}
+        </span>
+        <span style={{ fontSize: "0.8rem", color: over ? "var(--mc-danger)" : "var(--mc-text-2)" }}>
+          {over ? `已超出 ${fmtUsd(spent - cap)}` : `已用 ${pct}%`}
+        </span>
+      </div>
+      <div
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={cap}
+        aria-valuenow={spent}
+        aria-valuetext={`${fmtUsd(spent)} / ${fmtUsd(cap)}`}
+        style={{ height: 10, background: "var(--mc-sunk)", borderRadius: 999, overflow: "hidden" }}
+      >
+        <div style={{ width: `${Math.min(100, Math.max(0, pct))}%`, height: "100%", background: tone }} />
+      </div>
+      <p style={{ margin: "0.5rem 0 0", fontSize: "0.74rem", color: "var(--mc-text-2)" }}>
+        本月至今（{fmtDate(budget.monthStart)} 起）含稅估算，<strong>與上方查詢區間無關</strong>。上限為全平台設定值。
+      </p>
+    </section>
+  );
+}
+
+/** 單場會議成本 top-N 的預設筆數（後端上限 50）。 */
+const BY_MEETING_LIMIT = 10;
+
+/**
+ * 「最貴的 N 場會議」。**涵蓋範圍要誠實**：只含帶 meetingId 的**會中**用量——會前的簡報生成／研究爬蟲／
+ * persona 草擬沒有 meetingId，不歸屬任何一場，因此本表加總必然小於上方總花費。文案已寫明，不可改成「拆解」。
+ */
+function ByMeetingSection({ from, to }: { from: number; to: number }) {
+  const [rows, setRows] = useState<OrgMeetingCostRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    setErr(null);
+    setRows(null);
+    getOrgUsageByMeeting({ from, to, limit: BY_MEETING_LIMIT })
+      .then((r) => setRows(r.items))
+      .catch((e) => setErr((e as Error).message || "載入失敗"));
+  }, [from, to]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const max = Math.max(0, ...(rows ?? []).map((r) => r.costUsd));
+
+  return (
+    <section className="mc-card" style={{ ...cardStyle, marginTop: "0.9rem" }}>
+      <h2 style={{ margin: "0 0 0.6rem", fontSize: "1rem" }}>單場會議成本（最貴的 {BY_MEETING_LIMIT} 場）</h2>
+      <StateBoundary
+        loading={rows === null && !err}
+        error={err}
+        isEmpty={rows !== null && rows.length === 0}
+        onRetry={load}
+        emptyTitle="此區間沒有會中 AI 用量"
+        emptyHint="只有開會期間（小幫手／HUD／即時建議）產生的用量會歸屬到會議；會前的簡報生成與研究不計入。"
+      >
+        <div style={{ overflowX: "auto" }}>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <th style={thL}>會議</th>
+                <th style={thR}>AI 呼叫</th>
+                <th style={thR}>稅前</th>
+                <th style={thR}>含稅</th>
+                <th style={{ ...thL, width: "24%" }}>佔比</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(rows ?? []).map((r) => (
+                <tr key={r.meetingId}>
+                  {/* 標題缺＝會議已被刪除（join 不到）→ 顯示 id 尾碼，不編標題。 */}
+                  <td style={{ ...tdL, whiteSpace: "normal" }}>
+                    {r.title || <span style={{ color: "var(--mc-text-2)" }}>會議 {r.meetingId.slice(0, 8)}</span>}
+                  </td>
+                  <td style={tdR}>{fmtNumber(r.events)}</td>
+                  <td style={tdR}>{fmtUsd(r.costUsd)}</td>
+                  <td style={{ ...tdR, fontWeight: 600 }}>{fmtUsd(r.costUsdPosttax)}</td>
+                  <td style={tdL}>
+                    <MeterBar pct={max > 0 ? Math.round((r.costUsd / max) * 100) : 0} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ margin: "0.7rem 0 0", fontSize: "0.76rem", color: "var(--mc-text-2)" }}>
+          只涵蓋<strong>會中</strong>產生的用量（即時建議／逐字稿／HUD）。會前的簡報生成、研究爬蟲、persona
+          草擬沒有綁定會議，因此本表加總會小於上方總花費——這不是漏帳。
+        </p>
+      </StateBoundary>
+    </section>
   );
 }
 
@@ -278,11 +419,11 @@ function EventsSection({ from, to }: { from: number; to: number }) {
       </button>
       {open ? (
         loading ? (
-          <p style={{ marginTop: "0.6rem", color: "var(--mc-text-dim, #9aa3b8)" }}>載入中…</p>
+          <p style={{ marginTop: "0.6rem", color: "var(--mc-text-2)" }}>載入中…</p>
         ) : err ? (
-          <p style={{ marginTop: "0.6rem", color: "#e5657f" }}>⚠ {err}</p>
+          <p style={{ marginTop: "0.6rem", color: "var(--mc-danger)" }}>⚠ {err}</p>
         ) : items.length === 0 ? (
-          <p style={{ marginTop: "0.6rem", color: "var(--mc-text-dim, #9aa3b8)" }}>此區間沒有明細。</p>
+          <p style={{ marginTop: "0.6rem", color: "var(--mc-text-2)" }}>此區間沒有明細。</p>
         ) : (
           <>
             <div style={{ overflowX: "auto", marginTop: "0.6rem" }}>
@@ -330,7 +471,7 @@ function EventsSection({ from, to }: { from: number; to: number }) {
               >
                 上一頁
               </button>
-              <span style={{ color: "var(--mc-text-dim, #9aa3b8)" }}>
+              <span style={{ color: "var(--mc-text-2)" }}>
                 {offset + 1}–{Math.min(offset + EVENTS_PAGE, total)} / {total}
               </span>
               <button
@@ -349,24 +490,32 @@ function EventsSection({ from, to }: { from: number; to: number }) {
   );
 }
 
-/* ── inline style tokens ── */
+/* ── inline style tokens ──
+   2026-07-30：原本寫死 rgba(255,255,255,…) 的白色薄膜／`#9aa3b8` fallback 只在深底成立，
+   淺色主題下會變成看不見的線與灰字 → 全部改吃 --mc-* token（雙主題自動翻轉）。 */
 const cardStyle: React.CSSProperties = {
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: 12,
+  border: "1px solid var(--mc-border)",
+  borderRadius: 14,
   padding: "1rem",
-  background: "rgba(255,255,255,0.02)",
+  background: "var(--mc-card)",
 };
 const tableStyle: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" };
 const thBase: React.CSSProperties = {
   padding: "6px 8px",
-  borderBottom: "1px solid rgba(255,255,255,0.1)",
-  fontWeight: 600,
-  fontSize: "0.78rem",
-  color: "var(--mc-text-dim, #9aa3b8)",
+  borderBottom: "1px solid var(--mc-border)",
+  fontFamily: "var(--mc-font-mono)",
+  fontWeight: 500,
+  fontSize: "0.72rem",
+  letterSpacing: "0.08em",
+  color: "var(--mc-text-muted)",
   whiteSpace: "nowrap",
 };
 const thL: React.CSSProperties = { ...thBase, textAlign: "left" };
 const thR: React.CSSProperties = { ...thBase, textAlign: "right" };
-const tdBase: React.CSSProperties = { padding: "6px 8px", borderBottom: "1px solid rgba(255,255,255,0.05)", whiteSpace: "nowrap" };
+const tdBase: React.CSSProperties = {
+  padding: "6px 8px",
+  borderBottom: "1px solid var(--mc-line2)",
+  whiteSpace: "nowrap",
+};
 const tdL: React.CSSProperties = { ...tdBase, textAlign: "left" };
-const tdR: React.CSSProperties = { ...tdBase, textAlign: "right" };
+const tdR: React.CSSProperties = { ...tdBase, textAlign: "right", fontFamily: "var(--mc-font-mono)" };

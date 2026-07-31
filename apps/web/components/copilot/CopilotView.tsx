@@ -11,6 +11,7 @@ import { ToastProvider, useToast } from "@/components/ui/Toast";
 import { Spinner } from "@/components/ui/Spinner";
 import { Link } from "@/i18n/navigation";
 import { VuMeter } from "./VuMeter";
+import { useElapsedLabel } from "./use-elapsed";
 
 /** capture-surface lifecycle phases (drives which panel renders). */
 type Phase = "setup" | "idle" | "requesting" | "listening" | "zero-track" | "ended" | "error";
@@ -32,26 +33,38 @@ export function CopilotView() {
 }
 
 /**
- * Capture surface. Standalone renders its own `<main className="mc-cap">` and self-reads creds from storage.
- * When embedded in the cockpit (CockpitView), the parent owns creds: it passes them via `creds` and is notified
- * via `onCreds` — so the sibling HUD connects to the same session the moment SetupPanel creates it (no page
- * reload) — and `rootTag` becomes `section` (the cockpit owns the single `<main>`).
+ * Capture surface（擷取控制）。
+ *
+ * 2026-07-30 重設計（DESIGN_APPLY W3）：cockpit 改成三欄 Signal Desk，本元件成為**左欄控制軌**
+ * （`variant="rail"`，原稿 :169-199 的形態：LIVE 列＋VU 表＋主按鈕＋「這場會議」欄位）。
+ * standalone（/copilot 舊 wrapper）維持原本的單欄卡片流（`variant="page"`）。
+ *
+ * **合規零變更**：consent 同意閘（未同意→PCM 不送分析）與 TabShareTutorial 兩者在兩個 variant 都在，
+ * 只是換皮；zero-track／error／ended 三個例外態也全部保留（設計稿沒畫，但那是設計稿的缺口）。
+ *
+ * 嵌在 cockpit 時 creds 由 parent 擁有（`creds` 傳入），session 建立走 parent 的 SetupPanel。
  */
 export function CopilotInner({
   embedded = false,
   creds: credsProp,
   onCreds,
   rootTag = "main",
+  variant = "page",
+  onHandoff,
 }: {
   embedded?: boolean;
   creds?: MeetingCreds | null;
   onCreds?: (c: MeetingCreds) => void;
   rootTag?: "main" | "section";
+  /** "page"＝standalone 單欄；"rail"＝cockpit 左欄控制軌（設計稿形態）。 */
+  variant?: "page" | "rail";
+  /** rail：「把提示傳到手機」——由 cockpit 提供（開啟第二裝置交接面板）。 */
+  onHandoff?: () => void;
 } = {}) {
   const toast = useToast();
   const t = useTranslations("copilot");
   const Root = rootTag;
-  // Embedded in the cockpit the page h1 is CockpitView's「MeetCopilot」— demote this capture heading to h2 so the
+  // Embedded in the cockpit the page h1 is CockpitView's — demote this capture heading to h2 so the
   // cockpit page has exactly one h1. Standalone (/copilot wrapper) keeps its own h1.
   const Heading = embedded ? "h2" : "h1";
 
@@ -59,10 +72,12 @@ export function CopilotInner({
   const [resolved, setResolved] = useState(false);
   const [phase, setPhase] = useState<Phase>(embedded && credsProp ? "idle" : "setup");
   const [errorMsg, setErrorMsg] = useState<string>("");
-  const [displaySurface, setDisplaySurface] = useState<string | null>(null);
 
   const [consentGranted, setConsentGranted] = useState(false);
   const [serverState, setServerState] = useState<SessionState | null>(null);
+  // 開始聆聽的時刻（client 事件）→ 左欄 mono 時鐘顯示真實經過時間；null＝還沒開始，不渲染時鐘。
+  const [listeningSince, setListeningSince] = useState<number | null>(null);
+  const clock = useElapsedLabel(listeningSince);
 
   const controllerRef = useRef<CaptureController | null>(null);
   const consentRef = useRef(false);
@@ -129,6 +144,7 @@ export function CopilotInner({
 
   const onEnded = useCallback(() => {
     stopCapture();
+    setListeningSince(null);
     setPhase("ended");
   }, [stopCapture]);
 
@@ -138,7 +154,7 @@ export function CopilotInner({
     try {
       const ctrl = await startCapture({ onFrame, onEnded });
       controllerRef.current = ctrl;
-      setDisplaySurface(ctrl.displaySurface);
+      setListeningSince(Date.now());
       setPhase("listening");
     } catch (e) {
       if (e instanceof CaptureError && e.code === "zero-track") {
@@ -153,6 +169,7 @@ export function CopilotInner({
   const stopListening = useCallback(() => {
     stopCapture();
     setPhase("idle");
+    setListeningSince(null);
     setServerState(null);
   }, [stopCapture]);
 
@@ -171,129 +188,216 @@ export function CopilotInner({
   const getLevel = useCallback(() => controllerRef.current?.getLevel() ?? 0, []);
 
   // ── render ──────────────────────────────────────────────────────
-  if (!resolved) return <Root className="mc-cap" aria-busy="true" />;
+  if (!resolved) return <Root className={variant === "rail" ? "mc-rail" : "mc-cap3"} aria-busy="true" />;
   if (phase === "setup" && !creds) {
     return <SetupPanel rootTag={rootTag} embedded={embedded} onReady={adoptCreds} />;
   }
 
   const analyzing = phase === "listening" && consentGranted && realtime.status === "open";
+  const live = phase === "listening" || phase === "requesting";
 
-  return (
-    <Root className="mc-cap">
-      <header className="mc-cap__head">
-        {/* 2026-07-28：原本這三行是硬編碼中文，且這裡的叫法與側欄、頁標題三處各不相同（偵察卡點 7）。
-            已改走 i18n 並統一到「MeetCopilot · 擷取端」。 */}
-        <Heading className="mc-cap__h1">{t("captureHeading")}</Heading>
-        <p className="mc-cap__lead">{t("captureLead")}</p>
-        <p className="mc-cap__platform" role="note">
+  // 「這場會議」欄位：全部是 server/本地已知的真實事實（設計稿的「用的簡報／手機提示已連上 1 台」等
+  // 欄位後端沒有 → 不渲染、不塞假值）。
+  const facts: Array<{ k: string; v: string }> = [
+    { k: t("factLink"), v: wsStatusLabel(realtime.status) },
+    { k: t("factRoles"), v: serverState?.connectedRoles?.length ? serverState.connectedRoles.join(" · ") : "—" },
+    { k: t("factPage"), v: serverState ? String(serverState.committedIndex + 1) : "—" },
+    { k: t("factConsent"), v: (serverState ? serverState.consent : consentGranted) ? t("factConsentOn") : t("factConsentOff") },
+  ];
+
+  if (variant === "rail") {
+    return (
+      <Root className="mc-rail" aria-label={t("captureLabel")}>
+        <div className="mc-rail__live">
+          <span className={`mc-rail__dot${live ? " is-live" : ""}`} aria-hidden="true" />
+          <span className="mc-rail__livetext mc-mono">{live ? t("railLive") : t("railIdle")}</span>
+          {clock ? <span className="mc-rail__clock mc-mono">{clock}</span> : null}
+        </div>
+
+        <VuMeter getLevel={getLevel} active={phase === "listening"} label={t("vuLabel")} />
+
+        {/* 合規：同意閘永遠在最顯眼的位置，且**絕不預設勾選**。未勾＝PCM 不送分析。 */}
+        <label className={`mc-consent3${consentGranted ? " is-on" : ""}`}>
+          <input type="checkbox" checked={consentGranted} onChange={toggleConsent} />
+          <span className="mc-consent3__text">{t("consentInline")}</span>
+        </label>
+        <p className="mc-rail__hint">
+          {analyzing ? t("consentAnalyzing") : consentGranted ? t("consentWaiting") : t("consentInlineHint")}
+        </p>
+
+        <div className="mc-rail__acts">
+          {live ? (
+            <button type="button" className="mc-btn mc-btn--primary mc-rail__main" onClick={stopListening}>
+              {t("stopListening")}
+            </button>
+          ) : (
+            <button type="button" className="mc-btn mc-btn--primary mc-rail__main" onClick={start}>
+              {t("startListening")}
+            </button>
+          )}
+          {onHandoff ? (
+            <button type="button" className="mc-btn mc-btn--ghost mc-rail__second" onClick={onHandoff}>
+              {t("handoffToPhone")}
+            </button>
+          ) : null}
+        </div>
+
+        {/* 例外態（設計稿沒畫，但都是真實會發生的狀況——不可刪） */}
+        {phase === "zero-track" ? <ZeroTrackGuard onRetry={start} compact /> : null}
+        {phase === "error" ? (
+          <div className="mc-rail__alert is-err" role="alert">
+            <p>{errorMsg || t("captureFailed")}</p>
+            <button type="button" className="mc-btn mc-btn--sm" onClick={start}>
+              {t("reshare")}
+            </button>
+          </div>
+        ) : null}
+        {phase === "ended" ? (
+          <div className="mc-rail__alert is-warn" role="alert">
+            <p>{t("sharingStopped")}</p>
+            <button type="button" className="mc-btn mc-btn--sm" onClick={start}>
+              {t("restartListening")}
+            </button>
+          </div>
+        ) : null}
+        {realtime.status === "failed" ? (
+          <div className="mc-rail__alert is-err" role="alert">
+            <p>{realtime.failureReason ?? t("connFailed")}</p>
+            <button type="button" className="mc-btn mc-btn--sm" onClick={realtime.retry}>
+              {t("connRetry")}
+            </button>
+          </div>
+        ) : null}
+
+        {/* 分享前的分頁音訊教學：就在按鈕正上方出現（just-in-time），開始聆聽後收起來。 */}
+        {!live ? (
+          <details className="mc-rail__tutorial" open>
+            <summary>{t("tabAudioTitle")}</summary>
+            <ol>
+              <li>{t("tabAudioStep1")}</li>
+              <li>{t("tabAudioStep2")}</li>
+              <li>{t("tabAudioStep3")}</li>
+            </ol>
+          </details>
+        ) : null}
+
+        <div className="mc-rail__facts">
+          <span className="mc-kicker">{t("factsTitle")}</span>
+          {facts.map((f) => (
+            <div className="mc-rail__fact" key={f.k}>
+              <span>{f.k}</span>
+              <strong>{f.v}</strong>
+            </div>
+          ))}
+        </div>
+
+        <p className="mc-rail__platform" role="note">
           {t("capturePlatform")}
         </p>
+      </Root>
+    );
+  }
+
+  // ── standalone（單欄卡片流）─────────────────────────────────────
+  return (
+    <Root className="mc-cap3">
+      <header className="mc-cap3__head">
+        <span className="mc-kicker">{t("cockpitKicker")}</span>
+        <Heading className="mc-cap3__h1">{t("captureHeading")}</Heading>
+        <p className="mc-cap3__lead">{t("captureLead")}</p>
       </header>
 
       {phase === "zero-track" ? (
         <ZeroTrackGuard onRetry={start} />
       ) : phase === "error" ? (
-        <div className="mc-cap__errbox" role="alert">
-          <p className="mc-cap__errmsg">{errorMsg || "擷取失敗。"}</p>
+        <div className="mc-rail__alert is-err" role="alert">
+          <p>{errorMsg || t("captureFailed")}</p>
           <button type="button" className="mc-btn mc-btn--primary" onClick={start}>
-            重新分享
+            {t("reshare")}
           </button>
         </div>
       ) : phase === "ended" ? (
-        <div className="mc-cap__errbox mc-cap__errbox--warn" role="alert">
-          <p className="mc-cap__errmsg">分享已停止（你按了瀏覽器的「停止分享」）。</p>
+        <div className="mc-rail__alert is-warn" role="alert">
+          <p>{t("sharingStopped")}</p>
           <button type="button" className="mc-btn mc-btn--primary" onClick={start}>
-            重新開始聆聽
+            {t("restartListening")}
           </button>
         </div>
-      ) : phase === "listening" || phase === "requesting" ? (
-        <section className="mc-cap__live" aria-busy={phase === "requesting"}>
-          <div className="mc-cap__vuwrap">
-            <div className="mc-cap__vulabel">
-              即時音量
-              {phase === "requesting" ? <Spinner size={13} /> : null}
-            </div>
-            <VuMeter getLevel={getLevel} active={phase === "listening"} />
-            <p className="mc-cap__vuhint">會議裡有人講話時音量表會跳動；若一直靜止，代表沒擷取到聲音。</p>
+      ) : live ? (
+        <section className="mc-panel mc-cap3__panel" aria-busy={phase === "requesting"}>
+          <div className="mc-rail__live">
+            <span className="mc-rail__dot is-live" aria-hidden="true" />
+            <span className="mc-rail__livetext mc-mono">{t("railLive")}</span>
+            {phase === "requesting" ? <Spinner size={13} /> : null}
+            {clock ? <span className="mc-rail__clock mc-mono">{clock}</span> : null}
           </div>
-
-          <ConsentGate
-            granted={consentGranted}
-            analyzing={analyzing}
-            status={realtime.status}
-            onToggle={toggleConsent}
-          />
-
-          <StatusBar
-            status={realtime.status}
-            failureReason={realtime.failureReason}
-            onRetry={realtime.retry}
-            state={serverState}
-            localConsent={consentGranted}
-          />
-
-          <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={stopListening}>
-            停止聆聽
+          <VuMeter getLevel={getLevel} active={phase === "listening"} label={t("vuLabel")} />
+          <label className={`mc-consent3${consentGranted ? " is-on" : ""}`}>
+            <input type="checkbox" checked={consentGranted} onChange={toggleConsent} />
+            <span className="mc-consent3__text">{t("consentInline")}</span>
+          </label>
+          <p className="mc-rail__hint">
+            {analyzing ? t("consentAnalyzing") : consentGranted ? t("consentWaiting") : t("consentInlineHint")}
+          </p>
+          <div className="mc-rail__facts">
+            {facts.map((f) => (
+              <div className="mc-rail__fact" key={f.k}>
+                <span>{f.k}</span>
+                <strong>{f.v}</strong>
+              </div>
+            ))}
+          </div>
+          <button type="button" className="mc-btn" onClick={stopListening}>
+            {t("stopListening")}
           </button>
         </section>
       ) : (
-        <section className="mc-cap__start">
-          {/* (b) Tab-audio guidance rendered just-in-time, immediately before the getDisplayMedia picker fires. */}
+        <section className="mc-panel mc-cap3__panel">
           <TabShareTutorial />
-          {/* (a) Inline consent at the start card so「audio never reaches ASR」is a visible gate, not a hidden one.
-              NEVER default-checked; only gates whether PCM reaches the analyzer (onFrame), never the I2 approval gate. */}
-          <div className="mc-cap__consent">
-            <label className="mc-cap__consent-row">
-              <input type="checkbox" checked={consentGranted} onChange={toggleConsent} />
-              <span>{t("consentInline")}</span>
-            </label>
-          </div>
-          <p className="mc-cap__vuhint">{t("consentInlineHint")}</p>
-          {/* (d) One light step: session already exists (created upstream), so consent + guidance + start live
-              together here. getDisplayMedia fires in this button's own user gesture — no createMeeting awaited between. */}
-          <button type="button" className="mc-btn mc-btn--primary mc-cap__startbtn" onClick={start}>
+          <label className={`mc-consent3${consentGranted ? " is-on" : ""}`}>
+            <input type="checkbox" checked={consentGranted} onChange={toggleConsent} />
+            <span className="mc-consent3__text">{t("consentInline")}</span>
+          </label>
+          <p className="mc-rail__hint">{t("consentInlineHint")}</p>
+          <button type="button" className="mc-btn mc-btn--primary mc-cap3__start" onClick={start}>
             {t("startListening")}
           </button>
+          <p className="mc-rail__platform" role="note">
+            {t("capturePlatform")}
+          </p>
         </section>
       )}
     </Root>
   );
 }
 
-/** Big red guard when the user forgot to tick "Share tab audio" — the most important error state.
- *  (c) One-tap retry that re-calls start() (a fresh getDisplayMedia gesture), labelled to remind about tab audio. */
-function ZeroTrackGuard({ onRetry }: { onRetry: () => void }) {
+/** Big guard when the user forgot to tick "Share tab audio" — the most important error state.
+ *  One-tap retry that re-calls start() (a fresh getDisplayMedia gesture), labelled to remind about tab audio. */
+function ZeroTrackGuard({ onRetry, compact = false }: { onRetry: () => void; compact?: boolean }) {
   const t = useTranslations("copilot");
   return (
-    <section className="mc-cap__zero" role="alert">
-      <div className="mc-cap__zero-icon" aria-hidden="true">
-        🔇
-      </div>
-      <h2 className="mc-cap__zero-title">沒有偵測到音訊！</h2>
-      <p className="mc-cap__zero-body">
-        來源選擇器裡<strong>沒有勾「分享分頁音訊 / Share tab audio」</strong>，或你選了不含音訊的來源（整個螢幕／視窗通常不含音訊）。
-      </p>
-      <ol className="mc-cap__steps">
-        <li>選「Chrome 分頁」，挑那個 Meet 分頁。</li>
-        <li>
-          <strong>務必勾選左下角「分享分頁音訊 / Share tab audio」。</strong>
-        </li>
+    <section className={`mc-zero3${compact ? " is-compact" : ""}`} role="alert">
+      <span className="mc-kicker mc-kicker--warn">{t("zeroTrackKicker")}</span>
+      <p className="mc-zero3__title">{t("zeroTrackTitle")}</p>
+      <p className="mc-zero3__body">{t("zeroTrackBody")}</p>
+      <ol className="mc-zero3__steps">
+        <li>{t("tabAudioStep1")}</li>
+        <li>{t("tabAudioStep2")}</li>
       </ol>
-      <button type="button" className="mc-btn mc-btn--primary" onClick={onRetry}>
+      <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={onRetry}>
         {t("zeroTrackRetry")}
       </button>
     </section>
   );
 }
 
-/** Illustrated tab-picker guidance (our UI; the system picker itself can't be styled).
- *  Rendered just-in-time at the start card, right before the getDisplayMedia picker fires. */
+/** Illustrated tab-picker guidance (our UI; the system picker itself can't be styled). */
 function TabShareTutorial() {
   const t = useTranslations("copilot");
   return (
-    <div className="mc-cap__tutorial">
-      <p className="mc-cap__tutorial-lead">{t("tabAudioTitle")}</p>
-      <ol className="mc-cap__steps">
+    <div className="mc-tut3">
+      <span className="mc-kicker">{t("tabAudioTitle")}</span>
+      <ol className="mc-tut3__steps">
         <li>{t("tabAudioStep1")}</li>
         <li>{t("tabAudioStep2")}</li>
         <li>{t("tabAudioStep3")}</li>
@@ -302,103 +406,15 @@ function TabShareTutorial() {
   );
 }
 
-/** Consent gate — analysis does not start until the presenter confirms recording consent. */
-function ConsentGate({
-  granted,
-  analyzing,
-  status,
-  onToggle,
-}: {
-  granted: boolean;
-  analyzing: boolean;
-  status: WsStatus;
-  onToggle: () => void;
-}) {
-  const grantedLabel = analyzing
-    ? "分析中"
-    : status === "failed"
-      ? "已同意（連線失敗）"
-      : status === "open"
-        ? "已同意（等待分析）"
-        : "已同意（連線中…）";
-  return (
-    <div className={`mc-cap__consent ${granted ? "is-on" : ""}`}>
-      <label className="mc-cap__consent-row">
-        <input type="checkbox" checked={granted} onChange={onToggle} />
-        <span>我已取得與會者同意錄音分析</span>
-      </label>
-      <span className={`mc-badge ${granted && status !== "failed" ? "mc-badge--ok" : "mc-badge--warn"}`}>
-        {granted ? grantedLabel : "等待同意 · 分析未啟動"}
-      </span>
-    </div>
-  );
-}
-
-/** Session status: WS connection, connected roles, committedIndex, consent (server-truth when known).
- *  A terminal `failed` state shows the reason + a [重試] action — never a silent "未連線". */
-function StatusBar({
-  status,
-  failureReason,
-  onRetry,
-  state,
-  localConsent,
-}: {
-  status: WsStatus;
-  failureReason: string | null;
-  onRetry: () => void;
-  state: SessionState | null;
-  localConsent: boolean;
-}) {
-  const connKind =
-    status === "open"
-      ? "mc-badge--ok"
-      : status === "failed"
-        ? "mc-badge--danger"
-        : status === "reconnecting"
-          ? "mc-badge--warn"
-          : "mc-badge--muted";
-  return (
-    <>
-      <dl className="mc-cap__status">
-        <div>
-          <dt>連線</dt>
-          <dd>
-            <span className={`mc-badge ${connKind}`}>{wsStatusLabel(status)}</span>
-          </dd>
-        </div>
-        <div>
-          <dt>已連角色</dt>
-          <dd>{state?.connectedRoles?.length ? state.connectedRoles.join(" · ") : "—"}</dd>
-        </div>
-        <div>
-          <dt>已播頁 (committedIndex)</dt>
-          <dd>{state ? state.committedIndex : "—"}</dd>
-        </div>
-        <div>
-          <dt>同意狀態</dt>
-          <dd>{(state ? state.consent : localConsent) ? "已同意" : "未同意"}</dd>
-        </div>
-      </dl>
-      {status === "failed" ? (
-        <div className="mc-cap__connfail" role="alert">
-          <p className="mc-cap__connfail-msg">{failureReason ?? "連線失敗。"}</p>
-          <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={onRetry}>
-            重試連線
-          </button>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
 /**
  * No creds ⇒ this account (B) creates the live session (POST /api/meetings → wsToken). Requires login.
  *
  * MEETING_CHECKLIST_CONTRACT §9：除標題外多了「選簡報／選對方公司／會議目標」三欄，**全部可留空**——
  * 三欄全空時行為與加清單前完全一致（server 不生成 checklist、不報錯），主動線仍是「填標題→建立 session」一步。
- * 目標欄放在 `<details>` 次要位置；選了簡報或公司時自動打 `draft-objective` 預填（使用者一改就不再覆寫）。
+ * 目標欄放在 `<details>` 次要位置；選了簡報或公司時自動打 `draft-objective` 預填（使用者一改就不再覆寫），
+ * 並 fire-and-forget 觸發 deck 逐頁抽字回填。**這三個觸發在重設計後逐字保留**（只換皮）。
  */
-function SetupPanel({ onReady, rootTag = "main", embedded = false }: { onReady: (c: MeetingCreds) => void; rootTag?: "main" | "section"; embedded?: boolean }) {
+export function SetupPanel({ onReady, rootTag = "main", embedded = false }: { onReady: (c: MeetingCreds) => void; rootTag?: "main" | "section"; embedded?: boolean }) {
   const Root = rootTag;
   const t = useTranslations("copilot");
   // Same one-h1 rule as CopilotInner: embedded under the cockpit's h1, this setup heading is an h2.
@@ -501,15 +517,17 @@ function SetupPanel({ onReady, rootTag = "main", embedded = false }: { onReady: 
   }
 
   return (
-    <Root className="mc-cap mc-cap--setup">
-      <header className="mc-cap__head">
-        <Heading className="mc-cap__h1">開始一場會議 session</Heading>
-        <p className="mc-cap__lead">此端負責擷取會議分頁音訊。先建立 session 取得連線憑證，再開始聆聽。</p>
+    <Root className="mc-setup3">
+      <header className="mc-setup3__head">
+        <span className="mc-kicker mc-kicker--page">{t("setupKicker")}</span>
+        <Heading className="mc-setup3__h1">{t("setupTitle")}</Heading>
+        <p className="mc-setup3__lead">{t("setupLead")}</p>
       </header>
-      <form className="mc-cap__setupform" onSubmit={submit}>
+
+      <form className="mc-panel mc-setup3__form" onSubmit={submit}>
         <label className="mc-field">
-          <span>會議標題</span>
-          <input id="meeting-title" name="meeting-title" className="mc-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：Acme 產品簡報" />
+          <span>{t("titleLabel")}</span>
+          <input id="meeting-title" name="meeting-title" className="mc-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("titlePlaceholder")} />
         </label>
 
         {decks.length > 0 ? (
@@ -552,7 +570,7 @@ function SetupPanel({ onReady, rootTag = "main", embedded = false }: { onReady: 
           </label>
         ) : null}
 
-        <details className="mc-cap__objective">
+        <details className="mc-setup3__objective">
           <summary>{t("objectiveSummary")}</summary>
           <label className="mc-field">
             <span>{t("objectiveLabel")}</span>
@@ -573,13 +591,15 @@ function SetupPanel({ onReady, rootTag = "main", embedded = false }: { onReady: 
         </details>
 
         {needLogin ? (
-          <p className="mc-cap__errmsg">
-            尚未登入。請先 <Link href="/login">登入</Link> 後再建立 session。
+          <p className="mc-setup3__err">
+            {t.rich("needLogin", {
+              login: (chunks) => <Link href="/login">{chunks}</Link>,
+            })}
           </p>
         ) : null}
-        {err ? <p className="mc-cap__errmsg">{err}</p> : null}
-        <button type="submit" className="mc-btn mc-btn--primary" disabled={busy}>
-          {busy ? <Spinner size={14} /> : "建立 session"}
+        {err ? <p className="mc-setup3__err">{err}</p> : null}
+        <button type="submit" className="mc-btn mc-btn--primary mc-setup3__submit" disabled={busy}>
+          {busy ? <Spinner size={14} /> : t("createSession")}
         </button>
       </form>
     </Root>

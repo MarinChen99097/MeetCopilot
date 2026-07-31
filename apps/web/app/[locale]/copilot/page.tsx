@@ -1,6 +1,8 @@
 import { setRequestLocale } from "next-intl/server";
 import { AppShell } from "@/components/AppShell";
 import { CockpitView } from "@/components/copilot/CockpitView";
+// I2 批准卡的「補充頁建議」用 SlideRenderer 畫真縮圖 → 需要 slide 的樣式表（`.slide*` 只在這支 CSS 裡）。
+import "../../studio-present.css";
 
 /**
  * /copilot — in-meeting copilot cockpit (account B, Chrome/Edge desktop). The cockpit fuses the capture

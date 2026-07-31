@@ -493,6 +493,18 @@ export interface OrgUsageRow {
   costUsd: number; // 稅前
   costUsdPosttax: number; // 含稅（後端以每列稅率快照加總，019）
 }
+/**
+ * 月預算（W4）。**只有** server 端 env `ORG_MONTHLY_BUDGET_USD` 有設時才會出現在 `OrgUsage.budget`；
+ * 未設 ⇒ 整個欄位不存在 ⇒ 前端**不渲染預算條**（不發明資料）。
+ * `spent*` 恆為「當月至今」（UTC 月初 → now），與查詢用的 from/to **無關**。
+ */
+export interface OrgBudget {
+  monthlyUsd: number;
+  /** 當月起點（UTC 月初 00:00）epoch-ms。 */
+  monthStart: number;
+  spentUsd: number; // 稅前
+  spentUsdPosttax: number; // 含稅（預算條的分子）
+}
 export interface OrgUsage {
   from: number;
   to: number;
@@ -501,6 +513,8 @@ export interface OrgUsage {
   totalInputTokens: number;
   totalOutputTokens: number;
   rows: OrgUsageRow[];
+  /** env 未設月上限 → 不存在（見 OrgBudget）。 */
+  budget?: OrgBudget;
 }
 export interface OrgUsageEvent {
   id: string;
@@ -532,6 +546,31 @@ export function getOrgUsageEvents(p: {
 }): Promise<{ total: number; items: OrgUsageEvent[] }> {
   return request<{ total: number; items: OrgUsageEvent[] }>(
     `/api/org/usage/events${qs({ from: p.from, to: p.to, kind: p.kind, limit: p.limit, offset: p.offset })}`,
+  );
+}
+
+/** 單場會議成本列（GET /api/org/usage/by-meeting）。title 缺 ⇒ 會議已刪／無標題，顯示 id 尾碼。 */
+export interface OrgMeetingCostRow {
+  meetingId: string;
+  title?: string;
+  events: number;
+  costUsd: number; // 稅前
+  costUsdPosttax: number; // 含稅
+}
+/**
+ * 花費最高的 N 場會議（依 usage_events.meeting_id 分組，成本由高到低）。
+ *
+ * **涵蓋範圍**：只含**會中**產生的用量——會前的 deck 生成／研究爬蟲／persona 草擬沒有 meetingId，
+ * 不計入任何一場。故 Σ items < totalCostUsd，UI 文案必須說「會中成本」，不可寫成「總花費拆解」。
+ * owner/admin only（同 /usage 閘）。limit 預設 10、上限 50。
+ */
+export function getOrgUsageByMeeting(p: {
+  from: number;
+  to: number;
+  limit?: number;
+}): Promise<{ items: OrgMeetingCostRow[] }> {
+  return request<{ items: OrgMeetingCostRow[] }>(
+    `/api/org/usage/by-meeting${qs({ from: p.from, to: p.to, limit: p.limit })}`,
   );
 }
 
@@ -604,7 +643,11 @@ export interface MeetingRef {
   companyId?: string;
   dealId?: string;
   deckId?: string;
+  /** 本場會議目標（023 起落庫；未填 → undefined）。 */
+  objective?: string;
+  /** 'scheduled'（建會即此）｜'completed'（POST /:id/end）｜'canceled'｜'no_show'。 */
   status?: string;
+  /** 建會時間 epoch-ms。會議模型**沒有** scheduledAt，首頁「今日議程」即以此判定「今天」。 */
   createdAt?: number;
 }
 /** POST /api/meetings result: the meeting + short-lived WS credentials (role-bound wsToken). */
@@ -658,8 +701,12 @@ export function getMeeting(id: string): Promise<MeetingDetail> {
 export function endMeeting(id: string): Promise<{ summary?: string }> {
   return request<{ summary?: string }>(`/api/meetings/${id}/end`, { method: "POST" });
 }
-export function listMeetings(): Promise<Paged<MeetingRef>> {
-  return request<Paged<MeetingRef>>("/api/meetings");
+/**
+ * 會議清單（createdAt DESC）。首頁「今日議程／本週會議數」即由此自湊——後端沒有、也不打算開
+ * 彙總端點（W4 盤點結論）：拉第一頁後在前端依 createdAt 篩今日／本週。
+ */
+export function listMeetings(p: { page?: number; pageSize?: number } = {}): Promise<Paged<MeetingRef>> {
+  return request<Paged<MeetingRef>>(`/api/meetings${qs({ page: p.page, pageSize: p.pageSize })}`);
 }
 /**
  * Approval-gated meeting-signal → CRM writeback (API_CONTRACT §5; CRM_SCHEMA §7). `value` is the human-approved

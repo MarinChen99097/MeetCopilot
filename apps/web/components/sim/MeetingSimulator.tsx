@@ -51,10 +51,10 @@ export function MeetingSimulator() {
       <header style={{ marginBottom: "1rem" }}>
         <span className="mc-kicker">測試工具</span>
         <h1 style={{ margin: "0.2rem 0 0.3rem", fontSize: "1.5rem" }}>🧪 會議模擬器</h1>
-        <p style={{ margin: 0, color: "var(--mc-text-dim, #9aa3b8)", fontSize: "0.9rem" }}>
+        <p style={{ margin: 0, color: "var(--mc-text-2)", fontSize: "0.9rem" }}>
           匯入音檔模擬會議進行，看 DynamicSlide 依對話把補充頁 append 到簡報尾端（走真 ASR→分析→批准→append 管線）。
         </p>
-        <p style={{ margin: "0.4rem 0 0", fontSize: "0.78rem", color: "var(--mc-text-dim, #9aa3b8)" }}>
+        <p style={{ margin: "0.4rem 0 0", fontSize: "0.78rem", color: "var(--mc-text-2)" }}>
           API：<code>{API_BASE}</code>　·　切換環境＝以對應的前端（本機 dev / 線上）開啟本頁
         </p>
       </header>
@@ -234,7 +234,7 @@ function SetupPanel({
           </label>
         </div>
         {importMsg ? (
-          <p style={{ margin: "0.5rem 0 0", fontSize: "0.82rem", color: "var(--mc-text-dim, #9aa3b8)" }}>{importMsg}</p>
+          <p style={{ margin: "0.5rem 0 0", fontSize: "0.82rem", color: "var(--mc-text-2)" }}>{importMsg}</p>
         ) : null}
         {deckInfo ? (
           <p style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
@@ -272,7 +272,7 @@ function SetupPanel({
             已選音檔：<b>{mp3.name}</b>（{(mp3.size / 1024 / 1024).toFixed(1)} MB）
           </p>
         ) : (
-          <p style={{ margin: "0.5rem 0 0", fontSize: "0.82rem", color: "var(--mc-text-dim, #9aa3b8)" }}>
+          <p style={{ margin: "0.5rem 0 0", fontSize: "0.82rem", color: "var(--mc-text-2)" }}>
             假想三人會議：2 位客戶＋1 位報告者（說話者標註由 LLM 依內容推斷；選對方公司可幫助命中名冊）。
           </p>
         )}
@@ -308,13 +308,13 @@ function SetupPanel({
             </select>
           </label>
         </div>
-        {startErr ? <p style={{ color: "#e5657f", fontSize: "0.85rem" }}>{startErr}</p> : null}
+        {startErr ? <p style={{ color: "var(--mc-danger)", fontSize: "0.85rem" }}>{startErr}</p> : null}
         <div style={{ marginTop: "0.8rem" }}>
           <button type="button" className="mc-btn mc-btn--primary" disabled={!canStart} onClick={() => void start()}>
             {starting ? "建立會議中…" : "▶ 開始模擬會議"}
           </button>
           {!deckId || !mp3 ? (
-            <span style={{ marginLeft: 10, fontSize: "0.8rem", color: "var(--mc-text-dim, #9aa3b8)" }}>
+            <span style={{ marginLeft: 10, fontSize: "0.8rem", color: "var(--mc-text-2)" }}>
               需先選好 deck 與音檔
             </span>
           ) : null}
@@ -492,12 +492,12 @@ function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: 
       <div className="mc-card" style={{ ...cardStyle, display: "flex", alignItems: "center", gap: "0.8rem" }}>
         <span style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}>🎧 收音（mp3）</span>
         <div style={{ flex: 1, height: 8, background: "rgba(255,255,255,0.08)", borderRadius: 4, overflow: "hidden" }}>
-          <div style={{ width: `${Math.round(progress * 100)}%`, height: "100%", background: "var(--mc-accent, #7c6cff)", transition: "width .2s" }} />
+          <div style={{ width: `${Math.round(progress * 100)}%`, height: "100%", background: "var(--mc-accent)", transition: "width .2s" }} />
         </div>
         <div style={{ width: 60, height: 8, background: "rgba(255,255,255,0.08)", borderRadius: 4, overflow: "hidden" }} title="音量">
           <div style={{ width: `${Math.round(level * 100)}%`, height: "100%", background: "#7ee0a3" }} />
         </div>
-        <span style={{ fontSize: "0.78rem", color: "var(--mc-text-dim, #9aa3b8)", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: "0.78rem", color: "var(--mc-text-2)", whiteSpace: "nowrap" }}>
           {audioErr ? `⚠ ${audioErr}` : audioDone ? "音檔播畢" : `${Math.round(progress * 100)}%`}
         </span>
       </div>
@@ -506,16 +506,19 @@ function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) minmax(300px,1fr)", gap: "0.9rem", alignItems: "start" }}>
         <div style={{ display: "grid", gap: "0.6rem" }}>
           <div className="mc-card" style={{ ...cardStyle, padding: "0.6rem" }}>
-            <div style={{ aspectRatio: "16/9", background: "#000", borderRadius: 8, overflow: "hidden", display: "grid" }}>
+            {/* 佔位底色走 --mc-sunk（不是 #000）：淺色主題下黑底會讓下面那行 token 化的提示字對比不足。 */}
+            <div style={{ aspectRatio: "16/9", background: "var(--mc-sunk)", borderRadius: 8, overflow: "hidden", display: "grid" }}>
               {focused ? (
                 <SlideRenderer slide={focused} size="full" />
               ) : (
-                <div style={{ placeSelf: "center", color: deckErr ? "#e5657f" : "#9aa3b8", fontSize: "0.85rem", padding: "0 1rem", textAlign: "center" }}>
+                // 錯誤字疊在上面那層 --mc-sunk 底上：淺色主題的 --mc-danger 只有 4.22:1（未達 AA 4.5），
+                // 故走 --mc-danger-on-sunk（淺色壓深成 #9a332f → 5.90:1；深色不變 → 5.92:1）。
+                <div style={{ placeSelf: "center", color: deckErr ? "var(--mc-danger-on-sunk)" : "var(--mc-text-2)", fontSize: "0.85rem", padding: "0 1rem", textAlign: "center" }}>
                   {deckErr ? `⚠ deck 載入失敗：${deckErr}` : "載入中…"}
                 </div>
               )}
             </div>
-            <p style={{ margin: "0.4rem 2px 0", fontSize: "0.78rem", color: "var(--mc-text-dim, #9aa3b8)" }}>
+            <p style={{ margin: "0.4rem 2px 0", fontSize: "0.78rem", color: "var(--mc-text-2)" }}>
               第 {focus + 1} / {slides.length} 頁　{focus >= seedLen ? "· 🟢 本次 AI 補充頁" : "· 原始簡報頁"}
             </p>
           </div>
@@ -533,7 +536,7 @@ function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: 
                     flex: "0 0 auto",
                     width: 132,
                     padding: 0,
-                    border: `2px solid ${i === focus ? "var(--mc-accent, #7c6cff)" : isSupp ? "#3f9e6b" : "transparent"}`,
+                    border: `2px solid ${i === focus ? "var(--mc-accent)" : isSupp ? "#3f9e6b" : "transparent"}`,
                     borderRadius: 6,
                     overflow: "hidden",
                     background: "#000",
@@ -567,9 +570,11 @@ function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: 
         </div>
 
         {/* HUD：真 transcript/signals/建議＋批准（I2 手動接受）。
-            掛 mc-cockpit__hud → 內嵌 HUD 走單欄（globals.css :1448），否則落回 1fr/1fr 兩欄在窄面板擠成細長條。 */}
-        <div className="mc-card mc-cockpit__hud" style={{ ...cardStyle, padding: "0.5rem", minHeight: 360 }}>
-          <p style={{ margin: "0 0 0.4rem", fontSize: "0.8rem", color: "var(--mc-text-dim, #9aa3b8)" }}>
+            單欄收斂現在由 HUD 自己負責：`rootTag="section"` → 元件輸出 `section.mc-hudm`，
+            globals.css 的 `section.mc-hudm` 規則（內嵌用法）已把 100dvh／max-width／大內距拿掉。
+            舊的 `.mc-cockpit__hud` 覆寫（配舊 `.mc-hud` 兩欄 grid）連同整個 .mc-cockpit* 區塊已刪除。 */}
+        <div className="mc-card" style={{ ...cardStyle, padding: "0.5rem", minHeight: 360 }}>
+          <p style={{ margin: "0 0 0.4rem", fontSize: "0.8rem", color: "var(--mc-text-2)" }}>
             MeetCopilot（建議出現後按「接受」即 append 到簡報尾端 →）
           </p>
           <HudInner embedded creds={creds} rootTag="section" />
@@ -579,17 +584,22 @@ function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: 
   );
 }
 
-/* ── inline style tokens（測試工具，最小樣式） ── */
+/* ── inline style tokens（測試工具，最小樣式） ──
+   2026-07-31：`.mc-card` 只是個沒有 CSS 規則的 class（globals.css 只有 --mc-card **變數**），
+   所以卡片外觀完全由這裡決定。原本寫死的 rgba(255,255,255,…) 白膜只在深底成立，淺色主題下
+   邊框與底色都等於看不見 → 比照 SpendDashboard 改吃 --mc-* token（雙主題自動翻轉）。 */
 const cardStyle: React.CSSProperties = {
-  border: "1px solid rgba(255,255,255,0.08)",
+  border: "1px solid var(--mc-border)",
   borderRadius: 12,
   padding: "1rem",
-  background: "rgba(255,255,255,0.02)",
+  background: "var(--mc-card)",
 };
 const h2Style: React.CSSProperties = { margin: "0 0 0.6rem", fontSize: "0.98rem" };
 const pill: React.CSSProperties = {
   fontSize: "0.78rem",
   padding: "2px 8px",
   borderRadius: 999,
-  background: "rgba(255,255,255,0.06)",
+  // 同 cardStyle 的理由：寫死的白膜只在深底看得見，淺色主題下等於沒有底。
+  // --mc-surface-2 是雙主題都成立的 wash token（淺色＝深墨淡底、深色＝白淡底）。
+  background: "var(--mc-surface-2)",
 };

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useTranslations } from "next-intl";
 import type { AccountStatus, CompanySummary } from "@meetcopilot/shared";
 import { ApiError, createCompany, listCompanies } from "@/lib/api";
 import { fmtRelative } from "@/lib/format";
@@ -8,21 +9,31 @@ import { useRouter } from "@/i18n/navigation";
 import { useToast } from "@/components/ui/Toast";
 import { StateBoundary } from "@/components/ui/StateBoundary";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { AccountStatusBadge, VerifiedBadge } from "@/components/ui/StatusBadge";
-import { ConfidenceBadge } from "@/components/ui/ConfidenceBadge";
 import { Spinner } from "@/components/ui/Spinner";
 
 const PAGE_SIZE = 20;
-const STATUS_OPTIONS: { value: AccountStatus | ""; label: string }[] = [
-  { value: "", label: "全部狀態" },
-  { value: "prospect", label: "潛在客戶" },
-  { value: "active", label: "洽談中" },
-  { value: "customer", label: "既有客戶" },
-  { value: "churned", label: "已流失" },
+
+/** 進度篩選：值＝後端 accountStatus，標籤走 i18n 的口語文案（還沒聊過／談到一半／已成交／沒下文了）。 */
+const STATUS_FILTERS: { value: AccountStatus | ""; key: string }[] = [
+  { value: "", key: "crm.filterAll" },
+  { value: "prospect", key: "crm.statusProspect" },
+  { value: "active", key: "crm.statusActive" },
+  { value: "customer", key: "crm.statusCustomer" },
+  { value: "churned", key: "crm.statusChurned" },
 ];
 
-/** /crm 公司清單：搜尋 / 狀態篩選 / 分頁 / 新增；點卡片 → /crm/[id]。 */
+/**
+ * /crm 公司清單（2026-07-30 重設計，INVENTORY §B6）：卡片牆 → **6 欄表格**、
+ * `<select>` 篩選 → 帶狀態的 chip 列、可信度 badge → 進度條＋百分比。
+ *
+ * **刻意沒做的兩欄**：設計稿的「誰做決定」「下次見面」在後端無資料
+ * （`CompanySummary` 不含 contacts、也沒有 meetings repo——INVENTORY §D1），
+ * 契約規定不渲染假欄位 → 版位讓給既有真資料「產業」。
+ * 篩選 chip 的計數同理（無 facet count API）→ 不顯示數字。
+ * **保留**設計稿沒畫但既有的能力：分頁、＋新增客戶展開表單、載入/錯誤/空三態。
+ */
 export function CompanyListView() {
+  const t = useTranslations();
   const router = useRouter();
   const toast = useToast();
 
@@ -73,20 +84,22 @@ export function CompanyListView() {
 
   return (
     <main className="mc-crm">
-      <div className="mc-crm__header">
-        <div>
-          <h1 className="mc-crm__h1">CRM 公司</h1>
-          <p className="mc-crm__lead">會前把對方公司、主管與產品建成可信檔案：爬蟲先填、你逐欄確認或細填。</p>
+      <header className="mc-pagehead">
+        <div className="mc-pagehead__id">
+          <span className="mc-kicker mc-kicker--page">{t("crm.kicker")}</span>
+          <h1 className="mc-pagehead__h1">{t("crm.headline", { count: total })}</h1>
         </div>
-        <button type="button" className="mc-btn mc-btn--primary" onClick={() => setShowForm((s) => !s)}>
-          ＋ 新增公司
-        </button>
-      </div>
+        <div className="mc-pagehead__acts">
+          <button type="button" className="mc-btn mc-btn--primary" onClick={() => setShowForm((s) => !s)}>
+            {t("crm.addCompany")}
+          </button>
+        </div>
+      </header>
 
       {showForm ? (
         <NewCompanyForm
           onCreated={(id) => {
-            toast.push({ kind: "success", message: "已建立公司，可開始研究此公司" });
+            toast.push({ kind: "success", message: t("crm.createdToast") });
             router.push(`/crm/${id}`);
           }}
           onError={(m) => toast.push({ kind: "error", message: m })}
@@ -94,26 +107,27 @@ export function CompanyListView() {
         />
       ) : null}
 
-      <div className="mc-crm__controls">
+      <div className="mc-filterbar">
         <input
-          className="mc-input mc-crm__search"
-          placeholder="搜尋公司名稱 / 網域…"
+          className="mc-input mc-filterbar__search"
+          placeholder={t("crm.searchPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          aria-label="搜尋公司"
+          aria-label={t("crm.searchLabel")}
         />
-        <select
-          className="mc-input"
-          value={status}
-          onChange={(e) => setStatus(e.target.value as AccountStatus | "")}
-          aria-label="依帳戶狀態篩選"
-        >
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
+        <div className="mc-chipfilters" role="group" aria-label={t("crm.filterLabel")}>
+          {STATUS_FILTERS.map((f) => (
+            <button
+              key={f.value || "all"}
+              type="button"
+              className={`mc-chipfilter${status === f.value ? " is-on" : ""}`}
+              aria-pressed={status === f.value}
+              onClick={() => setStatus(f.value)}
+            >
+              {t(f.key)}
+            </button>
           ))}
-        </select>
+        </div>
       </div>
 
       <StateBoundary
@@ -122,55 +136,64 @@ export function CompanyListView() {
         isEmpty={items.length === 0}
         onRetry={load}
         skeleton={<ListSkeleton />}
-        emptyTitle={debounced || status ? "沒有符合條件的公司" : "還沒有任何公司"}
-        emptyHint={debounced || status ? "換個關鍵字或清除篩選。" : "新增第一家公司，讓研究引擎把欄位補齊。"}
+        emptyTitle={debounced || status ? t("crm.emptyFilteredTitle") : t("crm.emptyTitle")}
+        emptyHint={debounced || status ? t("crm.emptyFilteredHint") : t("crm.emptyHint")}
         emptyAction={
           !debounced && !status ? (
             <button type="button" className="mc-btn mc-btn--primary" onClick={() => setShowForm(true)}>
-              ＋ 新增第一家公司
+              {t("crm.addFirstCompany")}
             </button>
           ) : undefined
         }
       >
-        <ul className="mc-companygrid">
-          {items.map((c) => (
-            <li key={c.id}>
-              <button type="button" className="mc-companycard" onClick={() => router.push(`/crm/${c.id}`)}>
-                <div className="mc-companycard__top">
-                  <span className="mc-logo" aria-hidden="true">
+        <div className="mc-table">
+          <div className="mc-table__scroll">
+            <div className="mc-table__head mc-crmrow" role="row">
+              <span>{t("crm.colCompany")}</span>
+              <span>{t("crm.colStatus")}</span>
+              <span>{t("crm.colIndustry")}</span>
+              <span>{t("crm.colCrawled")}</span>
+              <span>{t("crm.colConfidence")}</span>
+            </div>
+            {items.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className="mc-table__row mc-crmrow"
+                onClick={() => router.push(`/crm/${c.id}`)}
+              >
+                <span className="mc-crmrow__id">
+                  <span className="mc-avatar" aria-hidden="true">
                     {c.logoUrl ? <img src={c.logoUrl} alt="" /> : initials(c.name)}
                   </span>
-                  <div className="mc-companycard__id">
-                    <span className="mc-companycard__name">{c.name}</span>
-                    <span className="mc-companycard__meta">
-                      {c.industry ?? "未分類"}
-                      {c.domain ? ` · ${c.domain}` : ""}
-                    </span>
-                  </div>
-                </div>
-                <div className="mc-companycard__badges">
-                  <AccountStatusBadge status={c.accountStatus} />
-                  <VerifiedBadge status={c.verifiedStatus} />
-                  <ConfidenceBadge value={c.crawlConfidence} />
-                </div>
-                <div className="mc-companycard__foot">最後研究：{fmtRelative(c.lastCrawledAt)}</div>
+                  <span className="mc-crmrow__names">
+                    <span className="mc-crmrow__name">{c.name}</span>
+                    <span className="mc-crmrow__domain mc-mono">{c.domain ?? "—"}</span>
+                  </span>
+                </span>
+                <span className={`mc-statustag mc-statustag--${c.accountStatus ?? "prospect"}`}>
+                  {t(statusKey(c.accountStatus))}
+                </span>
+                <span className="mc-crmrow__industry">{c.industry ?? "—"}</span>
+                <span className="mc-crmrow__crawled mc-mono">{fmtRelative(c.lastCrawledAt)}</span>
+                <ConfidenceMeter value={c.crawlConfidence} />
               </button>
-            </li>
-          ))}
-        </ul>
+            ))}
+          </div>
+        </div>
 
         {totalPages > 1 ? (
-          <nav className="mc-pager" aria-label="分頁">
+          <nav className="mc-pager" aria-label={t("crm.pagerLabel")}>
             <button
               type="button"
               className="mc-btn mc-btn--ghost mc-btn--sm"
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
             >
-              上一頁
+              {t("crm.prevPage")}
             </button>
-            <span className="mc-pager__at">
-              第 {page} / {totalPages} 頁 · 共 {total} 家
+            <span className="mc-pager__at mc-mono">
+              {page} / {totalPages} · {total}
             </span>
             <button
               type="button"
@@ -178,12 +201,42 @@ export function CompanyListView() {
               disabled={page >= totalPages}
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             >
-              下一頁
+              {t("crm.nextPage")}
             </button>
           </nav>
         ) : null}
       </StateBoundary>
     </main>
+  );
+}
+
+function statusKey(status: AccountStatus | undefined): string {
+  switch (status) {
+    case "active":
+      return "crm.statusActive";
+    case "customer":
+      return "crm.statusCustomer";
+    case "churned":
+      return "crm.statusChurned";
+    default:
+      return "crm.statusProspect";
+  }
+}
+
+/** 可信度：5px 進度條＋mono 百分比（≥75 綠／≥50 warn／<50 live），沒有值就留白不編數字。 */
+function ConfidenceMeter({ value }: { value?: number }) {
+  if (typeof value !== "number") {
+    return <span className="mc-crmrow__conf mc-mono">—</span>;
+  }
+  const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
+  const tone = pct >= 75 ? "ok" : pct >= 50 ? "warn" : "live";
+  return (
+    <span className="mc-crmrow__conf">
+      <span className={`mc-bar mc-bar--${tone}`}>
+        <span style={{ width: `${pct}%` }} />
+      </span>
+      <span className="mc-mono">{pct}%</span>
+    </span>
   );
 }
 
@@ -196,6 +249,7 @@ function NewCompanyForm({
   onError: (msg: string) => void;
   onClose: () => void;
 }) {
+  const t = useTranslations();
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
@@ -221,7 +275,7 @@ function NewCompanyForm({
     <form className="mc-newco" onSubmit={submit}>
       <div className="mc-newco__row">
         <label className="mc-field mc-field--grow">
-          <span>公司名稱 *</span>
+          <span>{t("crm.fieldName")}</span>
           <input
             id="newco-name"
             name="newco-name"
@@ -229,11 +283,11 @@ function NewCompanyForm({
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
-            placeholder="例：Acme Inc."
+            placeholder="Acme Inc."
           />
         </label>
         <label className="mc-field">
-          <span>網域</span>
+          <span>{t("crm.fieldDomain")}</span>
           <input
             id="newco-domain"
             name="newco-domain"
@@ -244,7 +298,7 @@ function NewCompanyForm({
           />
         </label>
         <label className="mc-field">
-          <span>官網 URL</span>
+          <span>{t("crm.fieldWebsite")}</span>
           <input
             id="newco-website"
             name="newco-website"
@@ -257,10 +311,10 @@ function NewCompanyForm({
       </div>
       <div className="mc-newco__actions">
         <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={onClose}>
-          取消
+          {t("crm.cancel")}
         </button>
         <button type="submit" className="mc-btn mc-btn--primary mc-btn--sm" disabled={busy || !name.trim()}>
-          {busy ? <Spinner size={14} /> : "建立"}
+          {busy ? <Spinner size={14} /> : t("crm.create")}
         </button>
       </div>
     </form>
@@ -269,17 +323,19 @@ function NewCompanyForm({
 
 function ListSkeleton() {
   return (
-    <ul className="mc-companygrid" aria-hidden="true">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <li key={i}>
-          <div className="mc-companycard mc-companycard--skel">
+    <div className="mc-table" aria-hidden="true">
+      <div className="mc-table__scroll">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="mc-table__row mc-crmrow">
             <div className="mc-skel__line" style={{ width: "70%" }} />
-            <div className="mc-skel__line" style={{ width: "40%" }} />
-            <div className="mc-skel__line" style={{ width: "55%" }} />
+            <div className="mc-skel__line" style={{ width: "60%" }} />
+            <div className="mc-skel__line" style={{ width: "50%" }} />
+            <div className="mc-skel__line" style={{ width: "60%" }} />
+            <div className="mc-skel__line" style={{ width: "80%" }} />
           </div>
-        </li>
-      ))}
-    </ul>
+        ))}
+      </div>
+    </div>
   );
 }
 

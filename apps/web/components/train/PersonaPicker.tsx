@@ -15,6 +15,7 @@ import {
 import { ApiError, draftPersona, listPersonas } from "@/lib/api";
 import { Link } from "@/i18n/navigation";
 import { StateBoundary } from "@/components/ui/StateBoundary";
+import { fmtRelative } from "@/lib/format";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { useToast } from "@/components/ui/Toast";
@@ -132,11 +133,17 @@ export function PersonaPicker({
 
   return (
     <section className="mc-train">
-      <header className="mc-train__intro">
-        <h1 className="mc-train__h1">模擬訓練</h1>
-        <p className="mc-train__lead">
-          用 CRM 裡真實主管的 persona 做語音對練——可打斷、低延遲。缺資料可讓 AI 一鍵補齊，或直接建立 AI 虛擬人物練習。
-        </p>
+      {/* 2026-07-30 重設計（INVENTORY §B9）：header 換設計稿版式（kicker ＋ 29px h1 ＋ lead）。
+          設計稿把對象換成 3 個「客戶類型原型」、砍掉情境模式／語言／難度／目標——那是**產品語意變更**
+          （INVENTORY §B9 差異 1、§D1 Train），契約沒授權，故對象仍綁 CRM persona、設定全部保留。 */}
+      <header className="mc-pagehead">
+        <div className="mc-pagehead__id">
+          <span className="mc-kicker mc-kicker--page">練習對話</span>
+          <h1 className="mc-pagehead__h1">上台前先跟難搞的客戶練一輪</h1>
+          <p className="mc-pagehead__lead">
+            用 CRM 裡真實主管的 persona 做語音對練——可打斷、低延遲。缺資料可讓 AI 一鍵補齊，或直接建立 AI 虛擬人物練習。
+          </p>
+        </div>
       </header>
 
       <div className="mc-train__modes" role="group" aria-label="對練對象來源">
@@ -200,6 +207,14 @@ export function PersonaPicker({
                           {p.companyName ? ` · ${p.companyName}` : ""}
                         </span>
                         <span className="mc-personacard__readiness">
+                          {/* 上次分數（W4）：沒練過 ⇒ lastScore undefined ⇒ 整個 badge 不渲染。
+                              **不可**退回 0——0 分和從未對練是兩件事。時間缺就只顯示分數。 */}
+                          {p.lastScore !== undefined ? (
+                            <span className="mc-badge mc-badge--info">
+                              上次 {p.lastScore} 分
+                              {p.lastPracticedAt ? ` · ${fmtRelative(p.lastPracticedAt)}` : ""}
+                            </span>
+                          ) : null}
                           {p.readiness.verifiedFields > 0 ? (
                             <span className="mc-badge mc-badge--ok">已驗證 {p.readiness.verifiedFields} 欄</span>
                           ) : null}

@@ -19,11 +19,13 @@ export type ChecklistActionKind = Extract<ClientMessage, { type: "checklist_acti
 /**
  * 待講清單面板（MEETING_CHECKLIST_CONTRACT §8）。**HUD only（I3）**——本元件永遠不得被 `components/present/**` import。
  *
- * 收合態（預設）＝單行 ≤48px：進度「已講 4/12」（**分母＝pending＋covered，排除 skipped**）＋進度條
- * ＋下一個待辦（截斷）＋展開鈕，
- * 刻意夠矮，**不把 I2 的批准佇列擠出首屏**。
- * 展開態依 `category` 分三組（必講／必問／必回應），每列 checkbox ＋ title（covered 者刪除線＋淡化）。
+ * 兩個 variant（2026-07-30 重設計，行為完全相同、只有版面不同）：
+ *  - `"bar"`（預設，/hud 手機）：收合態＝單行 ≤48px（進度「已講 4/12」＋進度條＋下一個待辦），
+ *    刻意夠矮，**不把 I2 批准卡擠出首屏**；點一下展開成可勾選的完整清單（手機可用性不回退）。
+ *  - `"desk"`（cockpit 右欄，設計稿 :251-269 形態）：常駐清單——標頭進度條＋混排可勾列表＋右側分類 tag，
+ *    「正在講」的項目有 warn 底＋左脊。
  *
+ * 分母＝pending＋covered（**排除 skipped**）。
  * I2：勾選只送 `checklist_action`，授權在 server。**前端絕不樂觀改狀態**——真相來源是 server 回的全量 snapshot；
  * 送出後只給 in-flight 視覺回饋（淡化＋aria-busy），狀態一律等下一次 snapshot 覆蓋。
  */
@@ -32,12 +34,14 @@ export function ChecklistPanel({
   status,
   currentSlideIdx,
   onAction,
+  variant = "bar",
 }: {
   items: ChecklistItem[];
   /** null＝本場沒有清單（server 從未廣播）→ 不佔版面。 */
   status: ChecklistWireStatus | null;
   currentSlideIdx?: number;
   onAction: (itemId: string, action: ChecklistActionKind) => void;
+  variant?: "bar" | "desk";
 }) {
   const t = useTranslations("hud.checklist");
   const [expanded, setExpanded] = useState(false);
@@ -50,6 +54,7 @@ export function ChecklistPanel({
   const covered = useMemo(() => items.filter((it) => it.status === "covered").length, [items]);
   const skipped = useMemo(() => items.filter((it) => it.status === "skipped").length, [items]);
   const next = useMemo(() => nextPending(items), [items]);
+  const ordered = useMemo(() => [...items].sort(compareChecklistOrder), [items]);
   const groups = useMemo(() => groupByCategory(items), [items]);
 
   // 本場沒有清單 → 完全不佔版面。
@@ -57,26 +62,26 @@ export function ChecklistPanel({
 
   if (status === "generating") {
     return (
-      <section className="mc-hud__panel mc-checklist mc-checklist--note" aria-label={t("title")} role="status">
-        <span className="mc-checklist__spinner" aria-hidden="true" />
-        <span className="mc-checklist__notetext">{t("generating")}</span>
+      <section className={`mc-ckl mc-ckl--${variant} is-note`} aria-label={t("title")} role="status">
+        <span className="mc-ckl__spinner" aria-hidden="true" />
+        <span className="mc-ckl__notetext">{t("generating")}</span>
       </section>
     );
   }
 
   if (status === "failed") {
     return (
-      <section className="mc-hud__panel mc-checklist mc-checklist--note is-failed" aria-label={t("title")} role="status">
-        <span className="mc-checklist__notetext">{t("failed")}</span>
+      <section className={`mc-ckl mc-ckl--${variant} is-note is-failed`} aria-label={t("title")} role="status">
+        <span className="mc-ckl__notetext">{t("failed")}</span>
       </section>
     );
   }
 
-  // status==='ready' 但零項目：極簡空狀態，沿用 .mc-hud__empty 慣例（仍然很矮）。
+  // status==='ready' 但零項目：極簡空狀態（仍然很矮）。
   if (items.length === 0) {
     return (
-      <section className="mc-hud__panel mc-checklist mc-checklist--note" aria-label={t("title")}>
-        <span className="mc-hud__empty">{t("empty")}</span>
+      <section className={`mc-ckl mc-ckl--${variant} is-note`} aria-label={t("title")}>
+        <span className="mc-ckl__notetext">{t("empty")}</span>
       </section>
     );
   }
@@ -87,56 +92,72 @@ export function ChecklistPanel({
   // 全部被略過（total===0）→ 沒有可完成的事：不得除零／NaN，改顯示「全部略過」並隱藏進度條。
   const pct = total > 0 ? Math.round((covered / total) * 100) : 0;
 
+  const rowOf = (it: ChecklistItem) => (
+    <ChecklistRow
+      key={it.id}
+      item={it}
+      isNow={it.slideIdx !== undefined && it.slideIdx === currentSlideIdx}
+      busy={inFlight.has(it.id)}
+      onAction={(action) => {
+        setInFlight((prev) => new Set(prev).add(it.id));
+        onAction(it.id, action);
+      }}
+    />
+  );
+
+  // ── desk（cockpit 右欄）：常駐清單，不需要展開／收合 ─────────────
+  if (variant === "desk") {
+    return (
+      <section className="mc-ckl mc-ckl--desk" aria-label={t("title")}>
+        <div className="mc-ckl__head">
+          <span className="mc-kicker">{t("title")}</span>
+          <span className="mc-ckl__count mc-mono">
+            {total > 0 ? `${covered}/${total}` : t("allSkipped")}
+          </span>
+        </div>
+        {total > 0 ? (
+          <div className="mc-bar" aria-hidden="true">
+            <span style={{ width: `${pct}%` }} />
+          </div>
+        ) : null}
+        <ul className="mc-ckl__list">{ordered.map(rowOf)}</ul>
+      </section>
+    );
+  }
+
+  // ── bar（/hud 手機）：≤48px 收合行 ＋ 展開後分三組 ────────────────
   return (
-    <section
-      className={`mc-hud__panel mc-checklist${expanded ? " is-expanded" : ""}`}
-      aria-label={t("title")}
-    >
+    <section className={`mc-ckl mc-ckl--bar${expanded ? " is-expanded" : ""}`} aria-label={t("title")}>
       <button
         type="button"
-        className="mc-checklist__bar"
+        className="mc-ckl__bar"
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
         title={expanded ? t("collapse") : t("expand")}
       >
-        <span className="mc-checklist__count">
+        <span className="mc-ckl__count mc-mono">
           {total > 0 ? t("progress", { covered, total }) : t("allSkipped")}
         </span>
         {total > 0 ? (
-          <span className="mc-checklist__meter" aria-hidden="true">
-            <span className="mc-checklist__meterfill" style={{ width: `${pct}%` }} />
+          <span className="mc-bar mc-ckl__meter" aria-hidden="true">
+            <span style={{ width: `${pct}%` }} />
           </span>
         ) : null}
-        <span className="mc-checklist__next">
-          {next ? next.title : total > 0 ? t("allDone") : ""}
-        </span>
-        <span className="mc-checklist__chev" aria-hidden="true">
+        <span className="mc-ckl__next">{next ? next.title : total > 0 ? t("allDone") : ""}</span>
+        <span className="mc-ckl__chev" aria-hidden="true">
           {expanded ? "▴" : "▾"}
         </span>
       </button>
 
       {expanded ? (
-        <div className="mc-checklist__groups">
+        <div className="mc-ckl__groups">
           {CHECKLIST_CATEGORIES.map((cat) => {
             const rows = groups[cat];
             if (rows.length === 0) return null;
             return (
-              <div className="mc-checklist__group" key={cat}>
-                <h3 className="mc-checklist__grouptitle">{t(CATEGORY_KEY[cat])}</h3>
-                <ul className="mc-checklist__list">
-                  {rows.map((it) => (
-                    <ChecklistRow
-                      key={it.id}
-                      item={it}
-                      isNow={it.slideIdx !== undefined && it.slideIdx === currentSlideIdx}
-                      busy={inFlight.has(it.id)}
-                      onAction={(action) => {
-                        setInFlight((prev) => new Set(prev).add(it.id));
-                        onAction(it.id, action);
-                      }}
-                    />
-                  ))}
-                </ul>
+              <div className="mc-ckl__group" key={cat}>
+                <span className="mc-kicker">{t(CATEGORY_KEY[cat])}</span>
+                <ul className="mc-ckl__list">{rows.map(rowOf)}</ul>
               </div>
             );
           })}
@@ -146,7 +167,7 @@ export function ChecklistPanel({
   );
 }
 
-/** 單列：checkbox ＋ title（covered→刪除線＋淡化）＋「正在講」標記＋略過/復原。 */
+/** 單列：checkbox ＋ title（covered→刪除線＋淡化）＋分類 tag ＋「正在講」左脊＋略過/復原。 */
 function ChecklistRow({
   item,
   isNow,
@@ -162,40 +183,41 @@ function ChecklistRow({
   const isCovered = item.status === "covered";
   const isSkipped = item.status === "skipped";
   const cls = [
-    "mc-checklist__item",
+    "mc-ckl__item",
     isCovered ? "is-covered" : "",
     isSkipped ? "is-skipped" : "",
     isNow ? "is-now" : "",
     busy ? "is-inflight" : "",
+    item.priority === "must" ? "is-must" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   return (
     <li className={cls} aria-busy={busy || undefined}>
-      <label className="mc-checklist__label">
+      <label className="mc-ckl__label">
         <input
           type="checkbox"
-          className="mc-checklist__box"
+          className="mc-ckl__box"
           checked={isCovered}
           // 不樂觀更新：只送訊息，狀態等 server snapshot（React 會把 checkbox 還原成 props 值）。
           onChange={() => onAction(isCovered ? "uncheck" : "check")}
           aria-label={isCovered ? t("markPending") : t("markCovered")}
         />
-        <span className="mc-checklist__text">
-          <span className="mc-checklist__titletext">{item.title}</span>
-          {item.priority === "nice" ? <span className="mc-checklist__tag">{t("nice")}</span> : null}
-          {isNow ? <span className="mc-checklist__now">{t("nowSpeaking")}</span> : null}
-          {isSkipped ? <span className="mc-checklist__tag">{t("skippedTag")}</span> : null}
-          {item.detail ? <span className="mc-checklist__detail">{item.detail}</span> : null}
+        <span className="mc-ckl__text">
+          <span className="mc-ckl__titletext">{item.title}</span>
+          <span className="mc-ckl__meta mc-mono">
+            {isNow ? t("nowSpeaking") : isSkipped ? t("skippedTag") : item.detail ? item.detail : ""}
+          </span>
         </span>
       </label>
+      <span className="mc-ckl__tag mc-mono">{t(CATEGORY_KEY[item.category])}</span>
       {item.status === "pending" ? (
-        <button type="button" className="mc-checklist__skip" onClick={() => onAction("skip")}>
+        <button type="button" className="mc-ckl__skip" onClick={() => onAction("skip")}>
           {t("skip")}
         </button>
       ) : isSkipped ? (
-        <button type="button" className="mc-checklist__skip" onClick={() => onAction("uncheck")}>
+        <button type="button" className="mc-ckl__skip" onClick={() => onAction("uncheck")}>
           {t("restore")}
         </button>
       ) : null}
@@ -225,4 +247,12 @@ export function groupByCategory(items: ChecklistItem[]): Record<ChecklistCategor
   }
   for (const cat of CHECKLIST_CATEGORIES) out[cat].sort((a, b) => a.idx - b.idx);
   return out;
+}
+
+/** 清單進度摘要（HUD 手機頂列用；分母排除 skipped，與面板同一套算法）。 */
+export function checklistProgress(items: ChecklistItem[]): { covered: number; total: number; pct: number } {
+  const covered = items.filter((it) => it.status === "covered").length;
+  const skipped = items.filter((it) => it.status === "skipped").length;
+  const total = items.length - skipped;
+  return { covered, total, pct: total > 0 ? Math.round((covered / total) * 100) : 0 };
 }

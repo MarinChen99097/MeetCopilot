@@ -15,6 +15,12 @@
  *
  * 連線（可選）：帶 meetingId + token 時開 present-role WS——翻頁上報 page_commit（committedIndex 單調遞增）、
  * 收 deck_update 靜默 append、收 session_state 對齊頁碼。無 session 憑證時＝純本地播放（鍵盤翻頁仍可用）。
+ *
+ * 2026-07-30 重設計（DESIGN_APPLY W3，設計稿 :396-418）：**只取舞台框內的視覺**——深灰底 `#111211`
+ * ＋ 內縮的 16:9 紙張＋重陰影；class 全部換成 `.mc-stage3*`（規則在 globals.css 的 W3 區段）。
+ * 設計稿原型裡舞台是側欄的兄弟節點（帶著 nav／使用者名字一起出現）——**那是原型產物，照抄即違反 I3**，
+ * 本檔維持零 app chrome、零導覽。控制列也**不放**設計稿那兩句常駐說明文字
+ * （「要講的事和建議只在你手機上」提到 HUD、且會被一起分享出去）——只留頁碼與會自動淡出的翻頁鈕。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
@@ -70,7 +76,7 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   // 首次進入的鍵盤提示（數秒後自動淡出；任何翻頁動作也立刻收掉）。
   const [hint, setHint] = useState(true);
   // 控制層（翻頁 ‹ › ＋ 全螢幕）顯隱。用「指標有動作才顯示、靜止數秒淡出」而不是純 CSS `:hover`——
-  // 因為 `.mc-present` 是 position:fixed;inset:0 的滿版元素，指標只要在視窗內 `:hover` 就恆為真，
+  // 因為 `.mc-stage3` 是 position:fixed;inset:0 的滿版元素，指標只要在視窗內 `:hover` 就恆為真，
   // 「平時不顯眼」根本不會成立（這個分頁會被分享進 Meet，控制列不該一直亮著）。播放軟體慣例作法。
   const [uiOn, setUiOn] = useState(false);
 
@@ -368,8 +374,8 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   // 載入中（deck 抓取進行中；已有 LOAD_TIMEOUT_MS 上限，不會無限轉）。
   if (!loaded) {
     return (
-      <main className="mc-present mc-present--loading" aria-busy="true">
-        <div className="mc-present__spinner" aria-label={t("loading")} />
+      <main className="mc-stage3 mc-stage3--loading" aria-busy="true">
+        <div className="mc-stage3__spinner" aria-label={t("loading")} />
       </main>
     );
   }
@@ -383,12 +389,12 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   if (!current) {
     if (failed) {
       return (
-        <main className="mc-present">
-          <div className="mc-present__stage">
-            <div className="mc-present__notice" role="alert">
-              <p className="mc-present__notice-title">{t("failedTitle")}</p>
-              <p className="mc-present__notice-desc">{t("failedDesc")}</p>
-              <div className="mc-present__notice-actions">
+        <main className="mc-stage3">
+          <div className="mc-stage3__stage">
+            <div className="mc-stage3__notice" role="alert">
+              <p className="mc-stage3__notice-title">{t("failedTitle")}</p>
+              <p className="mc-stage3__notice-desc">{t("failedDesc")}</p>
+              <div className="mc-stage3__notice-actions">
                 {deckId ? (
                   <button type="button" className="mc-btn mc-btn--ghost" onClick={retryLoad}>
                     {t("retry")}
@@ -407,12 +413,12 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       // 連線終態失敗：中性「連線中斷 + 重新連線」（I3：純連線狀態，無任何副駕元素）。
       if (link === "failed") {
         return (
-          <main className="mc-present">
-            <div className="mc-present__stage">
-              <div className="mc-present__notice" role="alert">
-                <p className="mc-present__notice-title">{t("connFailedTitle")}</p>
-                <p className="mc-present__notice-desc">{t("connFailedDesc")}</p>
-                <div className="mc-present__notice-actions">
+          <main className="mc-stage3">
+            <div className="mc-stage3__stage">
+              <div className="mc-stage3__notice" role="alert">
+                <p className="mc-stage3__notice-title">{t("connFailedTitle")}</p>
+                <p className="mc-stage3__notice-desc">{t("connFailedDesc")}</p>
+                <div className="mc-stage3__notice-actions">
                   <button type="button" className="mc-btn mc-btn--primary" onClick={retryWs}>
                     {t("connRetry")}
                   </button>
@@ -425,11 +431,11 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       // 合法觀眾在等報告者推第一頁：連上前顯示「連線中…」，連上後顯示友善等待（守 I3、也不像壞掉）。
       const connecting = link !== "open";
       return (
-        <main className="mc-present">
-          <div className="mc-present__stage">
-            <div className="mc-present__empty" role="status">
+        <main className="mc-stage3">
+          <div className="mc-stage3__stage">
+            <div className="mc-stage3__empty" role="status">
               <span
-                className={`mc-present__waitdot mc-present__waitdot--${connecting ? "connecting" : "open"}`}
+                className={`mc-stage3__waitdot mc-stage3__waitdot--${connecting ? "connecting" : "open"}`}
                 aria-hidden="true"
               />
               {connecting ? t("connConnecting") : t("waiting")}
@@ -442,12 +448,12 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
     // 2026-07-28：出口從首頁 `/` 改指**準備頁** `/present/start`——原文案叫人「從 App 開啟一份簡報」卻只把人丟回
     // 首頁，等於再繞一圈；準備頁就是「選一份簡報開始播放」的地方，一步到位。
     return (
-      <main className="mc-present">
-        <div className="mc-present__stage">
-          <div className="mc-present__notice" role="status">
-            <p className="mc-present__notice-title">{t("emptyTitle")}</p>
-            <p className="mc-present__notice-desc">{t("emptyDesc")}</p>
-            <div className="mc-present__notice-actions">
+      <main className="mc-stage3">
+        <div className="mc-stage3__stage">
+          <div className="mc-stage3__notice" role="status">
+            <p className="mc-stage3__notice-title">{t("emptyTitle")}</p>
+            <p className="mc-stage3__notice-desc">{t("emptyDesc")}</p>
+            <div className="mc-stage3__notice-actions">
               <Link href="/present/start" className="mc-btn mc-btn--primary">
                 {t("pickDeck")}
               </Link>
@@ -459,8 +465,8 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   }
 
   return (
-    <main className="mc-present">
-      <div className="mc-present__stage">
+    <main className="mc-stage3">
+      <div className="mc-stage3__stage">
         <SlideRenderer slide={current} size="full" />
       </div>
 
@@ -468,10 +474,10 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
           第一次用的人會以為壞了。平時近乎透明（維持乾淨舞台——這個分頁會被分享進 Meet），指標一動就顯著、
           靜止 2.5 秒淡回去；觸控裝置沒有 hover，CSS 用 @media (hover: none) 讓它常駐半透明。
           I3：全是瀏覽器原生操作，無任何副駕元素、無新 import。 */}
-      <div className={`mc-present__controls${uiOn ? " is-on" : ""}`}>
+      <div className={`mc-stage3__controls${uiOn ? " is-on" : ""}`}>
         <button
           type="button"
-          className="mc-present__navbtn"
+          className="mc-stage3__navbtn"
           onClick={() => go(index - 1)}
           disabled={index <= 0}
           aria-label={t("prevSlide")}
@@ -481,7 +487,7 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
         </button>
         <button
           type="button"
-          className="mc-present__navbtn"
+          className="mc-stage3__navbtn"
           onClick={() => go(index + 1)}
           disabled={index >= total - 1}
           aria-label={t("nextSlide")}
@@ -492,7 +498,7 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
         {fsOk ? (
           <button
             type="button"
-            className="mc-present__navbtn mc-present__navbtn--fs"
+            className="mc-stage3__navbtn mc-stage3__navbtn--fs"
             onClick={toggleFullscreen}
             aria-label={t(fs ? "fsExit" : "fsEnter")}
             title={t(fs ? "fsExit" : "fsEnter")}
@@ -503,14 +509,14 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       </div>
 
       {hint ? (
-        <div className="mc-present__hint" role="note">
+        <div className="mc-stage3__hint" role="note">
           {t("keyHint")}
         </div>
       ) : null}
 
       {total > 0 ? (
-        <div className="mc-present__pageno" aria-hidden="true">
-          {link !== "off" ? <span className={`mc-present__dot mc-present__dot--${link}`} /> : null}
+        <div className="mc-stage3__pageno" aria-hidden="true">
+          {link !== "off" ? <span className={`mc-stage3__dot mc-stage3__dot--${link}`} /> : null}
           <span>
             {index + 1} / {total}
           </span>

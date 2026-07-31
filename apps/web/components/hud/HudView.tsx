@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import type {
   ChecklistItem,
   InfoCard,
@@ -20,9 +21,10 @@ import {
   type MeetingCreds,
 } from "@/lib/meeting-session";
 import { ToastProvider, useToast } from "@/components/ui/Toast";
+import { useElapsedLabel } from "@/components/copilot/use-elapsed";
 import { TranscriptStream } from "./TranscriptStream";
-import { InfoCardStream } from "./InfoCardStream";
-import { SuggestionQueue, type SuggestionAction } from "./SuggestionQueue";
+import { InfoCardStream, filterIntel, type IntelTab } from "./InfoCardStream";
+import { SuggestionDeck, type SuggestionAction } from "./SuggestionQueue";
 import { DeepResearchBox, type ResearchLine } from "./DeepResearchBox";
 import { ChecklistPanel, type ChecklistActionKind, type ChecklistWireStatus } from "./ChecklistPanel";
 
@@ -40,22 +42,33 @@ export function HudView() {
 }
 
 /**
- * Presenter HUD / suggestion stream. Standalone (/hud second device) renders its own `<main className="mc-hud">`
- * and self-reads creds from storage — behavior UNCHANGED. When embedded in the cockpit (CockpitView) the parent
- * owns creds (passed via `creds`, so a session created on the capture side connects with no reload), `rootTag`
- * is `section` (the cockpit owns the single `<main>`), and the paste/relink affordances (second-device only) are
- * suppressed.
+ * 報告者 HUD / 建議流。兩個 layout（2026-07-30 重設計；**WS 協定零改動**，純 UI 重組）：
+ *
+ *  - `"stack"`（預設，/hud 第二裝置）：手機直式——頂列（LIVE＋經過時間＋簡報頁）→ 清單進度列
+ *    → I2 批准卡 → 情報卡（對方的資料／我們可以說 tab）→ 逐字稿與深查（次要，摺疊）。
+ *    設計稿的手機視圖把逐字稿與深查整個拿掉；這裡改成**摺疊保留**——第二裝置可用性不得回退（RWD 紅線）。
+ *  - `"desk"`（cockpit 中欄＋右欄）：回傳兩個 `<section>` 當 grid 子節點——中欄＝頂列＋批准卡＋逐字稿＋深查，
+ *    右欄＝待講清單＋情報 tab。
+ *
+ * standalone 自行從 storage 讀 creds；嵌在 cockpit 時 creds 由 parent 擁有（capture 端一建立 session 就連上，
+ * 不用重整），貼連結／重新連結（第二裝置專用）在 embedded 時不出現。
  */
 export function HudInner({
   embedded = false,
   creds: credsProp,
   rootTag = "main",
+  layout = "stack",
+  topbarExtra,
 }: {
   embedded?: boolean;
   creds?: MeetingCreds | null;
   rootTag?: "main" | "section";
+  layout?: "stack" | "desk";
+  /** desk：頂列右側由 cockpit 提供的控制（電腦版／手機版切換）。 */
+  topbarExtra?: ReactNode;
 } = {}) {
   const toast = useToast();
+  const t = useTranslations("hud");
   const Root = rootTag;
   const [creds, setCreds] = useState<MeetingCreds | null>(embedded ? credsProp ?? null : null);
   const [resolved, setResolved] = useState(false);
@@ -70,10 +83,18 @@ export function HudInner({
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [checklistStatus, setChecklistStatus] = useState<ChecklistWireStatus | null>(null);
   const [currentSlideIdx, setCurrentSlideIdx] = useState<number | undefined>(undefined);
+  const [tab, setTab] = useState<IntelTab>("them");
+  /**
+   * I2：已送出、**等 server 裁決**的建議 id。前端不再樂觀把卡片抽掉——只有 `suggestion_result`
+   * （或 expiresAt 逾時）才會讓它消失。掐斷 WS 時卡片留在原地＋維持 in-flight，畫面永遠等於 server 真相。
+   */
+  const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set<string>());
 
   // Latch "we connected at least once" so we never render the live stream panels (which show
   // "聆聽中，尚無…") for a session that has NEVER connected — that fake "listening" look is the bug.
   const [everConnected, setEverConnected] = useState(false);
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const clock = useElapsedLabel(connectedAt);
 
   useEffect(() => {
     if (embedded) {
@@ -85,6 +106,16 @@ export function HudInner({
     setCreds(readMeetingCreds());
     setResolved(true);
   }, [embedded, credsProp]);
+
+  const settle = useCallback((id: string) => {
+    setSuggestions((prev) => prev.filter((s) => s.id !== id));
+    setPendingActions((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
 
   const onMessage = useCallback(
     (msg: ServerMessage) => {
@@ -102,14 +133,18 @@ export function HudInner({
           setSuggestions((prev) => (prev.some((s) => s.id === msg.suggestion.id) ? prev : [...prev, msg.suggestion]));
           break;
         case "suggestion_result":
-          setSuggestions((prev) => prev.filter((s) => s.id !== msg.suggestionId));
+          // **唯一**會讓卡片消失的伺服器事件（另一條是本地 expiresAt 逾時）。
+          settle(msg.suggestionId);
           if (msg.status === "applied") {
             toast.push({
               kind: "success",
-              message: msg.newSlideIndex !== undefined ? `已加入第 ${msg.newSlideIndex + 1} 頁` : "建議已套用",
+              message:
+                msg.newSlideIndex !== undefined
+                  ? t("toastApplied", { page: msg.newSlideIndex + 1 })
+                  : t("toastAppliedPlain"),
             });
           } else {
-            toast.push({ kind: "info", message: "建議已略過" });
+            toast.push({ kind: "info", message: t("toastSkipped") });
           }
           break;
         case "research_status":
@@ -129,6 +164,7 @@ export function HudInner({
           // WITHOUT ever sending state). Latch here — NOT on bare socket-open — so a failed auth never
           // flips us into the live-stream view with empty "聆聽中…" panels.
           setEverConnected(true);
+          setConnectedAt((prev) => prev ?? Date.now());
           // Reconnect resync: DON'T clear the accumulated streams; server just re-affirms session facts.
           // committedIndex ＝ checklist snapshot 的 currentSlideIdx 同源（runtime 高水位），拿來 seed「正在講」高亮。
           setCurrentSlideIdx(msg.committedIndex);
@@ -140,7 +176,7 @@ export function HudInner({
           break;
       }
     },
-    [toast],
+    [toast, t, settle],
   );
 
   const realtime = useRealtime({
@@ -156,21 +192,23 @@ export function HudInner({
   const relink = useCallback(() => {
     clearMeetingCreds();
     setEverConnected(false);
+    setConnectedAt(null);
     setCreds(null);
   }, []);
 
+  /**
+   * I2 批准動作。**不樂觀更新**：只送 wire 訊息並把 id 標成 in-flight；卡片與 deck 的真相
+   * 一律等 server 的 `suggestion_result`。授權（presenter 身分）在 server 判定，前端不代為判斷。
+   */
   const onAct = useCallback(
     (id: string, action: SuggestionAction, editedSlide?: SlideSpec) => {
+      setPendingActions((prev) => new Set(prev).add(id));
       realtime.send({ type: "suggestion_action", suggestionId: id, action, editedSlide });
-      // Optimistically advance the queue so keyboard A/S targets the next item immediately.
-      setSuggestions((prev) => prev.filter((s) => s.id !== id));
     },
     [realtime],
   );
 
-  const onExpire = useCallback((id: string) => {
-    setSuggestions((prev) => (prev.some((s) => s.id === id) ? prev.filter((s) => s.id !== id) : prev));
-  }, []);
+  const onExpire = useCallback((id: string) => settle(id), [settle]);
 
   const onDeepResearch = useCallback(
     (query: string) => {
@@ -191,76 +229,185 @@ export function HudInner({
     [realtime],
   );
 
-  if (!resolved) return <Root className="mc-hud" aria-busy="true" />;
+  const shell = (children: ReactNode, extra = "") => <Root className={`mc-hudm${extra}`}>{children}</Root>;
+
+  /**
+   * desk layout 的早退骨架：回傳的必須是**兩個** grid 子節點——只回一個的話三欄版面會瞬間塌掉。
+   * 三個早退分支（未解析／embedded 無 session／首次連線前）共用它，避免各抄一份而走樣。
+   * `busy` 未帶 → aria-busy 為 undefined（React 直接不輸出該屬性，與原本沒寫是同一份 DOM）。
+   */
+  const deskFrame = (main: ReactNode, busy = false) => (
+    <>
+      <section className="mc-desk__main" aria-busy={busy ? "true" : undefined}>
+        {main}
+      </section>
+      <section className="mc-desk__side" aria-busy={busy ? "true" : undefined} />
+    </>
+  );
+
+  if (!resolved) {
+    if (layout === "desk") return deskFrame(null, true);
+    return shell(null, " is-busy");
+  }
   if (!creds) {
     // Embedded (cockpit): no paste panel — the capture side owns session creation. Show a gentle placeholder.
     if (embedded) {
-      return (
-        <Root className="mc-hud mc-hud--connecting">
-          <div className="mc-hud__connstate" role="status">
-            <span className="mc-hud__connspinner" aria-hidden="true" />
-            <p className="mc-hud__connstate-title">尚未開始 session</p>
-            <p className="mc-hud__connstate-desc">在左側建立會議 session 後，建議流會自動連上。</p>
-          </div>
-        </Root>
+      const note = (
+        <div className="mc-hudm__note" role="status">
+          <span className="mc-hudm__spinner" aria-hidden="true" />
+          <p className="mc-hudm__notetitle">{t("noSessionTitle")}</p>
+          <p className="mc-hudm__notedesc">{t("noSessionDesc")}</p>
+        </div>
       );
+      if (layout === "desk") return deskFrame(note);
+      return shell(note);
     }
     return <ConnectPanel onConnected={setCreds} />;
   }
 
   // Before the FIRST successful connect, never show the live stream panels (they read as "已在聆聽").
-  // Show an honest connection status instead: connecting / reconnecting / failed(+重試/重新貼連結).
   if (!everConnected) {
+    const connecting = (
+      <ConnectingState
+        status={realtime.status}
+        reason={realtime.failureReason}
+        onRetry={realtime.retry}
+        onRelink={relink}
+        showRelink={!embedded}
+      />
+    );
+    if (layout === "desk") return deskFrame(connecting);
+    return shell(connecting);
+  }
+
+  const banner =
+    realtime.status !== "open" ? (
+      realtime.status === "failed" ? (
+        <div className="mc-hudm__banner is-fail" role="alert">
+          <span>{realtime.failureReason ?? t("connFailed")}</span>
+          <span className="mc-hudm__banneracts">
+            <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={realtime.retry}>
+              {t("retry")}
+            </button>
+            {embedded ? null : (
+              <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={relink}>
+                {t("relink")}
+              </button>
+            )}
+          </span>
+        </div>
+      ) : (
+        <div className="mc-hudm__banner" role="status">
+          {wsStatusLabel(realtime.status)}
+        </div>
+      )
+    ) : null;
+
+  const intelTabs = (
+    <div className="mc-tabs3" role="tablist" aria-label={t("intel.tabsLabel")}>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={tab === "them"}
+        className={`mc-tabs3__btn${tab === "them" ? " is-on" : ""}`}
+        onClick={() => setTab("them")}
+      >
+        {t("intel.tabThem")}
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={tab === "us"}
+        className={`mc-tabs3__btn${tab === "us" ? " is-on" : ""}`}
+        onClick={() => setTab("us")}
+      >
+        {t("intel.tabUs")}
+      </button>
+    </div>
+  );
+
+  const approval = (variant: "desk" | "mobile") => (
+    <SuggestionDeck
+      suggestions={suggestions}
+      pending={pendingActions}
+      onAct={onAct}
+      onExpire={onExpire}
+      variant={variant}
+    />
+  );
+
+  // ── desk layout（cockpit 中欄＋右欄）──────────────────────────────
+  if (layout === "desk") {
     return (
-      <Root className="mc-hud mc-hud--connecting">
-        <ConnectingState
-          status={realtime.status}
-          reason={realtime.failureReason}
-          onRetry={realtime.retry}
-          onRelink={relink}
-          showRelink={!embedded}
-        />
-      </Root>
+      <>
+        <section className="mc-desk__main">
+          <div className="mc-desk__topbar">
+            <span className="mc-desk__connpill mc-mono">{wsStatusLabel(realtime.status)}</span>
+            {clock ? <span className="mc-desk__clock mc-mono">{clock}</span> : null}
+            {topbarExtra}
+          </div>
+          {banner}
+          {approval("desk")}
+          <TranscriptStream segments={segments} signals={signals} variant="desk" />
+          <DeepResearchBox remainingQuota={quota} lines={researchLines} onSubmit={onDeepResearch} />
+        </section>
+
+        <section className="mc-desk__side">
+          <ChecklistPanel
+            items={checklist}
+            status={checklistStatus}
+            currentSlideIdx={currentSlideIdx}
+            onAction={onChecklistAction}
+            variant="desk"
+          />
+          {intelTabs}
+          <div className="mc-desk__intel">
+            <InfoCardStream cards={filterIntel(cards, tab)} variant="desk" />
+          </div>
+        </section>
+      </>
     );
   }
 
-  // Connected at least once: show streams, plus a banner whenever the link is not currently open.
-  return (
-    <Root className="mc-hud">
-      {realtime.status !== "open" ? (
-        realtime.status === "failed" ? (
-          <div className="mc-hud__banner mc-hud__banner--fail" role="alert">
-            <span>{realtime.failureReason ?? "連線失敗。"}</span>
-            <span className="mc-hud__banner-actions">
-              <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={realtime.retry}>
-                重試
-              </button>
-              {embedded ? null : (
-                <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={relink}>
-                  重新貼連結
-                </button>
-              )}
-            </span>
-          </div>
-        ) : (
-          <div className="mc-hud__banner" role="status">
-            {wsStatusLabel(realtime.status)}
-          </div>
-        )
-      ) : null}
+  // ── stack layout（/hud 第二裝置：手機直式）──────────────────────────
+  return shell(
+    <>
+      <div className="mc-hudm__top">
+        <span className="mc-hudm__dot" aria-hidden="true" />
+        <span className="mc-hudm__live mc-mono">{clock ? t("liveWithClock", { clock }) : t("live")}</span>
+        {currentSlideIdx !== undefined && currentSlideIdx >= 0 ? (
+          <span className="mc-hudm__page mc-mono">{t("slidePage", { n: currentSlideIdx + 1 })}</span>
+        ) : null}
+      </div>
 
-      {/* 契約 §8：Checklist 在最上，但收合態刻意 ≤48px——不得把 I2 批准佇列擠出首屏。 */}
+      {banner}
+
+      {/* 清單：手機上收合成一行（進度＋下一項），點一下展開仍可勾選——行為不回退。 */}
       <ChecklistPanel
         items={checklist}
         status={checklistStatus}
         currentSlideIdx={currentSlideIdx}
         onAction={onChecklistAction}
+        variant="bar"
       />
-      <SuggestionQueue suggestions={suggestions} onAct={onAct} onExpire={onExpire} />
-      <TranscriptStream segments={segments} signals={signals} />
-      <InfoCardStream cards={cards} />
-      <DeepResearchBox remainingQuota={quota} lines={researchLines} onSubmit={onDeepResearch} />
-    </Root>
+      {approval("mobile")}
+
+      <div className="mc-hudm__section">
+        <span className="mc-kicker">{t("intel.title")}</span>
+        {intelTabs}
+        <InfoCardStream cards={filterIntel(cards, tab)} variant="mobile" />
+      </div>
+
+      {/* 設計稿的手機版沒有這兩塊；保留成摺疊區——第二裝置可用性不得回退（RWD 紅線）。 */}
+      <details className="mc-hudm__more">
+        <summary>{t("transcript.title")}</summary>
+        <TranscriptStream segments={segments} signals={signals} variant="mobile" />
+      </details>
+      <details className="mc-hudm__more">
+        <summary>{t("research.title")}</summary>
+        <DeepResearchBox remainingQuota={quota} lines={researchLines} onSubmit={onDeepResearch} />
+      </details>
+    </>,
   );
 }
 
@@ -278,22 +425,21 @@ function ConnectingState({
   onRelink: () => void;
   showRelink?: boolean;
 }) {
+  const t = useTranslations("hud");
   const failed = status === "failed";
   return (
-    <div className={`mc-hud__connstate${failed ? " is-failed" : ""}`} role={failed ? "alert" : "status"}>
-      {!failed ? <span className="mc-hud__connspinner" aria-hidden="true" /> : null}
-      <p className="mc-hud__connstate-title">{failed ? "無法連上會議 HUD" : wsStatusLabel(status)}</p>
-      <p className="mc-hud__connstate-desc">
-        {failed ? (reason ?? "連線失敗。") : "正在連上會議即時串流，請稍候…"}
-      </p>
+    <div className={`mc-hudm__note${failed ? " is-failed" : ""}`} role={failed ? "alert" : "status"}>
+      {!failed ? <span className="mc-hudm__spinner" aria-hidden="true" /> : null}
+      <p className="mc-hudm__notetitle">{failed ? t("connFailedTitle") : wsStatusLabel(status)}</p>
+      <p className="mc-hudm__notedesc">{failed ? (reason ?? t("connFailed")) : t("connecting")}</p>
       {failed ? (
-        <div className="mc-hud__connstate-actions">
+        <div className="mc-hudm__noteacts">
           <button type="button" className="mc-btn mc-btn--primary" onClick={onRetry}>
-            重試連線
+            {t("connRetry")}
           </button>
           {showRelink ? (
             <button type="button" className="mc-btn mc-btn--ghost" onClick={onRelink}>
-              重新貼連結
+              {t("relink")}
             </button>
           ) : null}
         </div>
@@ -304,6 +450,7 @@ function ConnectingState({
 
 /** No creds ⇒ second-device join: paste the session link (or "meetingId wsToken") handed off from /copilot. */
 function ConnectPanel({ onConnected }: { onConnected: (c: MeetingCreds) => void }) {
+  const t = useTranslations("hud.connect");
   const [value, setValue] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
@@ -311,7 +458,7 @@ function ConnectPanel({ onConnected }: { onConnected: (c: MeetingCreds) => void 
     e.preventDefault();
     const parsed = parsePastedCreds(value);
     if (!parsed) {
-      setErr("無法解析。請貼上完整 session 連結，或「meetingId wsToken」。");
+      setErr(t("parseError"));
       return;
     }
     saveMeetingCreds(parsed);
@@ -319,24 +466,22 @@ function ConnectPanel({ onConnected }: { onConnected: (c: MeetingCreds) => void 
   }
 
   return (
-    <main className="mc-hud mc-hud--connect">
-      <h1 className="mc-hud__connect-title">連上會議 HUD</h1>
-      <p className="mc-hud__connect-lead">
-        這是報告者第二裝置的副駕抬頭顯示。請從擷取端（/copilot）取得 session 連結或掃 QR 開啟；
-        或在下方貼上連結手動連上。
-      </p>
-      <form className="mc-hud__connectform" onSubmit={submit}>
+    <main className="mc-hudm mc-hudm--connect">
+      <span className="mc-kicker mc-kicker--page">{t("kicker")}</span>
+      <h1 className="mc-hudm__h1">{t("title")}</h1>
+      <p className="mc-hudm__lead">{t("lead")}</p>
+      <form className="mc-hudm__connform" onSubmit={submit}>
         <textarea
           className="mc-input"
           rows={3}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="貼上 session 連結，或 meetingId wsToken"
-          aria-label="session 連結"
+          placeholder={t("placeholder")}
+          aria-label={t("fieldLabel")}
         />
-        {err ? <p className="mc-hud__connect-err">{err}</p> : null}
+        {err ? <p className="mc-hudm__err">{err}</p> : null}
         <button type="submit" className="mc-btn mc-btn--primary">
-          連上
+          {t("submit")}
         </button>
       </form>
     </main>

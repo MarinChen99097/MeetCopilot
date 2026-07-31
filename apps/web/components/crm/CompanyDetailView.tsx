@@ -5,7 +5,7 @@ import { useLocale } from "next-intl";
 import type { Company } from "@meetcopilot/shared";
 import { ApiError, getCompany, updateCompany, type CompanyDetail } from "@/lib/api";
 import { fmtNumber } from "@/lib/format";
-import { useRouter } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { StateBoundary } from "@/components/ui/StateBoundary";
 import { AccountStatusBadge, VerifiedBadge } from "@/components/ui/StatusBadge";
 import { ConfidenceBadge } from "@/components/ui/ConfidenceBadge";
@@ -167,6 +167,10 @@ function CompanyHead({ company, onEnriched }: { company: CompanyDetail; onEnrich
           <CountStat label="商機" n={company.counts.deals} />
         </dl>
         <EnrichPanel targetType="company" targetId={company.id} onDone={onEnriched} />
+        {/* 設計稿 §B7 差異 6：從客戶資料直接進會的入口（現況沒有這條路）。 */}
+        <Link href="/copilot" className="mc-btn mc-btn--primary mc-btn--sm">
+          開會時用這份資料
+        </Link>
       </div>
     </header>
   );

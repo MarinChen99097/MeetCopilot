@@ -106,6 +106,8 @@ interface NavItem {
   key: string;
   href: string;
   labelKey: string;
+  /** 英文縮寫欄（TODAY/CLIENTS/…）：設計稿的 mono 裝飾元素，語言中立 → 不進 i18n（契約 §0）。 */
+  en: string;
   icon: IconName;
 }
 interface NavGroup {
@@ -116,12 +118,15 @@ interface NavGroup {
 }
 
 const NAV_GROUPS: NavGroup[] = [
-  { kickerKey: "nav.workspace", items: [{ key: "home", href: "/", labelKey: "nav.home", icon: "home" }] },
+  {
+    kickerKey: "nav.workspace",
+    items: [{ key: "home", href: "/", labelKey: "nav.itemHome", en: "TODAY", icon: "home" }],
+  },
   {
     kickerKey: "nav.pre",
     items: [
-      { key: "crm", href: "/crm", labelKey: "crm.title", icon: "building" },
-      { key: "studio", href: "/studio", labelKey: "studio.title", icon: "slides" },
+      { key: "crm", href: "/crm", labelKey: "nav.itemCrm", en: "CLIENTS", icon: "building" },
+      { key: "studio", href: "/studio", labelKey: "nav.itemStudio", en: "SLIDES", icon: "slides" },
     ],
   },
   {
@@ -129,21 +134,26 @@ const NAV_GROUPS: NavGroup[] = [
     live: true,
     items: [
       // 同分頁導覽：/present/start 是 app 內準備頁（選 deck → 播放），不是裸 /present（無 deckId 必死路）。
-      { key: "present", href: "/present/start", labelKey: "nav.present", icon: "stage" },
-      { key: "copilot", href: "/copilot", labelKey: "nav.copilot", icon: "headset" },
+      { key: "present", href: "/present/start", labelKey: "nav.itemPresent", en: "SHOW", icon: "stage" },
+      { key: "copilot", href: "/copilot", labelKey: "nav.itemCopilot", en: "LIVE", icon: "headset" },
     ],
   },
-  { kickerKey: "nav.practice", items: [{ key: "train", href: "/train", labelKey: "train.title", icon: "mic" }] },
   {
-    kickerKey: "nav.test",
-    items: [{ key: "sim", href: "/sim", labelKey: "nav.sim", icon: "gauge" }],
+    kickerKey: "nav.practice",
+    items: [{ key: "train", href: "/train", labelKey: "nav.itemTrain", en: "PRACTICE", icon: "mic" }],
   },
   {
+    // 設計稿沒畫「測試」群組（INVENTORY §D4-R9），但 /sim 是驗 I1/I2 的端到端工具 → 保留。
+    kickerKey: "nav.test",
+    items: [{ key: "sim", href: "/sim", labelKey: "nav.sim", en: "TEST", icon: "gauge" }],
+  },
+  {
+    // 設計稿的「管理」群組無條件顯示；權限判斷是既有行為，**必須保留**（INVENTORY §D4-R6）。
     kickerKey: "nav.admin",
     adminOnly: true,
     items: [
-      { key: "spend", href: "/spend", labelKey: "nav.spend", icon: "coins" },
-      { key: "team", href: "/settings/team", labelKey: "org.nav.team", icon: "users" },
+      { key: "spend", href: "/spend", labelKey: "nav.itemSpend", en: "COST", icon: "coins" },
+      { key: "team", href: "/settings/team", labelKey: "nav.itemTeam", en: "TEAM", icon: "users" },
     ],
   },
 ];
@@ -177,6 +187,7 @@ function Sidebar({
           <LogoMark />
           <span className="mc-sidebar__wordmark">MeetCopilot</span>
         </Link>
+        <ThemeSwitch />
         <button
           type="button"
           className="mc-sidebar__collapse"
@@ -210,6 +221,9 @@ function Sidebar({
                   >
                     <Icon name={item.icon} />
                     <span className="mc-sidebar__label">{label}</span>
+                    <span className="mc-sidebar__en" aria-hidden="true">
+                      {item.en}
+                    </span>
                   </Link>
                 );
               })}
@@ -220,6 +234,61 @@ function Sidebar({
 
       <SidebarFoot onNavigate={onNavigate} />
     </aside>
+  );
+}
+
+/* ── theme switch（設計稿：側欄標頭右側 ☀/☾ segmented）───────────
+ * 單一真相＝`<html data-theme>`；localStorage 只是持久層。首屏由 [locale]/layout.tsx 的
+ * inline bootstrap script 先套用，所以這裡的 useState 初值要**讀 DOM 而不是 storage**，
+ * 兩邊才不會在 hydration 後互相打架。淺色是預設，所以未設定時一律 "light"。
+ */
+const THEME_KEY = "mc.theme";
+type Theme = "light" | "dark";
+
+function ThemeSwitch() {
+  const t = useTranslations();
+  const [theme, setTheme] = useState<Theme>("light");
+
+  // AppShell 只在 client 掛載（AuthGuard 解析後才 render），但 useState 初值仍在 SSR 跑一次，
+  // 所以主題讀取放 effect：掛載後同步成 <html> 的實際值。
+  useEffect(() => {
+    const current = document.documentElement.getAttribute("data-theme");
+    setTheme(current === "dark" ? "dark" : "light");
+  }, []);
+
+  function apply(next: Theme) {
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next);
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* private mode / storage disabled — 這一輪仍生效，只是不持久 */
+    }
+  }
+
+  return (
+    <div className="mc-themeswitch" role="group" aria-label={t("nav.theme")}>
+      <button
+        type="button"
+        className={theme === "light" ? "is-on" : ""}
+        aria-pressed={theme === "light"}
+        title={t("nav.themeLight")}
+        onClick={() => apply("light")}
+      >
+        <span aria-hidden="true">☀</span>
+        <span className="mc-sr">{t("nav.themeLight")}</span>
+      </button>
+      <button
+        type="button"
+        className={theme === "dark" ? "is-on" : ""}
+        aria-pressed={theme === "dark"}
+        title={t("nav.themeDark")}
+        onClick={() => apply("dark")}
+      >
+        <span aria-hidden="true">☾</span>
+        <span className="mc-sr">{t("nav.themeDark")}</span>
+      </button>
+    </div>
   );
 }
 
@@ -422,7 +491,7 @@ function LogoMark() {
       <path
         d="M6 17V7l6 6 6-6v10"
         fill="none"
-        stroke="#fff"
+        stroke="var(--mc-accent-contrast)"
         strokeWidth={2}
         strokeLinecap="round"
         strokeLinejoin="round"

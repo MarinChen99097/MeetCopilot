@@ -1,56 +1,76 @@
 "use client";
 
-import type { InfoCard } from "@meetcopilot/shared";
+import { useTranslations } from "next-intl";
+import type { InfoCard, InfoCardKind } from "@meetcopilot/shared";
 import { Markdown } from "@/components/ui/Markdown";
 
-const KIND_LABEL: Record<InfoCard["kind"], string> = {
-  company: "公司",
-  contact: "主管",
-  battlecard: "戰報卡",
-  objection_handler: "異議處理",
-  research: "研究",
-};
-
-const TRUST_LABEL: Record<InfoCard["trust"], string> = {
-  verified: "已驗證",
-  crawler: "爬蟲",
-  live: "即時",
-};
-
 /**
- * Info-card stream — 5 kinds, each with a trust badge whose visual tier is explicit:
- * verified (solid green) > crawler (blue outline) > live (pulsing purple). Newest first.
+ * 情報卡流。2026-07-30 重設計（設計稿 :275-286）：卡片瘦身成
+ * `kind（mono）｜來源（mono，靠右）｜標題 14px/600｜內文 12.5px`，信任等級改用 kind 行的顏色表達。
+ *
+ * 設計稿把情報收進「對方的資料／我們可以說」兩個 tab——分組規則走既有的 `InfoCardKind`
+ * （**沒有新增 wire 欄位**）：company / contact / research ＝對方的資料；battlecard / objection_handler ＝我們可以說。
  */
-export function InfoCardStream({ cards }: { cards: InfoCard[] }) {
+export const INTEL_THEM: readonly InfoCardKind[] = ["company", "contact", "research"];
+export const INTEL_US: readonly InfoCardKind[] = ["battlecard", "objection_handler"];
+
+export type IntelTab = "them" | "us";
+
+/** 依 tab 過濾（純函式，供 cockpit 右欄與手機視圖共用）。 */
+export function filterIntel(cards: InfoCard[], tab: IntelTab): InfoCard[] {
+  const allow = tab === "them" ? INTEL_THEM : INTEL_US;
+  return cards.filter((c) => allow.includes(c.kind));
+}
+
+const KIND_KEY: Record<InfoCardKind, string> = {
+  company: "kindCompany",
+  contact: "kindContact",
+  battlecard: "kindBattlecard",
+  objection_handler: "kindObjection",
+  research: "kindResearch",
+};
+
+const TRUST_KEY: Record<InfoCard["trust"], string> = {
+  verified: "trustVerified",
+  crawler: "trustCrawler",
+  live: "trustLive",
+};
+
+export function InfoCardStream({
+  cards,
+  variant = "desk",
+  emptyLabel,
+}: {
+  cards: InfoCard[];
+  variant?: "desk" | "mobile";
+  emptyLabel?: string;
+}) {
+  const t = useTranslations("hud.intel");
+
+  if (cards.length === 0) {
+    return <p className="mc-intel__empty">{emptyLabel ?? t("empty")}</p>;
+  }
+
   return (
-    <section className="mc-hud__panel" aria-label="情報卡">
-      <h2 className="mc-hud__panel-title">情報卡</h2>
-      {cards.length === 0 ? (
-        <p className="mc-hud__empty">聆聽中，尚無情報卡…</p>
-      ) : (
-        <ul className="mc-cardstream">
-          {cards.map((c) => (
-            <li key={c.id} className={`mc-infocard mc-infocard--${c.kind}`}>
-              <div className="mc-infocard__head">
-                <span className="mc-infocard__kind">{KIND_LABEL[c.kind]}</span>
-                <span className={`mc-trust mc-trust--${c.trust}`}>{TRUST_LABEL[c.trust]}</span>
-              </div>
-              <div className="mc-infocard__title">{c.title}</div>
-              <Markdown className="mc-infocard__body">{c.body}</Markdown>
-              <div className="mc-infocard__foot">
-                {typeof c.confidence === "number" ? (
-                  <span className="mc-conf mc-conf--mid">信心 {(c.confidence * 100) | 0}%</span>
-                ) : null}
-                {c.sourceUrl ? (
-                  <a className="mc-infocard__src" href={c.sourceUrl} target="_blank" rel="noreferrer noopener">
-                    來源 ↗
-                  </a>
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    <ul className={`mc-intel mc-intel--${variant}`}>
+      {cards.map((c) => (
+        <li key={c.id} className={`mc-intel__card mc-intel__card--${c.trust}`}>
+          <div className="mc-intel__head">
+            <span className="mc-intel__kind mc-mono">{t(KIND_KEY[c.kind])}</span>
+            <span className="mc-intel__src mc-mono">
+              {t(TRUST_KEY[c.trust])}
+              {typeof c.confidence === "number" ? ` · ${(c.confidence * 100) | 0}%` : ""}
+            </span>
+          </div>
+          <p className="mc-intel__title">{c.title}</p>
+          <Markdown className="mc-intel__body">{c.body}</Markdown>
+          {c.sourceUrl ? (
+            <a className="mc-intel__link mc-mono" href={c.sourceUrl} target="_blank" rel="noreferrer noopener">
+              {t("source")}
+            </a>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }

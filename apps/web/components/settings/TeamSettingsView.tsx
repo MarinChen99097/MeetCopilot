@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useTranslations } from "next-intl";
 import type { Invite, InviteRole, MembershipRole, OrgMember } from "@meetcopilot/shared";
 import {
   ApiError,
@@ -28,6 +29,7 @@ const INVITE_ROLE_OPTIONS: { value: InviteRole; label: string }[] = [
  * 成員清單＋角色、發邀請（顯示 acceptUrl 供複製）、撤銷/移除、改角色。last-owner 由後端守（409 → toast）。
  */
 export function TeamSettingsView() {
+  const t = useTranslations();
   const me = useMe();
   const toast = useToast();
   const isManager = me?.role === "owner" || me?.role === "admin";
@@ -113,13 +115,15 @@ export function TeamSettingsView() {
   }
 
   return (
-    <main className="mc-crm">
-      <div className="mc-crm__header">
-        <div>
-          <h1 className="mc-crm__h1">團隊成員</h1>
-          <p className="mc-crm__lead">邀請同事加入組織、指派角色。邀請採連結制，複製連結給對方即可加入。</p>
+    <main className="mc-team">
+      <header className="mc-pagehead">
+        <div className="mc-pagehead__id">
+          <span className="mc-kicker mc-kicker--page">{t("org.team.kicker", { org: me?.org.name ?? "" })}</span>
+          <h1 className="mc-pagehead__h1">
+            {t("org.team.headline", { members: members.length, pending: pendingInvites.length })}
+          </h1>
         </div>
-      </div>
+      </header>
 
       <InviteForm
         canAssignAdmin={isOwner}
@@ -132,31 +136,38 @@ export function TeamSettingsView() {
       />
 
       <StateBoundary loading={loading} error={error} onRetry={load} isEmpty={false}>
-        {/* 成員 */}
-        <section className="mc-teamsec">
-          <h2 className="mc-teamsec__h2">成員（{members.length}）</h2>
-          <ul className="mc-memberlist">
+        {/* 設計稿把「成員」與「待接受邀請」合併成一張表、用「狀態」欄區分（INVENTORY §B11 差異 1）。
+            後端是兩個端點、兩種形狀，所以在前端合併成同一張表渲染，但**動作各自保留**
+            （成員：改角色／移除；邀請：撤銷）——設計稿把管理操作全砍掉，那是原型缺漏，不照做。
+            設計稿的「最近做了什麼」欄後端沒有欄位（OrgMember 只有 createdAt）→ 改渲染真實的「加入／邀請時間」。 */}
+        <div className="mc-table">
+          <div className="mc-table__scroll">
+            <div className="mc-table__head mc-teamrow" role="row">
+              <span>{t("org.team.colMember")}</span>
+              <span>{t("org.team.colRole")}</span>
+              <span>{t("org.team.colWhen")}</span>
+              <span>{t("org.team.colStatus")}</span>
+              <span />
+            </div>
+
             {members.map((m) => {
               const isSelf = m.userId === me?.user.id;
-              const canTouchOwner = isOwner;
-              const roleLocked = m.role === "owner" && !canTouchOwner;
+              const roleLocked = m.role === "owner" && !isOwner;
               return (
-                <li key={m.userId} className="mc-memberrow">
-                  <div className="mc-memberrow__id">
-                    <span className="mc-logo" aria-hidden="true">
+                <div key={m.userId} className="mc-table__row mc-table__row--static mc-teamrow">
+                  <span className="mc-teamrow__id">
+                    <span className="mc-avatar" aria-hidden="true">
                       {initials(m.displayName)}
                     </span>
-                    <div>
-                      <span className="mc-memberrow__name">
+                    <span className="mc-teamrow__names">
+                      <span className="mc-teamrow__name">
                         {m.displayName}
                         {isSelf ? <span className="mc-tag">你</span> : null}
                       </span>
-                      <span className="mc-memberrow__meta">
-                        {m.email} · 加入於 {fmtDate(m.createdAt)}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="mc-memberrow__actions">
+                      <span className="mc-teamrow__mail mc-mono">{m.email}</span>
+                    </span>
+                  </span>
+                  <span>
                     <select
                       className="mc-input mc-input--sm"
                       value={m.role}
@@ -174,6 +185,12 @@ export function TeamSettingsView() {
                       {/* 若成員目前為 owner 而你非 owner，仍要能顯示其現值 */}
                       {roleLocked ? <option value="owner">{ROLE_LABEL.owner}</option> : null}
                     </select>
+                  </span>
+                  <span className="mc-teamrow__when mc-mono">{fmtDate(m.createdAt)}</span>
+                  <span className="mc-teamrow__status mc-teamrow__status--active mc-mono">
+                    {t("org.team.statusActive")}
+                  </span>
+                  <span className="mc-teamrow__acts">
                     <button
                       type="button"
                       className="mc-btn mc-btn--ghost mc-btn--sm"
@@ -182,41 +199,38 @@ export function TeamSettingsView() {
                     >
                       移除
                     </button>
-                  </div>
-                </li>
+                  </span>
+                </div>
               );
             })}
-          </ul>
-        </section>
 
-        {/* 待接受邀請 */}
-        <section className="mc-teamsec">
-          <h2 className="mc-teamsec__h2">待接受邀請（{pendingInvites.length}）</h2>
-          {pendingInvites.length === 0 ? (
-            <p className="mc-teamsec__empty">目前沒有待接受的邀請。</p>
-          ) : (
-            <ul className="mc-invitelist">
-              {pendingInvites.map((inv) => (
-                <li key={inv.id} className="mc-inviterow">
-                  <div>
-                    <span className="mc-inviterow__email">{inv.email}</span>
-                    <span className="mc-inviterow__meta">
-                      {ROLE_LABEL[inv.role]} · 邀請於 {fmtRelative(inv.createdAt)}
-                      {inv.expiresAt ? ` · 逾期 ${fmtDate(inv.expiresAt)}` : ""}
+            {pendingInvites.map((inv) => (
+              <div key={inv.id} className="mc-table__row mc-table__row--static mc-teamrow">
+                <span className="mc-teamrow__id">
+                  <span className="mc-avatar" aria-hidden="true">
+                    {initials(inv.email)}
+                  </span>
+                  <span className="mc-teamrow__names">
+                    <span className="mc-teamrow__name">{inv.email}</span>
+                    <span className="mc-teamrow__mail mc-mono">
+                      {inv.expiresAt ? `逾期 ${fmtDate(inv.expiresAt)}` : ""}
                     </span>
-                  </div>
-                  <button
-                    type="button"
-                    className="mc-btn mc-btn--ghost mc-btn--sm"
-                    onClick={() => onRevokeInvite(inv.id)}
-                  >
+                  </span>
+                </span>
+                <span className="mc-roletag mc-mono">{ROLE_LABEL[inv.role]}</span>
+                <span className="mc-teamrow__when mc-mono">{fmtRelative(inv.createdAt)}</span>
+                <span className="mc-teamrow__status mc-teamrow__status--pending mc-mono">
+                  {t("org.team.statusPending")}
+                </span>
+                <span className="mc-teamrow__acts">
+                  <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={() => onRevokeInvite(inv.id)}>
                     撤銷
                   </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       </StateBoundary>
     </main>
   );

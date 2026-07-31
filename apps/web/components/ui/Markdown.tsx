@@ -32,7 +32,7 @@ const MC_MD_COMPONENTS: Components = {
 
 /**
  * 把 markdown 字串渲染進一層 `.mc-md`（typography 樣式在 globals.css :873+）。
- * `className` 會併到 `.mc-md` 同一個 div 上（供呼叫端疊加既有容器樣式，如 mc-infocard__body）。
+ * `className` 會併到 `.mc-md` 同一個 div 上（供呼叫端疊加既有容器樣式，如 mc-intel__body）。
  */
 export function Markdown({ children, className }: { children: string; className?: string }) {
   return (
