@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import type { DeckRef, ImageKind, SlideSpec, SlideTheme } from "@meetcopilot/shared";
+import { SLIDE_DEFAULT_THEME } from "@meetcopilot/shared";
 import { ApiError, createMeeting, exportDeck, getDeck, patchSlide } from "@/lib/api";
 import { buildPresentUrl, buildStaticPresentUrl, type MeetingCreds } from "@/lib/meeting-session";
 import { useRouter } from "@/i18n/navigation";
@@ -39,8 +40,10 @@ const ASSET_URL_REFRESH_MS = 30 * 60_000;
 
 /** background 被拒時的 fallback 漸層（representable：theme.bg 是 string，接受 CSS 漸層值）。 */
 function gradientFallback(theme: SlideTheme | undefined): string {
-  const a = theme?.accent ?? "#8b5cf6";
-  return `linear-gradient(135deg, ${a}, #ec4899)`;
+  // 2026-07-31：舊紫粉（#8b5cf6→#ec4899）是重設計前的配色，落在新的淺紙/teal 系統裡格格不入。
+  // 預設主色取 shared 的 SLIDE_DEFAULT_THEME（無 #，故此處補上），與 pptx 匯出同源。
+  const a = theme?.accent ?? `#${SLIDE_DEFAULT_THEME.accent}`;
+  return `linear-gradient(135deg, ${a}, #74C3D3)`;
 }
 
 export function SlideEditor({ deckId }: { deckId: string }) {

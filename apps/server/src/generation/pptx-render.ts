@@ -11,9 +11,12 @@
  */
 import PptxGenJS from "pptxgenjs";
 import type { ChartType, SlideBlock, SlideSpec, SlideTheme, FeatureItem } from "@meetcopilot/shared";
-import { CHART_ACCENT_HUES, isRasterImageDataUri } from "@meetcopilot/shared";
+import { CHART_ACCENT_HUES, SLIDE_DEFAULT_THEME, isRasterImageDataUri } from "@meetcopilot/shared";
 
 const HEX_RE = /^[0-9a-fA-F]{6}$/;
+
+/** bullets.marker → .pptx 文字前綴（鏡射 studio-present.css 的 li::before 內容）；"dot"／未帶＝空字串。 */
+const BULLET_PREFIX: Record<string, string> = { check: "✓ ", cross: "✕ ", dash: "— " };
 
 /**
  * 匯出專用（EXPORT-ONLY）：webp 在螢幕渲染沒問題，但舊版 PowerPoint 無法解碼 image/webp，
@@ -25,14 +28,23 @@ function isPptxExportableImage(data: unknown): data is string {
   return isRasterImageDataUri(data) && !WEBP_DATA_URI_RE.test(data);
 }
 
+/**
+ * 沒有 per-deck theme 時的預設外觀。2026-07-31 裁決：由舊的深藍夜色改為**淺紙**，逐值對齊螢幕端
+ * `apps/web/app/studio-present.css` 的 `--slide-bg/--slide-text/--slide-accent` 預設，
+ * 讓「螢幕看到的無主題頁 ＝ 匯出的 .pptx」。三色不在此硬寫，一律取 shared 的 SLIDE_DEFAULT_THEME
+ * （唯一真相來源）。per-deck theme 路徑（resolveTheme 讀 theme.*）不受影響。
+ */
 const DEFAULT_THEME = {
-  bg: "18233B",
-  text: "E6EBF5",
-  accent: "22D3EE",
+  bg: SLIDE_DEFAULT_THEME.bg,
+  text: SLIDE_DEFAULT_THEME.text,
+  accent: SLIDE_DEFAULT_THEME.accent,
+  /** 淺紙底上的次要文字（≈ --mc-text-2 #5C564C）；只在該頁**沒有**顯式 text 色時採用。 */
+  muted: "5C564C",
   headingFont: "Arial",
   bodyFont: "Arial",
 } as const;
 
+/** 顯式 theme（深底居多）沿用的次要文字色——per-deck 路徑逐字不變。 */
 const MUTED = "96A2C2";
 
 function normalizeHex(input: string | undefined, fallback: string): string {
@@ -65,7 +77,9 @@ function resolveTheme(theme: SlideTheme | undefined): ResolvedTheme {
     text: normalizeHex(theme?.text, DEFAULT_THEME.text),
     accent: normalizeHex(theme?.accent, DEFAULT_THEME.accent),
     accentIsExplicit: normalizeHex(theme?.accent, "") !== "",
-    muted: MUTED,
+    // 沒有顯式 text 色＝落回淺紙預設底 → 次要文字必須跟著換淺紙用的深灰，
+    // 否則 #96A2C2 藍灰壓在 #F7F5F1 上只有 2.4:1（副標/圖說幾乎看不見）。
+    muted: normalizeHex(theme?.text, "") !== "" ? MUTED : DEFAULT_THEME.muted,
     headingFont: theme?.headingFont || DEFAULT_THEME.headingFont,
     bodyFont: theme?.bodyFont || DEFAULT_THEME.bodyFont,
     logo: theme?.logo,
@@ -171,29 +185,35 @@ function addLogo(slide: PptxGenJS.Slide, logo: string | undefined, geom: SlideGe
   }
 }
 
+/** color-mix(in srgb, hex ratio%, white)＝mixHex 對白的特例（逐通道、逐捨入等價）。 */
 function mixWithWhite(hex: string, ratio: number): string {
-  const n = parseInt(hex, 16);
-  const r = (n >> 16) & 0xff;
-  const g = (n >> 8) & 0xff;
-  const b = n & 0xff;
-  const mix = (c: number) => Math.round(c * ratio + 255 * (1 - ratio));
-  return [mix(r), mix(g), mix(b)]
+  return mixHex(hex, "FFFFFF", ratio);
+}
+
+/** color-mix(in srgb, hex ratio%, black)＝各通道 ×ratio。鏡射螢幕 --slide-accent-3 的 color-mix(accent 66%, black)。 */
+function mixWithBlack(hex: string, ratio: number): string {
+  return mixHex(hex, "000000", ratio);
+}
+
+/** color-mix(in srgb, a ratio%, b)：各通道線性混合（本檔所有混色的唯一實作）。 */
+function mixHex(a: string, b: string, ratio: number): string {
+  const pa = parseInt(a, 16);
+  const pb = parseInt(b, 16);
+  const ch = (n: number, shift: number) => (n >> shift) & 0xff;
+  return [16, 8, 0]
+    .map((s) => Math.round(ch(pa, s) * ratio + ch(pb, s) * (1 - ratio)))
     .map((c) => c.toString(16).padStart(2, "0"))
     .join("")
     .toUpperCase();
 }
 
-/** color-mix(in srgb, hex ratio%, black)＝各通道 ×ratio。鏡射螢幕 --slide-accent-3 的 color-mix(accent 66%, black)。 */
-function mixWithBlack(hex: string, ratio: number): string {
-  const n = parseInt(hex, 16);
-  const r = (n >> 16) & 0xff;
-  const g = (n >> 8) & 0xff;
-  const b = n & 0xff;
-  const mix = (c: number) => Math.round(c * ratio);
-  return [mix(r), mix(g), mix(b)]
-    .map((c) => c.toString(16).padStart(2, "0"))
-    .join("")
-    .toUpperCase();
+/**
+ * 成對比較（series2）的兩色。螢幕端 `.chart__bars--paired`（studio-present.css:245-246）是
+ * s1=`--slide-sunk`（＝color-mix(text 7%, bg) 的近底灰）、s2=`--slide-accent`——
+ * 走一般 chartPalette 會變成 accent/accent-2 兩個彩色，跟畫面對不起來。故 paired 專用一組。
+ */
+function pairedChartColors(theme: ResolvedTheme): string[] {
+  return [mixHex(theme.text, theme.bg, 0.07), theme.accent];
 }
 
 /**
@@ -240,6 +260,14 @@ function estimateHeight(block: SlideBlock, width: number): number {
     }
     case "chart":
       return 3.0;
+    case "table":
+      // 表頭 + N 列，每列 0.52 吋（與 addTableBlock 的實際列高一致）。
+      return 0.52 * (block.rows.length + 1) + 0.1;
+    case "timeline":
+      // 刻度列（有才算）＋ 每條軌道 0.42 吋。
+      return (block.ticks.length ? 0.95 : 0) + block.tracks.length * 0.42 + 0.2;
+    case "steps":
+      return 1.9;
     case "two-col": {
       const colW = (width - COL_GAP) / 2;
       const leftH = block.left.reduce((sum, b) => sum + estimateHeight(b, colW) + BLOCK_GAP, 0);
@@ -292,6 +320,158 @@ function addFeaturesGrid(
   });
 }
 
+/**
+ * 比較矩陣 → 原生 pptx table（可在 PowerPoint 內續編，比畫圖形好用）。
+ * 首欄為列標題欄（較寬），highlightColumn 吃 accent 淡底＋accent 字色——鏡射螢幕的 `.table__cell--hl`。
+ */
+function addTableBlock(
+  slide: PptxGenJS.Slide,
+  block: Extract<SlideBlock, { type: "table" }>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  theme: ResolvedTheme,
+): void {
+  const cols = Math.max(1, block.headers.length);
+  const headBg = mixWithBlack(theme.bg, 0.94); // 表頭比頁底略沉（鏡射螢幕的 --slide-sunk）
+  const hlBg = mixWithWhite(theme.accent, 0.22);
+  const firstW = cols > 1 ? (w * 1.6) / (1.6 + (cols - 1)) : w;
+  const restW = cols > 1 ? (w - firstW) / (cols - 1) : 0;
+  const colW = Array.from({ length: cols }, (_, i) => (i === 0 ? firstW : restW));
+  const rowH = Math.max(0.28, Math.min(0.52, h / (block.rows.length + 1)));
+  const cell = (text: string, opts: PptxGenJS.TableCellProps): PptxGenJS.TableCell => ({ text, options: opts });
+  const rows: PptxGenJS.TableRow[] = [
+    block.headers.map((hdr, c) =>
+      cell(hdr, { bold: true, color: theme.muted, fill: { color: headBg }, fontSize: 11, align: c === 0 ? "left" : "center" }),
+    ),
+    ...block.rows.map((row) =>
+      row
+        .slice(0, cols)
+        .map((text, c) =>
+          cell(text, {
+            color: c === block.highlightColumn ? theme.accent : c === 0 ? theme.muted : theme.text,
+            bold: c === block.highlightColumn,
+            fill: c === block.highlightColumn ? { color: hlBg } : { color: theme.bg },
+            fontSize: 12,
+            align: c === 0 ? "left" : "center",
+          }),
+        ),
+    ),
+  ];
+  try {
+    slide.addTable(rows, {
+      x,
+      y,
+      w,
+      colW,
+      rowH,
+      fontFace: theme.bodyFont,
+      border: { type: "solid", pt: 0.5, color: theme.muted },
+      valign: "middle",
+      autoPage: false,
+    });
+  } catch {
+    /* 表格失敗不可拖垮整份匯出 */
+  }
+}
+
+/** 時間表 → 刻度標籤列 ＋ 每條軌道一個圓角矩形（幾何鏡射螢幕的 `.timeline__bar` 百分比定位）。 */
+function addTimelineBlock(
+  slide: PptxGenJS.Slide,
+  block: Extract<SlideBlock, { type: "timeline" }>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  theme: ResolvedTheme,
+): void {
+  const emphasisColor = (e: string | undefined): string =>
+    e === "warn" ? mixWithWhite(theme.accent, 0.62) : e === "off" ? theme.muted : theme.accent;
+  let top = y;
+  if (block.ticks.length) {
+    const tickW = w / block.ticks.length;
+    block.ticks.forEach((t, i) => {
+      const tx = x + i * tickW;
+      addRule(slide, tx, top, Math.max(0.05, tickW - 0.08), 0.07, emphasisColor(t.emphasis));
+      slide.addText(t.title ? `${t.name}\n${t.title}` : t.name, {
+        x: tx,
+        y: top + 0.12,
+        w: Math.max(0.2, tickW - 0.08),
+        h: 0.62,
+        fontFace: theme.bodyFont,
+        fontSize: 10,
+        color: theme.muted,
+        align: "left",
+        valign: "top",
+        fit: "shrink",
+      });
+    });
+    top += 0.95;
+  }
+  const labelW = Math.min(1.9, w * 0.26);
+  const slotX = x + labelW + 0.12;
+  const slotW = Math.max(0.4, w - labelW - 0.12);
+  const rowH = Math.max(0.22, Math.min(0.42, (h - (top - y)) / Math.max(1, block.tracks.length)));
+  block.tracks.forEach((t, i) => {
+    const ty = top + i * rowH;
+    slide.addText(t.label, {
+      x,
+      y: ty,
+      w: labelW,
+      h: rowH,
+      fontFace: theme.bodyFont,
+      fontSize: 11,
+      color: theme.muted,
+      align: "left",
+      valign: "middle",
+      fit: "shrink",
+    });
+    const barH = Math.max(0.12, rowH * 0.55);
+    addRule(slide, slotX, ty + (rowH - barH) / 2, slotW, barH, mixWithBlack(theme.bg, 0.85));
+    const left = Math.min(100, Math.max(0, t.startPct)) / 100;
+    const width = Math.min(1 - left, Math.max(0.02, t.widthPct / 100));
+    addRule(slide, slotX + slotW * left, ty + (rowH - barH) / 2, slotW * width, barH, emphasisColor(t.emphasis));
+  });
+}
+
+/** 流程步驟 → 橫排等分欄，每欄一條頂色條＋序號/標題/說明/負責人（鏡射螢幕 `.step`）。 */
+function addStepsBlock(
+  slide: PptxGenJS.Slide,
+  block: Extract<SlideBlock, { type: "steps" }>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  theme: ResolvedTheme,
+): void {
+  const n = Math.max(1, block.steps.length);
+  const gap = 0.16;
+  const colW = (w - gap * (n - 1)) / n;
+  const tone = [theme.accent, mixWithWhite(theme.accent, 0.62), mixWithWhite(theme.accent, 0.35)];
+  block.steps.forEach((s, i) => {
+    const cx = x + i * (colW + gap);
+    const color = tone[i % tone.length]!;
+    addRule(slide, cx, y, colW, 0.05, color);
+    const runs: PptxGenJS.TextProps[] = [
+      { text: String(i + 1).padStart(2, "0"), options: { color, bold: true, fontSize: 16, breakLine: true } },
+      { text: s.title, options: { color: theme.text, bold: true, fontSize: 13, breakLine: Boolean(s.desc || s.owner) } },
+    ];
+    if (s.desc) runs.push({ text: s.desc, options: { color: theme.muted, fontSize: 11, breakLine: Boolean(s.owner) } });
+    if (s.owner) runs.push({ text: s.owner, options: { color: theme.muted, fontSize: 10, italic: true } });
+    slide.addText(runs, {
+      x: cx,
+      y: y + 0.12,
+      w: colW,
+      h: Math.max(0.4, h - 0.12),
+      fontFace: theme.bodyFont,
+      align: "left",
+      valign: "top",
+      fit: "shrink",
+    });
+  });
+}
+
 function addChartBlock(
   pptx: PptxGenJS,
   slide: PptxGenJS.Slide,
@@ -311,22 +491,31 @@ function addChartBlock(
   };
   const chartType = typeMap[block.chartType];
   const isDonut = block.chartType === "donut";
+  // 成對比較（series2）＝第二個 data set；螢幕端同樣只在兩序列等長時成立，兩邊條件一致。
+  const paired = block.series2 && block.series2.length === block.series.length ? block.series2 : undefined;
   const data = [
     {
-      name: block.caption || "Series",
+      name: block.seriesNames?.[0] || block.caption || "Series",
       labels: block.series.map((s) => s.label),
       values: block.series.map((s) => s.value),
     },
   ];
+  if (paired) {
+    data.push({
+      name: block.seriesNames?.[1] || "Series 2",
+      labels: block.series.map((s) => s.label),
+      values: paired.map((s) => s.value),
+    });
+  }
   try {
     slide.addChart(chartType, data, {
       x,
       y,
       w,
       h: chartH,
-      chartColors: chartPalette(theme.accent, theme.accentIsExplicit),
+      chartColors: paired ? pairedChartColors(theme) : chartPalette(theme.accent, theme.accentIsExplicit),
       showTitle: false,
-      showLegend: isDonut,
+      showLegend: isDonut || Boolean(paired),
       legendPos: "b",
       legendColor: theme.muted,
       legendFontSize: 10,
@@ -342,6 +531,26 @@ function addChartBlock(
     });
   } catch {
     /* addChart 失敗（資料/類型問題）不可拖垮整份匯出 */
+  }
+  // donut 圓心大數字：pptx 沒有原生「環心標籤」，故疊一個置中文字框（鏡射螢幕 `.chart__donut-center`）。
+  if (isDonut && block.centerValue) {
+    const boxH = 0.7;
+    slide.addText(
+      [
+        { text: block.centerValue, options: { bold: true, fontSize: 20, color: theme.text, breakLine: Boolean(block.centerLabel) } },
+        ...(block.centerLabel ? [{ text: block.centerLabel, options: { fontSize: 11, color: theme.muted } }] : []),
+      ],
+      {
+        x,
+        y: y + chartH / 2 - boxH / 2,
+        w,
+        h: boxH,
+        fontFace: theme.bodyFont,
+        align: "center",
+        valign: "middle",
+        fit: "shrink",
+      },
+    );
   }
   if (block.caption) {
     slide.addText(block.caption, {
@@ -430,9 +639,16 @@ function layoutBlocks(
           fit: "shrink",
         });
         break;
-      case "bullets":
+      case "bullets": {
+        // marker（check/cross/dash）在螢幕上是用 li::before 取代圓點（studio-present.css:149-151）。
+        // pptx 沒有自訂 bullet 字元的穩定路徑，故改成文字前綴＋關掉原生圓點，記號才不會被吃掉
+        // （對比頁「現況 ✕ / 導入後 ✓」的語意全靠這個記號）。無 marker（或 dot）→ 逐字維持原本的圓點清單。
+        const marker = BULLET_PREFIX[block.marker ?? ""] ?? "";
         slide.addText(
-          block.items.map((item) => ({ text: item, options: { bullet: { indent: 14 }, breakLine: true } })),
+          block.items.map((item) => ({
+            text: `${marker}${item}`,
+            options: { bullet: marker ? false : { indent: 14 }, breakLine: true },
+          })),
           {
             x,
             y,
@@ -447,6 +663,7 @@ function layoutBlocks(
           },
         );
         break;
+      }
       case "quote": {
         const runs: PptxGenJS.TextProps[] = [
           { text: `“${block.text}”`, options: { italic: true, breakLine: Boolean(block.attribution) } },
@@ -469,7 +686,7 @@ function layoutBlocks(
         break;
       }
       case "stat": {
-        const valueH = h * 0.62;
+        const valueH = block.desc ? h * 0.5 : h * 0.62;
         slide.addText(block.value, {
           x,
           y,
@@ -483,18 +700,26 @@ function layoutBlocks(
           valign: "bottom",
           fit: "shrink",
         });
-        slide.addText(block.label, {
-          x,
-          y: y + valueH,
-          w,
-          h: h - valueH,
-          fontFace: theme.bodyFont,
-          fontSize: 13,
-          color: theme.muted,
-          align: "left",
-          valign: "top",
-          fit: "shrink",
-        });
+        slide.addText(
+          block.desc
+            ? [
+                { text: block.label, options: { color: theme.muted, fontSize: 13, breakLine: true } },
+                { text: block.desc, options: { color: theme.muted, fontSize: 11 } },
+              ]
+            : block.label,
+          {
+            x,
+            y: y + valueH,
+            w,
+            h: h - valueH,
+            fontFace: theme.bodyFont,
+            fontSize: 13,
+            color: theme.muted,
+            align: "left",
+            valign: "top",
+            fit: "shrink",
+          },
+        );
         break;
       }
       case "image":
@@ -505,6 +730,15 @@ function layoutBlocks(
         break;
       case "chart":
         addChartBlock(pptx, slide, block, x, y, w, h, theme);
+        break;
+      case "table":
+        addTableBlock(slide, block, x, y, w, h, theme);
+        break;
+      case "timeline":
+        addTimelineBlock(slide, block, x, y, w, h, theme);
+        break;
+      case "steps":
+        addStepsBlock(slide, block, x, y, w, h, theme);
         break;
       case "two-col": {
         const colW = (w - COL_GAP) / 2;
@@ -662,18 +896,27 @@ function renderStats(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, t
         valign: "bottom",
         fit: "shrink",
       });
-      slide.addText(s.label, {
-        x: cx + 0.18,
-        y: cy + cardH * 0.62,
-        w: cardW - 0.36,
-        h: cardH * 0.3,
-        fontFace: theme.bodyFont,
-        fontSize: 13,
-        color: theme.muted,
-        align: "left",
-        valign: "top",
-        fit: "shrink",
-      });
+      // desc（設計稿 KPI 卡的第三行說明）接在 label 之下；未帶時呼叫與擴充前逐字相同。
+      slide.addText(
+        s.desc
+          ? [
+              { text: s.label, options: { fontSize: 13, color: theme.muted, breakLine: true } },
+              { text: s.desc, options: { fontSize: 11, color: theme.muted } },
+            ]
+          : s.label,
+        {
+          x: cx + 0.18,
+          y: cy + cardH * 0.62,
+          w: cardW - 0.36,
+          h: cardH * 0.3,
+          fontFace: theme.bodyFont,
+          fontSize: 13,
+          color: theme.muted,
+          align: "left",
+          valign: "top",
+          fit: "shrink",
+        },
+      );
     });
     y += rows * cardH + (rows - 1) * rowGap + 0.25;
   }
@@ -778,6 +1021,12 @@ function renderSlide(pptx: PptxGenJS, slide: PptxGenJS.Slide, spec: SlideSpec, t
       break;
     case "image-full":
       renderImageFull(pptx, slide, spec, theme, geom);
+      break;
+    // 時間表／比較矩陣：版面同為「eyebrow＋標題＋一個主 block 吃滿剩餘高度」，
+    // 與 content 一致（差異在 block 自身的畫法，已由 layoutBlocks 的 timeline/table 分支處理）。
+    case "timeline-gantt":
+    case "comparison-matrix":
+      renderContent(pptx, slide, spec, theme, geom);
       break;
     case "content":
     default:

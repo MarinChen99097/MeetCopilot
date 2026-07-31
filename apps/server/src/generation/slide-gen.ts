@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { Type } from "@google/genai";
 import type {
+  BulletMarker,
   ChartPoint,
   DeckLanguage,
   FeatureItem,
@@ -19,12 +20,23 @@ import type {
   SlideSpec,
   SlideTemplate,
   SlideTheme,
+  StepItem,
+  TimelineEmphasis,
+  TimelineTick,
+  TimelineTrack,
 } from "@meetcopilot/shared";
 import {
   AI_GENERATION_TEMPLATES,
+  BULLET_MARKERS,
   CHART_TYPES,
+  MAX_STEPS,
+  MAX_TABLE_COLUMNS,
+  MAX_TABLE_ROWS,
+  MAX_TIMELINE_TICKS,
+  MAX_TIMELINE_TRACKS,
   SLIDE_ICONS,
   SLIDE_TEMPLATES,
+  TIMELINE_EMPHASIS,
   extractSlideText,
   isRasterImageDataUri,
 } from "@meetcopilot/shared";
@@ -46,17 +58,42 @@ const SCALAR_BLOCK_SCHEMA = {
   required: ["type"],
 };
 
+const CHART_POINT_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    label: { type: Type.STRING },
+    value: { type: Type.NUMBER },
+  },
+  required: ["label", "value"],
+};
+
 export const BLOCK_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     type: {
       type: Type.STRING,
-      enum: ["heading", "subheading", "paragraph", "quote", "bullets", "stat", "two-col", "features", "chart"],
+      enum: [
+        "heading",
+        "subheading",
+        "paragraph",
+        "quote",
+        "bullets",
+        "stat",
+        "two-col",
+        "features",
+        "chart",
+        "table",
+        "timeline",
+        "steps",
+      ],
     },
     text: { type: Type.STRING },
     items: { type: Type.ARRAY, items: { type: Type.STRING } },
     value: { type: Type.STRING },
     label: { type: Type.STRING },
+    // stat 的第三行說明；與 features[].desc 同名不衝突（不同層級）。
+    desc: { type: Type.STRING },
+    marker: { type: Type.STRING, enum: [...BULLET_MARKERS] },
     attribution: { type: Type.STRING },
     left: { type: Type.ARRAY, items: SCALAR_BLOCK_SCHEMA },
     right: { type: Type.ARRAY, items: SCALAR_BLOCK_SCHEMA },
@@ -73,18 +110,61 @@ export const BLOCK_SCHEMA = {
       },
     },
     chartType: { type: Type.STRING, enum: [...CHART_TYPES] },
-    series: {
+    series: { type: Type.ARRAY, items: CHART_POINT_SCHEMA },
+    series2: { type: Type.ARRAY, items: CHART_POINT_SCHEMA },
+    seriesNames: { type: Type.ARRAY, items: { type: Type.STRING } },
+    centerValue: { type: Type.STRING },
+    centerLabel: { type: Type.STRING },
+    caption: { type: Type.STRING },
+    // table：headers 一維、rows 每列包成 {cells:[]}（巢狀陣列在結構化輸出較不穩，故走物件包裝；
+    // sanitize 兩種形狀都收，手工/匯入資料仍可直接給 string[][]）。
+    headers: { type: Type.ARRAY, items: { type: Type.STRING } },
+    rows: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: { cells: { type: Type.ARRAY, items: { type: Type.STRING } } },
+        required: ["cells"],
+      },
+    },
+    highlightColumn: { type: Type.NUMBER },
+    ticks: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          title: { type: Type.STRING },
+          emphasis: { type: Type.STRING, enum: [...TIMELINE_EMPHASIS] },
+        },
+        required: ["name"],
+      },
+    },
+    tracks: {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
           label: { type: Type.STRING },
-          value: { type: Type.NUMBER },
+          startPct: { type: Type.NUMBER },
+          widthPct: { type: Type.NUMBER },
+          emphasis: { type: Type.STRING, enum: [...TIMELINE_EMPHASIS] },
         },
-        required: ["label", "value"],
+        required: ["label", "startPct", "widthPct"],
       },
     },
-    caption: { type: Type.STRING },
+    steps: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          desc: { type: Type.STRING },
+          owner: { type: Type.STRING },
+        },
+        required: ["title"],
+      },
+    },
   },
   required: ["type"],
 };
@@ -139,18 +219,27 @@ export const TEMPLATE_INTENT_ZH =
   `放 3-4 個 {icon,title,desc} 項目來填滿版面（bullets 仍可作為次要輔助）；` +
   `stats＝3-6 個 stat block 呈現關鍵數字；每個 stat block 必須同時填 value（數字或百分比，如 "40%"、"3.2x"）與 label（說明文字），兩者缺一不可；` +
   `content 或 stats 頁若主題涉及量化數據，可改用一個 chart block（此時該頁不要再放 features，二選一）來視覺化 3-6 個資料點` +
-  `（長條圖 bar＝比較、圓環圖 donut＝占比、折線圖 line＝趨勢，依資料性質擇一）；` +
+  `（長條圖 bar＝比較、圓環圖 donut＝占比、折線圖 line＝趨勢，依資料性質擇一；` +
+  `bar 要做「換之前 vs 換之後」的成對比較時再填 series2＋seriesNames（兩序列長度必須相同）；` +
+  `donut 想在圓心放一個總結數字時填 centerValue＋centerLabel）；` +
+  `timeline-gantt＝時程／里程碑／導入排程頁：heading ＋ 一個 timeline block（ticks＝時間刻度、tracks＝各條工作的起點與長度百分比）；` +
+  `comparison-matrix＝方案／競品比較頁：heading ＋ 一個 table block（headers 第一格留空當列標題欄、其餘為方案名，` +
+  `highlightColumn 指向我方那一欄；最多 ${MAX_TABLE_COLUMNS} 欄 ${MAX_TABLE_ROWS} 列，每列 cells 長度必須等於 headers 長度）；` +
   `closing＝heading＋一段 CTA/感謝 paragraph。` +
+  `另有 steps block（流程/下一步，最多 ${MAX_STEPS} 步，序號由系統自動編，不要自己寫「1.」）可放在 content 頁。` +
   `title／section／closing 頁可額外加一個簡短 eyebrow（如分節編號「01」或主題標籤），非必填。`;
 
 export const BLOCK_SHAPE_PROMPT_ZH =
   `blocks 陣列中每個元素為以下其中一種形狀（type 為判別欄位）：` +
-  `{type:"heading",text}｜{type:"subheading",text}｜{type:"bullets",items:string[]}｜` +
-  `{type:"paragraph",text}｜{type:"quote",text,attribution?}｜{type:"stat",value,label}｜` +
+  `{type:"heading",text}｜{type:"subheading",text}｜{type:"bullets",items:string[],marker?:"check"|"cross"|"dash"}｜` +
+  `{type:"paragraph",text}｜{type:"quote",text,attribution?}｜{type:"stat",value,label,desc?}｜` +
   `{type:"two-col",left:Block[],right:Block[]}` +
   `｜{type:"features",features:[{icon,title,desc}]}（icon 只能從這些關鍵字選：` +
   SLIDE_ICONS.join(", ") +
-  `）｜{type:"chart",chartType:"bar"|"donut"|"line",series:[{label,value}],caption?}` +
+  `）｜{type:"chart",chartType:"bar"|"donut"|"line",series:[{label,value}],caption?,series2?,seriesNames?,centerValue?,centerLabel?}` +
+  `｜{type:"table",headers:string[],rows:[{cells:string[]}],highlightColumn?}` +
+  `｜{type:"timeline",ticks:[{name,title?}],tracks:[{label,startPct,widthPct}]}（startPct/widthPct 為 0-100 的百分比，兩者相加不得超過 100）` +
+  `｜{type:"steps",steps:[{title,desc?,owner?}]}` +
   `。禁止使用 image 區塊。`;
 
 export const DESIGN_PRINCIPLES_ZH =
@@ -186,14 +275,22 @@ export function sanitizeBlock(raw: unknown): SlideBlock | null {
     case "bullets": {
       if (!Array.isArray(obj.items)) return null;
       const items = obj.items.filter((x): x is string => typeof x === "string");
-      return items.length > 0 ? { type: "bullets", items } : null;
+      if (items.length === 0) return null;
+      // marker 只收白名單值；"dot"（＝預設）一律不落地，讓舊/新資料形狀一致。
+      const marker =
+        typeof obj.marker === "string" && obj.marker !== "dot" && (BULLET_MARKERS as readonly string[]).includes(obj.marker)
+          ? (obj.marker as BulletMarker)
+          : undefined;
+      return { type: "bullets", items, marker };
     }
     case "stat": {
       const value =
         typeof obj.value === "string" ? obj.value : typeof obj.value === "number" ? String(obj.value) : null;
       const label =
         typeof obj.label === "string" ? obj.label : typeof obj.label === "number" ? String(obj.label) : null;
-      return value !== null && label !== null ? { type: "stat", value, label } : null;
+      if (value === null || label === null) return null;
+      const desc = typeof obj.desc === "string" && obj.desc.trim() ? obj.desc : undefined;
+      return { type: "stat", value, label, desc };
     }
     case "two-col": {
       if (!Array.isArray(obj.left) || !Array.isArray(obj.right)) return null;
@@ -219,28 +316,137 @@ export function sanitizeBlock(raw: unknown): SlideBlock | null {
       const chartType =
         obj.chartType === "bar" || obj.chartType === "donut" || obj.chartType === "line" ? obj.chartType : "bar";
       if (!Array.isArray(obj.series)) return null;
-      const series = obj.series
-        .map((r): ChartPoint | null => {
-          const point = (r ?? {}) as Record<string, unknown>;
-          if (typeof point.label !== "string") return null;
-          const value =
-            typeof point.value === "number"
-              ? point.value
-              : typeof point.value === "string" && point.value.trim() !== "" && !Number.isNaN(Number(point.value))
-                ? Number(point.value)
-                : null;
-          return value !== null ? { label: point.label, value } : null;
-        })
-        .filter((p): p is ChartPoint => p !== null);
+      const series = sanitizeChartPoints(obj.series);
       if (series.length === 0) return null;
       const caption = typeof obj.caption === "string" ? obj.caption : undefined;
-      return { type: "chart", chartType, series, caption };
+      // 成對比較只在兩序列等長時成立（長度不齊＝資料有誤，寧可退回單序列也不畫錯）。
+      const raw2 = Array.isArray(obj.series2) ? sanitizeChartPoints(obj.series2) : [];
+      const series2 = raw2.length === series.length ? raw2 : undefined;
+      const seriesNames = Array.isArray(obj.seriesNames)
+        ? obj.seriesNames.filter((x): x is string => typeof x === "string" && x.trim() !== "").slice(0, 2)
+        : undefined;
+      const centerValue = chartType === "donut" && typeof obj.centerValue === "string" && obj.centerValue.trim()
+        ? obj.centerValue
+        : undefined;
+      const centerLabel = centerValue && typeof obj.centerLabel === "string" && obj.centerLabel.trim()
+        ? obj.centerLabel
+        : undefined;
+      return {
+        type: "chart",
+        chartType,
+        series,
+        caption,
+        series2,
+        seriesNames: seriesNames?.length ? seriesNames : undefined,
+        centerValue,
+        centerLabel,
+      };
+    }
+    case "table": {
+      if (!Array.isArray(obj.headers)) return null;
+      const headers = obj.headers
+        .filter((h): h is string => typeof h === "string")
+        .slice(0, MAX_TABLE_COLUMNS);
+      // ≥2 欄才叫比較表（1 欄 = 純清單，該用 bullets）。
+      if (headers.length < 2) return null;
+      if (!Array.isArray(obj.rows)) return null;
+      const rows = obj.rows
+        .map((r): string[] | null => {
+          // 兩種形狀都收：LLM 走 {cells:[]}（結構化輸出較穩），手工/匯入可直接給 string[]。
+          const cells = Array.isArray(r)
+            ? r
+            : Array.isArray((r as Record<string, unknown> | null)?.cells)
+              ? ((r as Record<string, unknown>).cells as unknown[])
+              : null;
+          if (!cells) return null;
+          const texts = cells.map((c) => (typeof c === "string" ? c : typeof c === "number" ? String(c) : ""));
+          if (texts.every((t) => t.trim() === "")) return null;
+          // 補/裁到與表頭等長——渲染器與 pptx 都假設列長 === 欄數。
+          return Array.from({ length: headers.length }, (_, i) => texts[i] ?? "");
+        })
+        .filter((r): r is string[] => r !== null)
+        .slice(0, MAX_TABLE_ROWS);
+      if (rows.length === 0) return null;
+      const hc = typeof obj.highlightColumn === "number" ? Math.trunc(obj.highlightColumn) : -1;
+      const highlightColumn = hc >= 1 && hc < headers.length ? hc : undefined;
+      return { type: "table", headers, rows, highlightColumn };
+    }
+    case "timeline": {
+      const ticks = (Array.isArray(obj.ticks) ? obj.ticks : [])
+        .map((r): TimelineTick | null => {
+          const t = (r ?? {}) as Record<string, unknown>;
+          if (typeof t.name !== "string" || t.name.trim() === "") return null;
+          return {
+            name: t.name,
+            title: typeof t.title === "string" && t.title.trim() ? t.title : undefined,
+            emphasis: coerceEmphasis(t.emphasis),
+          };
+        })
+        .filter((t): t is TimelineTick => t !== null)
+        .slice(0, MAX_TIMELINE_TICKS);
+      const tracks = (Array.isArray(obj.tracks) ? obj.tracks : [])
+        .map((r): TimelineTrack | null => {
+          const t = (r ?? {}) as Record<string, unknown>;
+          if (typeof t.label !== "string" || t.label.trim() === "") return null;
+          const start = clampPct(t.startPct);
+          const width = clampPct(t.widthPct);
+          if (start === null || width === null || width <= 0) return null;
+          // 起點＋長度不得超出 100%（LLM 常算錯，直接夾回版面內而非讓條溢出）。
+          return { label: t.label, startPct: start, widthPct: Math.min(width, 100 - start), emphasis: coerceEmphasis(t.emphasis) };
+        })
+        .filter((t): t is TimelineTrack => t !== null)
+        .slice(0, MAX_TIMELINE_TRACKS);
+      // 軌道是這個版式的主體；一條都沒有就是空頁，寧可濾掉。
+      return tracks.length > 0 ? { type: "timeline", ticks, tracks } : null;
+    }
+    case "steps": {
+      if (!Array.isArray(obj.steps)) return null;
+      const steps = obj.steps
+        .map((r): StepItem | null => {
+          const s = (r ?? {}) as Record<string, unknown>;
+          if (typeof s.title !== "string" || s.title.trim() === "") return null;
+          return {
+            title: s.title,
+            desc: typeof s.desc === "string" && s.desc.trim() ? s.desc : undefined,
+            owner: typeof s.owner === "string" && s.owner.trim() ? s.owner : undefined,
+          };
+        })
+        .filter((s): s is StepItem => s !== null)
+        .slice(0, MAX_STEPS);
+      return steps.length > 0 ? { type: "steps", steps } : null;
     }
     case "image":
       return null; // 生成流程明文禁止 image block
     default:
       return null;
   }
+}
+
+function sanitizeChartPoints(raw: unknown[]): ChartPoint[] {
+  return raw
+    .map((r): ChartPoint | null => {
+      const point = (r ?? {}) as Record<string, unknown>;
+      if (typeof point.label !== "string") return null;
+      const value =
+        typeof point.value === "number"
+          ? point.value
+          : typeof point.value === "string" && point.value.trim() !== "" && !Number.isNaN(Number(point.value))
+            ? Number(point.value)
+            : null;
+      return value !== null ? { label: point.label, value } : null;
+    })
+    .filter((p): p is ChartPoint => p !== null);
+}
+
+function coerceEmphasis(v: unknown): TimelineEmphasis | undefined {
+  return typeof v === "string" && (TIMELINE_EMPHASIS as readonly string[]).includes(v) ? (v as TimelineEmphasis) : undefined;
+}
+
+/** 百分比夾取到 [0,100]；非數字/非有限值回 null（呼叫端據此丟棄該軌道）。 */
+function clampPct(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return null;
+  return Math.min(100, Math.max(0, n));
 }
 
 export function sanitizeBlocks(raw: unknown): SlideBlock[] {
@@ -276,6 +482,9 @@ export function slideQaIssues(slide: SlideSpec): string[] {
   if (template === "content" && (blocks.length < 2 || compactLen < 24)) issues.push("content-sparse");
   if (template === "stats" && !blocks.some((b) => b.type === "stat" || b.type === "chart"))
     issues.push("stats-no-numbers");
+  // 新版式的主角 block 被 sanitize 濾掉（欄數不齊/軌道全壞）→ 剩空殼頁，必須重做。
+  if (template === "timeline-gantt" && !blocks.some((b) => b.type === "timeline")) issues.push("timeline-missing");
+  if (template === "comparison-matrix" && !blocks.some((b) => b.type === "table")) issues.push("matrix-missing");
   return issues;
 }
 
@@ -429,7 +638,9 @@ async function reviseSlides(
   const prompt =
     `以下為一份簡報的頁面大綱（#編號）：\n${outline}\n\n` +
     `請只重做下列有問題的頁，修正其問題（content-sparse＝補足內容/改用 features 卡填滿；heading-too-long＝精簡標題；` +
-    `too-many-bullets＝精簡到 5 條內；stats-no-numbers＝改用 stat 大數字或 chart；feature-desc-too-long＝每張說明縮成一句）：${asks}。` +
+    `too-many-bullets＝精簡到 5 條內；stats-no-numbers＝改用 stat 大數字或 chart；feature-desc-too-long＝每張說明縮成一句；` +
+    `timeline-missing＝該頁必須有一個 timeline block（ticks＋tracks，startPct/widthPct 相加 ≤100）；` +
+    `matrix-missing＝該頁必須有一個 table block（每列 cells 長度等於 headers 長度））：${asks}。` +
     `回傳 revisions 陣列，每項含 index（對應上面編號）、template、blocks、eyebrow?（其餘頁不要動、不要回傳）。`;
   const raw = await gemini.generateJson<{
     revisions: { index: number; template: string; blocks: unknown; eyebrow?: string }[];
@@ -543,12 +754,20 @@ export async function generateSupplementSlide(
         `${BLOCK_SHAPE_PROMPT_ZH}${TEMPLATE_INTENT_ZH}${DESIGN_PRINCIPLES_ZH}` +
         `【補充頁專屬規則，優先於上述通則】` +
         `(1) 依「當下對話訊號」的性質挑版型，切勿每張都用 features 卡格——` +
-        `數據/成效/ROI/百分比→stats（3-4 個大數字 stat）或 content＋一個 chart；` +
-        `我方 vs 競品、兩案對比→content＋two-col；` +
-        `步驟/條件/清單→content＋bullets（≤5 條、每條一行）；` +
-        `單一要點/定義/報價/下一步→section（大標＋一句 subheading）或 content＋一段短 paragraph；` +
+        `數據/成效/ROI/百分比→stats（3-4 個大數字 stat；只有一個關鍵數字時就只放 1 個 stat，會自動變成整頁大數字）或 content＋一個 chart；` +
+        `時程/什麼時候能上線/導入排程/里程碑→timeline-gantt（heading＋一個 timeline block）；` +
+        `我方 vs 競品、對方說在比較誰、方案比一比→comparison-matrix（heading＋一個 table block，highlightColumn 指向我方那欄）；` +
+        `接下來怎麼做/導入流程/下一步分幾步→content＋一個 steps block（≤4 步）；` +
+        `兩案對比、現況 vs 導入後→content＋two-col（左欄 bullets 用 marker:"cross"、右欄用 marker:"check"）；` +
+        `步驟以外的條件/清單→content＋bullets（≤5 條、每條一行）；` +
+        `單一要點/定義/報價→section（大標＋一句 subheading）或 content＋一段短 paragraph；` +
+        `客戶原話/見證→section＋一個 quote（附 attribution）；` +
         `唯有並列 3-4 個各自獨立的重點時才用 features。` +
-        `(2) 版面預算（固定 16:9 版面、內容過多會被裁掉，務必放得下）：用 features 時「不要」再放 subheading（讓大標直接帶重點）、features 至多 3 張、每張 desc 一句話（約 20 全形字內）；一頁只聚焦一個重點、寧可少而精；不要放 eyebrow。` +
+        `(2) 版面預算（固定 16:9 版面、內容過多會被裁掉，務必放得下）：用 features 時「不要」再放 subheading（讓大標直接帶重點）、features 至多 3 張、每張 desc 一句話（約 20 全形字內）；` +
+        `timeline 至多 ${MAX_TIMELINE_TICKS} 個刻度、${MAX_TIMELINE_TRACKS} 條軌道；table 至多 ${MAX_TABLE_COLUMNS} 欄 ${MAX_TABLE_ROWS} 列、每格 12 個全形字內；` +
+        `一頁只聚焦一個重點、寧可少而精；不要放 eyebrow。` +
+        `(3) 事實紀律（會中說錯的代價極高）：table 的競品欄、chart/stat 的數值、timeline 的時間，只能引用上面「對話訊號」與逐字稿中已出現、或我方已驗證的資訊；` +
+        `任何一格湊不出可靠內容，就改用純文字版型（content＋paragraph 或 bullets），**不要自己編數字或競品規格**。` +
         `視覺主題不由你決定（系統會沿用鄰頁）。全部輸出語言：${language}。`,
       prompt,
       schema: SLIDE_SCHEMA,
@@ -556,7 +775,11 @@ export async function generateSupplementSlide(
       maxOutputTokens: 2048,
     });
     const slide = sanitizeSlide(raw, input.anchorSlide?.theme);
-    return slide.blocks.length > 0 ? slide : null;
+    // 空殼守門：新版式的主角 block 被 sanitize 濾掉（timeline-gantt 沒 timeline／comparison-matrix 沒 table）
+    // → 只剩一個標題，append 進 deck 就是一張會中沒人看得懂的空白版式頁。deck 生成路徑有 reviseSlides 可重做，
+    // 會中補充頁沒有（單張、即時），故此處視同空頁不 suggest（沿用 blocks.length === 0 的處理）。
+    const hollow = slideQaIssues(slide).some((i) => i === "timeline-missing" || i === "matrix-missing");
+    return slide.blocks.length > 0 && !hollow ? slide : null;
   } catch (err) {
     console.warn(`[generation] supplement slide gen failed: ${(err as Error).message}`);
     return null;

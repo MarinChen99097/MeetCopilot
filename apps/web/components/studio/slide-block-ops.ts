@@ -39,6 +39,25 @@ export function newBlock(type: SlideBlock["type"]): SlideBlock {
       return { type: "features", features: [{ title: "" }] };
     case "chart":
       return { type: "chart", chartType: "bar", series: [{ label: "", value: 0 }] };
+    case "table":
+      // 預設 1 空欄標題 ＋ 3 方案欄、2 列——直接是「方案比較表」的骨架，使用者只需填字。
+      return {
+        type: "table",
+        headers: ["", "我們", "競品 A", "自己開發"],
+        rows: [
+          ["", "", "", ""],
+          ["", "", "", ""],
+        ],
+        highlightColumn: 1,
+      };
+    case "timeline":
+      return {
+        type: "timeline",
+        ticks: [{ name: "第 1–2 週" }, { name: "第 3–4 週" }, { name: "第 5–6 週" }],
+        tracks: [{ label: "", startPct: 0, widthPct: 50 }],
+      };
+    case "steps":
+      return { type: "steps", steps: [{ title: "" }, { title: "" }, { title: "" }] };
     case "image":
       return { type: "image", dataUri: "" };
     case "two-col":

@@ -63,6 +63,61 @@ export const MAX_DECK_PAGES = 40;
 export const CHART_ACCENT_HUES = ["7c6cff", "ff5d9e"] as const;
 
 /**
+ * 沒有 per-deck theme 時的預設投影片三色（2026-07-31 裁決的「淺紙」）。TS 端的唯一真相來源——
+ * pptx 匯出的 DEFAULT_THEME 與 studio 編輯器的漸層 fallback 一律引用此常數，不各自硬寫。
+ * **大寫且無 `#`**：pptxgenjs 只吃無 `#` 的 6 碼 hex，且 pptx-render 的 normalizeHex 會把 fallback
+ * 原樣回傳（不再 toUpperCase），故此處必須就是最終輸出字面值。CSS 端（studio-present.css 的
+ * `--slide-bg/--slide-text/--slide-accent`）無法 import，仍寫字面值，改色時兩邊一起改。
+ */
+export const SLIDE_DEFAULT_THEME = { bg: "F7F5F1", text: "15130F", accent: "12708C" } as const;
+
+/**
+ * 條列的項目標記樣式（設計稿 `before-after` 的 ✕/✓ 對比、`image-left-text-right` 的 —）。
+ * **省略＝既有圓點**——舊資料不帶此欄，渲染輸出逐字不變。
+ */
+export const BULLET_MARKERS = ["dot", "check", "cross", "dash"] as const;
+export type BulletMarker = (typeof BULLET_MARKERS)[number];
+
+/**
+ * 語意強調度（timeline 用）。刻意**不收 hex**：色由渲染器從 `--slide-accent` 衍生，
+ * 才能跟著每頁 theme／per-deck override 走（設計稿的固定 hex 只當視覺參考）。
+ */
+export const TIMELINE_EMPHASIS = ["on", "warn", "off"] as const;
+export type TimelineEmphasis = (typeof TIMELINE_EMPHASIS)[number];
+
+/** 時間表上緣的刻度（週次／階段）：名稱＋可選標題。 */
+export interface TimelineTick {
+  name: string;
+  title?: string;
+  emphasis?: TimelineEmphasis;
+}
+
+/** 時間表的一條軌道（甘特條）：起點與長度皆為 0–100 的百分比（渲染器另行 clamp）。 */
+export interface TimelineTrack {
+  label: string;
+  startPct: number;
+  widthPct: number;
+  emphasis?: TimelineEmphasis;
+}
+
+/** 流程步驟的一格。序號由渲染器自動生成（01/02…），不進資料。 */
+export interface StepItem {
+  title: string;
+  desc?: string;
+  owner?: string;
+}
+
+/**
+ * 比較表／時間表／流程的版面硬上限——超過固定 16:9 版面就會爆版，故列為契約常數，
+ * 供 server sanitize、生成 prompt 與測試共用（不各自硬列）。
+ */
+export const MAX_TABLE_COLUMNS = 4;
+export const MAX_TABLE_ROWS = 6;
+export const MAX_TIMELINE_TICKS = 6;
+export const MAX_TIMELINE_TRACKS = 4;
+export const MAX_STEPS = 5;
+
+/**
  * 是否為「安全的光柵圖片 dataUri」（png/jpeg/gif/webp＋合法 base64）。單一真相來源，供 logo/參考圖驗證與 pptx addImage 前置檢查共用。
  * 擋掉：外部 http(s) URL（觀眾端追蹤信標）、svg（無法點陣化＋可含腳本）、壞掉的 base64（會在 pptx 匯出時炸整份）。
  */
@@ -77,20 +132,51 @@ export function isRasterImageDataUri(value: unknown): value is string {
 export type SlideBlock =
   | { type: "heading"; text: string }
   | { type: "subheading"; text: string }
-  | { type: "bullets"; items: string[] }
+  // marker 省略＝圓點（既有行為）；check/cross/dash 供「現在→之後」對比與左圖右文清單用。
+  | { type: "bullets"; items: string[]; marker?: BulletMarker }
   | { type: "paragraph"; text: string }
   | { type: "quote"; text: string; attribution?: string }
-  | { type: "stat"; value: string; label: string }
+  // desc＝數字卡的第三行說明（KPI 三欄卡／單一大數字的註腳）。省略＝既有兩行卡。
+  | { type: "stat"; value: string; label: string; desc?: string }
   // 圖示要點卡：content 頁用來填滿版面的主力區塊（每項 icon+title+desc），比純 bullets 更有設計感。
   // 欄位名用 features（非 items）以免與 bullets 的 items 在 Gemini 扁平超集 schema 中撞名。
   | { type: "features"; features: FeatureItem[] }
   // 圖表：純 CSS/SVG 畫（長條/圓環/折線），Gemini 只吐數據（series）不生圖。
-  | { type: "chart"; chartType: ChartType; series: ChartPoint[]; caption?: string }
+  // series2/seriesNames＝成對比較（換之前→換之後）；centerValue/centerLabel 只對 donut 有意義（圓心大數字）。
+  | {
+      type: "chart";
+      chartType: ChartType;
+      series: ChartPoint[];
+      caption?: string;
+      series2?: ChartPoint[];
+      seriesNames?: string[];
+      centerValue?: string;
+      centerLabel?: string;
+    }
+  // 比較矩陣（方案比較表）：headers[0] 通常留空當列標題欄；highlightColumn＝自家方案欄（吃 accent 淡底）。
+  | { type: "table"; headers: string[]; rows: string[][]; highlightColumn?: number }
+  // 時間表（甘特）：上緣刻度列 ＋ 下方軌道條（起點/長度以百分比表達，不吃絕對日期）。
+  | { type: "timeline"; ticks: TimelineTick[]; tracks: TimelineTrack[] }
+  // 流程步驟：橫排等分欄，序號與色階由渲染器衍生。
+  | { type: "steps"; steps: StepItem[] }
   | { type: "image"; dataUri: string; alt?: string }
   | { type: "two-col"; left: SlideBlock[]; right: SlideBlock[] };
 
-/** 模板 runtime 清單＝型別的唯一真相來源；server 端的 zod/Gemini enum 一律 import 此常數，不再各自硬列。 */
-export const SLIDE_TEMPLATES = ["title", "content", "section", "stats", "image-full", "closing"] as const;
+/**
+ * 模板 runtime 清單＝型別的唯一真相來源；server 端的 zod/Gemini enum 一律 import 此常數，不再各自硬列。
+ * `timeline-gantt`／`comparison-matrix` 為頁級版式（各自搭配同名 block 自撐版面），
+ * **兩者都帶 .pptx 匯出映射**——匯不出的版式不得進本清單（DESIGN_APPLY_CONTRACT §2 W2）。
+ */
+export const SLIDE_TEMPLATES = [
+  "title",
+  "content",
+  "section",
+  "stats",
+  "image-full",
+  "closing",
+  "timeline-gantt",
+  "comparison-matrix",
+] as const;
 export type SlideTemplate = (typeof SLIDE_TEMPLATES)[number];
 
 /**
@@ -166,6 +252,8 @@ export function extractSlideText(spec: SlideSpec): string {
           break;
         case "stat":
           parts.push(`${b.label}: ${b.value}`);
+          // desc 為後加的選填第三行；舊資料無此欄 → 輸出與擴充前逐字相同。
+          if (b.desc) parts.push(b.desc);
           break;
         case "features":
           for (const f of b.features) {
@@ -175,6 +263,31 @@ export function extractSlideText(spec: SlideSpec): string {
         case "chart":
           if (b.caption) parts.push(b.caption);
           for (const p of b.series) parts.push(`${p.label}: ${p.value}`);
+          // 以下皆為後加的選填欄位，舊 chart 一律沒有 → 逐字等價。
+          for (const p of b.series2 ?? []) parts.push(`${p.label}: ${p.value}`);
+          if (b.seriesNames?.length) parts.push(...b.seriesNames);
+          if (b.centerValue) parts.push(b.centerValue);
+          if (b.centerLabel) parts.push(b.centerLabel);
+          break;
+        case "table": {
+          // headers[0] 依設計常為空字串（列標題欄）→ 濾空後才併，避免產出前導 " / "。
+          const head = b.headers.filter((h) => h.trim() !== "").join(" / ");
+          if (head) parts.push(head);
+          for (const row of b.rows) {
+            const line = row.filter((c) => c.trim() !== "").join(" / ");
+            if (line) parts.push(line);
+          }
+          break;
+        }
+        case "timeline":
+          for (const t of b.ticks) parts.push(t.title ? `${t.name}: ${t.title}` : t.name);
+          for (const t of b.tracks) parts.push(t.label);
+          break;
+        case "steps":
+          for (const s of b.steps) {
+            parts.push(s.desc ? `${s.title}: ${s.desc}` : s.title);
+            if (s.owner) parts.push(s.owner);
+          }
           break;
         case "two-col":
           walk(b.left);

@@ -6,18 +6,34 @@
 
 /* ── slide renderer (borrowed from v1, aligned to v2 SlideSpec) ─── */
 .slide {
-  /* 每頁主題 token：由 SlideRenderer 從 slide.theme 以 inline style 覆寫；缺省退回 app 預設。 */
-  --slide-bg: var(--mc-card);
-  --slide-text: var(--mc-text);
-  --slide-accent: var(--mc-accent);
+  /* 每頁主題 token：由 SlideRenderer 從 slide.theme 以 inline style 覆寫；缺省退回下列 app 預設。
+     **預設＝淺紙（不是深卡）**：投影出去的畫面永遠是淺色，與 app 主題脫鉤（設計盤點 §A9），
+     所以這裡刻意寫死紙張色，而不是接 --mc-*（app 深/淺主題切換不得改變投影片外觀）。
+     per-deck override 機制不動：匯入/繼承的 theme 仍以 inline style 蓋掉這些值。
+     下列三色的 TS 端真相來源＝shared 的 `SLIDE_DEFAULT_THEME`（pptx 匯出與 studio fallback 都引用它）；
+     CSS 無法 import，故此處是**唯一**的鏡射點——改色時兩處一起改。 */
+  --slide-bg: #f7f5f1;
+  --slide-text: #15130f;
+  --slide-accent: #12708c;
   /* 圖表多序列互補色：與 shared CHART_ACCENT_HUES（7c6cff / ff5d9e）一致 → 螢幕預覽 ↔ 匯出的 pptx 配色相同。 */
   --slide-accent-2: #7c6cff;
   --slide-accent-3: #ff5d9e;
   --slide-heading-font: var(--mc-font);
   --slide-body-font: var(--mc-font);
+  /* kicker／數字／表頭的機械感字體（設計語言 §A1）。W1 若尚未提供 --mc-font-mono，退回系統等寬。 */
+  --slide-mono-font: var(--mc-font-mono, ui-monospace, "IBM Plex Mono", SFMono-Regular, Menlo, monospace);
   --slide-muted: color-mix(in srgb, var(--slide-text) 60%, transparent);
+  --slide-dim: color-mix(in srgb, var(--slide-text) 72%, transparent);
   --slide-surface: color-mix(in srgb, var(--slide-text) 6%, transparent);
   --slide-hairline: color-mix(in srgb, var(--slide-text) 13%, transparent);
+  /* 強調淡底／凹陷面（比較表自家欄、KPI 首卡、時間軸槽）——一律由 accent/text 衍生才吃 per-deck theme。 */
+  --slide-accent-soft: color-mix(in srgb, var(--slide-accent) 13%, var(--slide-bg));
+  --slide-sunk: color-mix(in srgb, var(--slide-text) 7%, var(--slide-bg));
+  /* 提醒色（eyebrow／時間軸警示段）：由 accent 轉暖不可靠，故給一組固定值，深底 theme 下仍可讀。
+     2026-07-31：原 #a9661a 疊預設紙底 #f7f5f1 只有 **4.19:1**，過不了 WCAG AA 4.5（同色在純白上是
+     4.56:1，所以 --mc-warn 沒事、紙底才破）→ 同色相壓深到 #9b5e18 ＝ **4.81:1** ✓（hue 32° 不變）。
+     只動這個預設 fallback；per-deck theme 仍以 inline style 蓋掉它。 */
+  --slide-warn: #9b5e18;
   position: relative;
   background: var(--slide-bg);
   color: var(--slide-text);
@@ -34,20 +50,19 @@
 
 .slide--thumb { border-radius: calc(var(--mc-radius) / 2); }
 
-/* mesh 漸層背景：封面/分節/數據/結語頁的視覺主體（純 CSS、零圖檔、跟著主題色走）。 */
+/* 封面／分節：設計語言從「漸層 mesh」轉「留白＋左側色條」（設計盤點 §C16）。
+   純 CSS、零圖檔、跟著主題色走；數據/結語頁改為無裝飾留白。 */
 .slide--title::before,
-.slide--section::before,
-.slide--stats::before,
-.slide--closing::before {
+.slide--section::before {
   content: "";
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0.75cqw;
   z-index: 0;
   pointer-events: none;
-  background:
-    radial-gradient(44cqw 44cqw at 12% 16%, color-mix(in srgb, var(--slide-accent) 46%, transparent), transparent 60%),
-    radial-gradient(52cqw 52cqw at 88% 20%, color-mix(in srgb, var(--slide-accent-2) 42%, transparent), transparent 62%),
-    radial-gradient(46cqw 46cqw at 74% 100%, color-mix(in srgb, var(--slide-accent-3) 30%, transparent), transparent 60%);
+  background: var(--slide-accent);
 }
 
 /* AI 背景圖（theme.bg = url(...)）：加暗色 scrim 保住文字對比。 */
@@ -68,36 +83,40 @@
   flex-direction: column;
   justify-content: flex-start;
   align-items: stretch;
-  gap: 1.4cqw;
+  gap: 1.9cqw;
   overflow: hidden;
-  padding: 7cqw;
+  padding: 4.4cqw 4.4cqw;
   line-height: 1.5;
 }
 
+/* mono kicker（設計語言 §A7）：不做 uppercase（內容是繁中）、不粗體、無 ::before 圓點。 */
 .slide__eyebrow {
-  font-size: 2.05cqw;
-  font-weight: 700;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--slide-accent);
-  margin-bottom: 1.4cqw;
+  font-family: var(--slide-mono-font);
+  font-size: 1.35cqw;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  color: var(--slide-warn);
+  margin-bottom: 0.4cqw;
 }
 
 .slide-block { margin: 0; }
 
+/* 標題字級刻度（設計語言 §A8）：-letter-spacing 收緊是全站特徵。 */
 .slide-block--heading {
-  font-size: 4.6cqw;
-  font-weight: 800;
-  line-height: 1.12;
+  font-size: 3.5cqw;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
   font-family: var(--slide-heading-font);
   color: var(--slide-text);
+  text-wrap: pretty;
 }
 .slide-block--subheading {
-  font-size: 2.7cqw;
+  font-size: 2.2cqw;
   font-weight: 500;
-  line-height: 1.3;
+  line-height: 1.35;
   font-family: var(--slide-heading-font);
-  color: var(--slide-muted);
+  color: var(--slide-dim);
 }
 .slide-block--bullets {
   margin: 0;
@@ -105,31 +124,48 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 1cqw;
-  font-size: 2.35cqw;
-  line-height: 1.4;
+  gap: 1.35cqw;
+  font-size: 2.05cqw;
+  line-height: 1.5;
 }
-.slide-block--bullets li { position: relative; padding-left: 2.6cqw; }
+.slide-block--bullets li { position: relative; padding-left: 2.4cqw; }
 .slide-block--bullets li::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 0.5em;
-  width: 1cqw;
-  height: 1cqw;
-  border-radius: 2px;
+  top: 0.52em;
+  width: 0.85cqw;
+  height: 0.85cqw;
+  border-radius: 50%;
   background: var(--slide-accent);
 }
-.slide-block--paragraph { font-size: 2.3cqw; color: var(--slide-text); line-height: 1.5; }
+/* marker 變體（bullets.marker）：字符取代圓點；未帶 marker 的舊資料完全不受影響。 */
+.slide-block--bullets.bullets--check li::before,
+.slide-block--bullets.bullets--cross li::before,
+.slide-block--bullets.bullets--dash li::before {
+  top: 0;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  font-weight: 600;
+  line-height: inherit;
+}
+.slide-block--bullets.bullets--check li::before { content: "✓"; color: #2f7a55; }
+.slide-block--bullets.bullets--cross li::before { content: "✕"; color: #c0403b; }
+.slide-block--bullets.bullets--dash li::before { content: "—"; color: var(--slide-accent); }
+.slide-block--paragraph { font-size: 1.95cqw; color: var(--slide-dim); line-height: 1.75; max-width: 78%; text-wrap: pretty; }
 .slide-block--quote {
   margin: 0;
   padding-left: 2cqw;
   border-left: 0.4cqw solid var(--slide-accent);
-  font-style: italic;
-  font-size: 2.8cqw;
-  line-height: 1.4;
+  font-size: 2.9cqw;
+  font-weight: 600;
+  line-height: 1.42;
+  letter-spacing: -0.02em;
+  text-wrap: pretty;
 }
-.slide-block--quote cite { display: block; margin-top: 1cqw; font-style: normal; font-size: 2cqw; color: var(--slide-muted); }
+.slide-block--quote cite { display: block; margin-top: 1.4cqw; font-style: normal; font-weight: 400; font-size: 1.7cqw; color: var(--slide-muted); }
 
 /* min-height:0 讓 flex:1 的 features 能真正縮到可用高度；align-content:safe center 保留置中，
    但內容超出時退回 start（往下裁切）而非往上溢出、疊到上方 chart/stat 的標籤帶（重疊 bug）。 */
@@ -143,26 +179,26 @@
   align-items: flex-start;
   background: var(--slide-surface);
   border: 1px solid var(--slide-hairline);
-  border-radius: 12px;
-  padding: 2.8cqw;
+  border-radius: 10px;
+  padding: 2.2cqw 2cqw;
 }
 .feature__icon { flex: none; }
-.feature__icon svg { width: 4.6cqw; height: 4.6cqw; color: var(--slide-accent); display: block; }
-.feature__title { font-size: 2.5cqw; font-weight: 700; line-height: 1.2; }
+.feature__icon svg { width: 4cqw; height: 4cqw; color: var(--slide-accent); display: block; }
+.feature__title { font-size: 1.85cqw; font-weight: 600; line-height: 1.35; }
 /* 安全網：過長 desc 以 2 行省略號收尾，避免整卡超出固定 16:9 版面被硬裁（正常一句話的 desc 不受影響）。 */
 .feature__desc { font-size: 1.95cqw; color: var(--slide-muted); margin-top: 0.7cqw; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 .slide-block--stat { display: flex; flex-direction: column; gap: 0.4cqw; }
 .stat__value {
-  font-size: 8.5cqw;
-  font-weight: 800;
-  line-height: 0.95;
-  background: linear-gradient(120deg, var(--slide-accent), var(--slide-accent-2));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  font-size: 5.1cqw;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--slide-text);
 }
-.stat__label { font-size: 1.95cqw; color: var(--slide-muted); }
+.stat__label { font-size: 1.7cqw; font-weight: 600; color: var(--slide-text); }
+/* 第三行說明（stat.desc）；未帶時完全不佔位。 */
+.stat__desc { font-size: 1.45cqw; line-height: 1.5; color: var(--slide-muted); }
 
 .slide-block--image { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .slide-block--image img { max-height: 100%; object-fit: contain; }
@@ -194,59 +230,216 @@
 .chart__line-dot { fill: var(--slide-accent); }
 .chart__line-labels { display: flex; justify-content: space-between; margin-top: 1cqw; font-size: 1.75cqw; color: var(--slide-muted); }
 
+/* ── chart 擴充：成對雙序列（換之前→換之後）＋ donut 圓心大數字 ─────────────
+   兩者皆為選填欄位驅動；未帶 series2/centerValue 的舊 chart 走原有 DOM 與樣式，逐字不變。 */
+.chart__series-legend {
+  list-style: none;
+  margin: 0 0 1cqw;
+  padding: 0;
+  display: flex;
+  gap: 2.4cqw;
+  font-family: var(--slide-mono-font);
+  font-size: 1.35cqw;
+  color: var(--slide-muted);
+}
+.chart__series-legend li { display: inline-flex; align-items: center; gap: 0.8cqw; }
+.chart__bars--paired { gap: 3cqw; }
+.chart__bars--paired .chart__bar-pair { flex: 1; min-height: 0; width: 100%; display: flex; justify-content: center; align-items: flex-end; gap: 1.1cqw; }
+.chart__bars--paired .chart__bar-stack { flex: 0 1 4.4cqw; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
+.chart__bars--paired .chart__bar-track { width: 100%; }
+.chart__bars--paired .chart__bar { border-radius: 4px 4px 0 0; background: var(--slide-sunk); }
+.chart__bars--paired .chart__bar--s2 { background: var(--slide-accent); }
+.chart__donut-slot { position: relative; height: 100%; flex: 0 0 auto; display: flex; align-items: center; }
+.chart__donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4cqw;
+  pointer-events: none;
+}
+.chart__donut-center-val { font-size: 3.2cqw; font-weight: 700; letter-spacing: -0.02em; color: var(--slide-text); }
+.chart__donut-center-label { font-size: 1.4cqw; color: var(--slide-dim); }
+
+/* ── 比較矩陣（table）：grid + 等高列；首欄為列標題欄、highlightColumn 為自家方案欄 ── */
+.slide-block--table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--slide-hairline);
+  border-radius: 9px;
+  overflow: hidden;
+  font-size: 1.6cqw;
+}
+.table__row { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--table-tracks, minmax(0, 1.6fr) minmax(0, 1fr)); }
+.table__cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 1.4cqw;
+  border-right: 1px solid var(--slide-hairline);
+  border-bottom: 1px solid var(--slide-hairline);
+  font-family: var(--slide-mono-font);
+  color: var(--slide-text);
+  overflow: hidden;
+}
+.table__row:last-child .table__cell { border-bottom: 0; }
+.table__cell:last-child { border-right: 0; }
+.table__cell--head { background: var(--slide-sunk); color: var(--slide-muted); font-size: 1.35cqw; font-weight: 600; }
+.table__cell--rowhead { font-family: var(--slide-body-font); color: var(--slide-dim); }
+.table__cell--hl:not(.table__cell--head) { background: var(--slide-accent-soft); color: var(--slide-accent); font-weight: 600; }
+
+/* ── 時間表（timeline）：上緣刻度列 ＋ 下方甘特軌道 ───────────────────── */
+.slide-block--timeline { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 2.4cqw; }
+.timeline__ticks { display: grid; grid-template-columns: repeat(var(--tick-cols, 3), minmax(0, 1fr)); gap: 0.8cqw; }
+.timeline__tick { display: flex; flex-direction: column; gap: 0.8cqw; min-width: 0; }
+.timeline__tick-bar { height: 0.9cqw; border-radius: 4px; background: var(--slide-accent); }
+.timeline__tick--warn .timeline__tick-bar { background: var(--slide-warn); }
+.timeline__tick--off .timeline__tick-bar { background: var(--slide-hairline); }
+.timeline__tick-name { font-family: var(--slide-mono-font); font-size: 1.3cqw; color: var(--slide-muted); }
+.timeline__tick-title { font-size: 1.55cqw; font-weight: 600; line-height: 1.35; }
+.timeline__tracks { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 1cqw; }
+.timeline__track { display: grid; grid-template-columns: 13.5cqw minmax(0, 1fr); align-items: center; gap: 1.2cqw; }
+.timeline__track-label { font-size: 1.55cqw; color: var(--slide-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline__track-slot { position: relative; height: 2.7cqw; border-radius: 6px; background: var(--slide-sunk); overflow: hidden; }
+.timeline__bar { position: absolute; top: 0; bottom: 0; border-radius: 6px; background: var(--slide-accent); }
+.timeline__bar--warn { background: var(--slide-warn); }
+.timeline__bar--off { background: color-mix(in srgb, var(--slide-accent) 42%, var(--slide-bg)); }
+
+/* ── 流程步驟（steps）：橫排等分欄、頂部色條、序號＋負責人貼底 ────────── */
+.slide-block--steps { flex: 1; min-height: 0; display: flex; gap: 1.3cqw; align-items: stretch; }
+.step {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1cqw;
+  padding: 1.7cqw 1.6cqw;
+  border-top: 0.38cqw solid var(--slide-accent);
+  background: transparent;
+}
+.step--tone-0 { border-top-color: var(--slide-accent); background: var(--slide-accent-soft); }
+.step--tone-1 { border-top-color: color-mix(in srgb, var(--slide-accent) 62%, var(--slide-bg)); }
+.step--tone-2 { border-top-color: var(--slide-warn); }
+.step__no { font-family: var(--slide-mono-font); font-size: 2.55cqw; font-weight: 600; line-height: 1; color: var(--slide-accent); }
+.step--tone-2 .step__no { color: var(--slide-warn); }
+.step__title { font-size: 1.75cqw; font-weight: 600; line-height: 1.35; }
+.step__desc { font-size: 1.5cqw; line-height: 1.5; color: var(--slide-dim); }
+.step__owner { margin-top: auto; font-family: var(--slide-mono-font); font-size: 1.3cqw; color: var(--slide-muted); }
+
 .slide__logo { position: absolute; right: 4cqw; bottom: 3.4cqw; z-index: 2; height: 5cqw; width: auto; max-width: 22cqw; object-fit: contain; opacity: 0.92; }
 .slide--title .slide__logo, .slide--closing .slide__logo { height: 6cqw; }
 
-/* per-template layouts */
+/* ── per-template layouts（17 版式落地；單位一律 cqw ⇒ 編輯器畫布與舞台同尺度）──────────
+   設計稿的 16 個陳列版式＋舞台專用三欄，經「template × block」二維組合表達：
+   cover-title→title｜pull-quote-dark→section+quote｜paragraph-explainer / bullet-highlights /
+   feature-cards-3 / before-after（two-col+bullets marker）/ image-left-text-right→content｜
+   kpi-cards-3 / hero-single-stat / three-col-rule→stats（依 stat 數與 desc 自動切換）｜
+   grouped-bar-compare / donut-breakdown / trend-columns→chart｜image-full-caption→image-full｜
+   steps-4→steps block｜timeline-gantt / comparison-matrix→同名 template。 */
 .slide--title .slide__body, .slide--section .slide__body, .slide--closing .slide__body { justify-content: center; align-items: flex-start; }
-.slide--title .slide-block--heading { font-size: 8.4cqw; font-weight: 800; line-height: 1.02; letter-spacing: -0.01em; }
-.slide--title .slide-block--heading::after,
-.slide--closing .slide-block--heading::after {
-  content: ""; display: block; width: 9cqw; height: 0.9cqw; margin-top: 2.4cqw; border-radius: 999px;
-  background: linear-gradient(90deg, var(--slide-accent), var(--slide-accent-2));
-}
-.slide--title .slide-block--subheading { font-size: 3cqw; margin-top: 2cqw; max-width: 80%; }
-.slide--section .slide__eyebrow { font-size: 2.4cqw; }
-.slide--section .slide-block--heading { font-size: 6.6cqw; font-weight: 800; line-height: 1.05; }
-.slide--section .slide-block--subheading { font-size: 2.7cqw; margin-top: 1.6cqw; }
+/* 封面：左側 accent 粗條（::before）取代舊的漸層底線；字級 46/820 ≈ 5.6cqw、字重 700。 */
+.slide--title .slide__body, .slide--section .slide__body { padding-left: 5.9cqw; }
+.slide--title .slide-block--heading { font-size: 5.6cqw; font-weight: 700; line-height: 1.12; letter-spacing: -0.03em; }
+.slide--title .slide-block--subheading { font-size: 1.85cqw; margin-top: 0.6cqw; max-width: 80%; color: var(--slide-dim); }
+.slide--section .slide__eyebrow { font-size: 1.5cqw; }
+.slide--section .slide-block--heading { font-size: 4.8cqw; font-weight: 600; line-height: 1.15; }
+.slide--section .slide-block--subheading { font-size: 2cqw; margin-top: 1.2cqw; }
+/* 一句客戶原話（pull-quote-dark）：section 頁只有一個 quote → 整頁反底、引言放大。 */
+.slide--section .slide__body:has(.slide-block--quote) { background: var(--slide-text); padding-left: 5.6cqw; }
+.slide--section .slide__body:has(.slide-block--quote) .slide-block--quote { border-left-color: var(--slide-warn); color: var(--slide-bg); font-size: 3.7cqw; }
+.slide--section .slide__body:has(.slide-block--quote) .slide-block--quote cite { color: color-mix(in srgb, var(--slide-bg) 62%, transparent); }
+.slide--section .slide__body:has(.slide-block--quote) .slide__eyebrow { color: var(--slide-warn); }
 .slide--content .slide__body { justify-content: flex-start; }
-.slide--content .slide-block--heading { padding-bottom: 1.4cqw; margin-bottom: 0.6cqw; border-bottom: 0.28cqw solid var(--slide-accent); }
-.slide--stats .slide__body { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: stretch; gap: 2.4cqw 2.8cqw; }
+.slide--content .slide-block--heading { padding-bottom: 1.2cqw; margin-bottom: 0.4cqw; border-bottom: 0.24cqw solid var(--slide-accent); }
+/* 一段說明文字／重點項目：只有 heading＋單一段落或條列時垂直置中（設計稿 C12/C13）。 */
+.slide--content .slide__body:has(> .slide-block--paragraph:only-of-type):not(:has(.slide-block--features, .slide-block--chart, .slide-block--two-col, .slide-block--image)) { justify-content: center; }
+.slide--content .slide__body:has(> .slide-block--bullets:only-of-type):not(:has(.slide-block--features, .slide-block--chart, .slide-block--two-col, .slide-block--image)) { justify-content: center; }
+/* 現在→之後（before-after）：two-col 兩欄各自成面，右欄吃 accent 淡底。 */
+.slide--content .slide-block--two-col { gap: 2.4cqw; }
+.slide--content .slide-block--two-col > .two-col__left,
+.slide--content .slide-block--two-col > .two-col__right { padding: 2.2cqw 2cqw; border-radius: 10px; }
+.slide--content .slide-block--two-col > .two-col__left { background: var(--slide-sunk); }
+.slide--content .slide-block--two-col > .two-col__right { background: var(--slide-accent-soft); }
+.slide--stats .slide__body { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: stretch; gap: 2cqw 1.7cqw; }
 .slide--stats .slide__eyebrow, .slide--stats .slide-block--heading, .slide--stats .slide-block--subheading,
 .slide--stats .slide-block--paragraph, .slide--stats .slide-block--bullets { flex-basis: 100%; }
-.slide--stats .slide-block--heading { font-size: 3.9cqw; margin-bottom: 1.6cqw; }
-/* P2 打磨：數字是這頁的主角——卡片長高＋內容垂直置中，撐滿下半消除「上聚下空」；數字整體放大、標籤加粗。 */
+.slide--stats .slide-block--heading { font-size: 3.5cqw; margin-bottom: 0.4cqw; }
+/* KPI 三欄卡（kpi-cards-3）：內容貼底、首卡吃 accent 淡底（設計稿以第一項強調）。 */
 .slide--stats .slide-block--stat {
   flex: 1 1 26%;
-  min-width: 22cqw;
-  min-height: 30cqw;
+  min-width: 20cqw;
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.7cqw;
+  padding: 1.9cqw 1.7cqw;
+  background: var(--slide-sunk);
+  border: 0;
+  border-radius: 10px;
+}
+.slide--stats .stat__value { font-size: 5.1cqw; }
+.slide--stats .slide-block--stat:first-of-type { background: var(--slide-accent-soft); }
+.slide--stats .slide-block--stat:first-of-type .stat__value,
+.slide--stats .slide-block--stat:first-of-type .stat__label { color: var(--slide-accent); }
+/* 單一大數字（hero-single-stat）：整頁 accent 淡底、置中、96/820 ≈ 11.7cqw。 */
+.slide--stats .slide__body:has(> .slide-block--stat:only-of-type) {
+  background: var(--slide-accent-soft);
+  flex-direction: column;
   justify-content: center;
-  gap: 1cqw;
-  padding: 3.4cqw 3cqw;
-  background: var(--slide-surface);
-  border: 1px solid var(--slide-hairline);
-  border-radius: 16px;
+  align-items: center;
+  text-align: center;
 }
-.slide--stats .stat__value { font-size: 11cqw; line-height: 0.92; }
-.slide--stats .stat__label { font-size: 2.35cqw; font-weight: 600; color: var(--slide-muted); }
-.slide--stats .slide-block--stat:first-of-type .stat__value { font-size: 12.5cqw; }
-.slide--closing .slide-block--heading { font-size: 6.8cqw; font-weight: 800; line-height: 1.04; }
-.slide--closing .slide-block--paragraph { font-size: 2.9cqw; color: var(--slide-muted); margin-top: 2cqw; max-width: 82%; }
+.slide--stats .slide__body:has(> .slide-block--stat:only-of-type) .slide__eyebrow { color: var(--slide-accent); letter-spacing: 0.2em; }
+.slide--stats .slide-block--stat:only-of-type { background: none; padding: 0; align-items: center; gap: 1.4cqw; }
+.slide--stats .slide-block--stat:only-of-type .stat__value { font-size: 11.7cqw; letter-spacing: -0.04em; color: var(--slide-text); }
+.slide--stats .slide-block--stat:only-of-type .stat__label { font-size: 2.2cqw; color: var(--slide-text); }
+.slide--stats .slide-block--stat:only-of-type .stat__desc { font-size: 1.65cqw; }
+.slide--closing .slide-block--heading { font-size: 4.8cqw; font-weight: 600; line-height: 1.12; }
+.slide--closing .slide-block--paragraph { font-size: 2cqw; color: var(--slide-dim); margin-top: 1.4cqw; max-width: 82%; }
 .slide--closing .slide-block--subheading {
-  margin-top: 3cqw; align-self: flex-start; font-size: 2.4cqw; font-weight: 700; color: #05131a;
-  background: linear-gradient(90deg, var(--slide-accent), var(--slide-accent-2)); padding: 1.6cqw 3.6cqw; border-radius: 999px;
+  margin-top: 2.4cqw; align-self: flex-start; font-size: 1.8cqw; font-weight: 600; color: #ffffff;
+  background: var(--slide-accent); padding: 1.2cqw 3cqw; border-radius: 999px;
 }
-/* 有圖：滿版無留白（原行為）。 */
-.slide--image-full .slide__body:has(.slide-block--image) { padding: 0; gap: 0; }
-/* 無圖（生圖未完成的中間態 / 純文字）：保留基底 padding 並給柔和漸層底＋垂直置中，避免大標貼頂像壞頁（P2）。 */
+/* 整頁大圖＋底部字幕層（image-full-caption）：圖滿版鋪底，文字疊在底部漸層帶上。 */
+.slide--image-full .slide__body:has(.slide-block--image) { padding: 0; gap: 0.6cqw; justify-content: flex-end; }
+.slide--image-full .slide__body:has(.slide-block--image)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 46%;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--slide-bg) 62%, transparent);
+}
+.slide--image-full .slide__body:has(.slide-block--image) > .slide__eyebrow,
+.slide--image-full .slide__body:has(.slide-block--image) > .slide-block:not(.slide-block--image) {
+  position: relative;
+  z-index: 1;
+  padding-left: 4.4cqw;
+  padding-right: 4.4cqw;
+}
+.slide--image-full .slide__body:has(.slide-block--image) > .slide-block:last-child { padding-bottom: 3.4cqw; }
+/* 無圖（生圖未完成的中間態 / 純文字）：斜紋佔位＋垂直置中，避免大標貼頂像壞頁。 */
 .slide--image-full .slide__body:not(:has(.slide-block--image)) {
   justify-content: center;
-  background: radial-gradient(60cqw 60cqw at 22% 20%, color-mix(in srgb, var(--slide-accent) 20%, transparent), transparent 60%);
+  background: repeating-linear-gradient(135deg, var(--slide-sunk) 0 1.7cqw, var(--slide-bg) 1.7cqw 3.4cqw);
 }
-.slide--image-full .slide-block--image { flex: 1; width: 100%; height: 100%; }
+.slide--image-full .slide-block--image { position: absolute; inset: 0; z-index: 0; flex: none; width: 100%; height: 100%; }
 .slide--image-full .slide-block--image img { width: 100%; height: 100%; max-height: none; object-fit: cover; }
+
+/* 時間表版式：標題小、時間表 block 佔滿其餘版面。 */
+.slide--timeline-gantt .slide__body { justify-content: flex-start; gap: 1.6cqw; }
+.slide--timeline-gantt .slide-block--heading { font-size: 3.2cqw; }
+.slide--timeline-gantt .slide-block--subheading { font-size: 1.4cqw; font-family: var(--slide-mono-font); color: var(--slide-muted); }
+/* 方案比較表版式：padding 收緊（矩陣要吃滿）、標題再小一級。 */
+.slide--comparison-matrix .slide__body { justify-content: flex-start; gap: 1.4cqw; padding: 3.4cqw 3.9cqw; }
+.slide--comparison-matrix .slide-block--heading { font-size: 2.95cqw; }
 
 /* ── WYSIWYG 就地編輯（EditableSlide；C1）— slide-scoped，沿用 cqw 與主題色；只在編輯器 .slide--editing 內生效 ── */
 .mc-inline { cursor: text; border-radius: 3px; padding: 0 0.2cqw; margin: 0 -0.2cqw; }
@@ -397,27 +590,10 @@
 .mc-imgjob__close { position: absolute; top: 8px; right: 10px; background: none; border: none; color: var(--mc-text-muted); font-size: 12px; cursor: pointer; }
 .mc-imgjob__close:hover { color: var(--mc-text); }
 
-/* ── /present — zero-HUD clean stage (I3) ───────────────────── */
-.mc-present { position: fixed; inset: 0; background: #05070f; color: var(--mc-text); display: flex; align-items: center; justify-content: center; }
-.mc-present__stage { width: min(100vw, calc(100vh * 16 / 9)); }
-.mc-present__empty { color: var(--mc-text-muted); text-align: center; display: inline-flex; align-items: center; gap: 10px; }
-/* 等待舞台的中性連線指示點（I3：純連線狀態、無副駕資訊） */
-.mc-present__waitdot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.mc-present__waitdot--connecting { background: var(--mc-warn); animation: mc-pulse 1.1s ease-in-out infinite; }
-.mc-present__waitdot--open { background: var(--mc-ok); }
-/* 終態通知（無投影片可播：空/失敗/逾時）——置中、深色、不含任何副駕元素（I3） */
-.mc-present__notice { max-width: 34rem; margin: 0 auto; padding: 0 24px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
-.mc-present__notice-title { margin: 0; font-size: clamp(20px, 3.2vw, 28px); font-weight: 650; color: var(--mc-text); }
-.mc-present__notice-desc { margin: 0; font-size: 15px; line-height: 1.65; color: var(--mc-text-muted); }
-.mc-present__notice-actions { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 6px; }
-.mc-present__pageno { position: fixed; right: 18px; bottom: 14px; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: rgba(230, 235, 245, 0.55); user-select: none; }
-.mc-present__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mc-text-muted); }
-.mc-present__dot--open { background: var(--mc-ok); }
-.mc-present__dot--connecting { background: var(--mc-warn); }
-.mc-present__dot--reconnecting { background: var(--mc-danger); animation: mc-pulse 1.1s ease-in-out infinite; }
-.mc-present--loading { flex-direction: column; }
-.mc-present__spinner { width: 34px; height: 34px; border: 3px solid rgba(230, 235, 245, 0.18); border-top-color: var(--mc-accent); border-radius: 50%; animation: mc-spin 0.8s linear infinite; }
-@keyframes mc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+/* 2026-07-31：`.mc-present*` 家族（舊 /present 舞台）已整批刪除——PresentStage.tsx 早已改用
+   globals.css 的 `.mc-stage3*`，全庫 grep「mc-present」在 tsx/ts/json 零引用。此處原本重複定義的
+   `@keyframes mc-pulse` 一併移除（globals.css 已有同名定義，且 globals.css 由 [locale]/layout.tsx
+   全域載入，本檔的消費者 hud/copilot 兩頁都在其下）。 */
 
 /* responsive: collapse editor to single column on narrow viewports */
 @media (max-width: 960px) {
@@ -428,110 +604,22 @@
   .mc-feat-edit { grid-template-columns: 1fr 1fr; }
 }
 
-/* ── 舞台操作層（2026-07-28 補基本可用性）───────────────────────────────────────────────────
-   原本舞台零個滑鼠可操作元素。加翻頁 ‹ › ＋ 全螢幕鈕，但這個分頁**會被分享進 Meet**，所以平時近乎透明。
-   顯隱用元件的 `.is-on`（指標一動就顯示、靜止 2.5 秒淡出）而**不是** `.mc-present:hover`——`.mc-present`
-   是 position:fixed;inset:0 的滿版元素，指標只要在視窗內 hover 就恆為真，那條規則等於永遠亮著。
-   直接 hover 控制列本身或鍵盤 focus 進去也會亮。觸控裝置沒有 hover → @media (hover: none) 常駐半透明。
-   I3：純導覽/瀏覽器操作，不含任何副駕元素。只加規則，不改上面既有的 .mc-present* 定義。 */
-.mc-present__controls {
-  position: fixed;
-  left: 18px;
-  bottom: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  opacity: 0.16;
-  transition: opacity 0.2s ease;
-}
-.mc-present__controls.is-on,
-.mc-present__controls:hover,
-.mc-present__controls:focus-within { opacity: 1; }
-.mc-present__navbtn {
-  width: 34px;
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid rgba(230, 235, 245, 0.22);
-  border-radius: var(--mc-r-sm);
-  background: rgba(12, 16, 28, 0.62);
-  color: rgba(230, 235, 245, 0.9);
-  font-size: 19px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.mc-present__navbtn:hover:not(:disabled) { background: rgba(30, 38, 58, 0.9); border-color: var(--mc-accent); }
-.mc-present__navbtn:disabled { opacity: 0.35; cursor: default; }
-.mc-present__navbtn--fs { margin-left: 8px; font-size: 15px; }
-@media (hover: none) {
-  /* 觸控：沒有 hover 可以喚出控制，常駐半透明才找得到（仍不搶投影片焦點）。 */
-  .mc-present__controls { opacity: 0.55; }
-  .mc-present__navbtn { width: 42px; height: 42px; font-size: 22px; }
-}
-
-/* 首次進入的鍵盤提示（數秒後由元件卸下；被分享的舞台不該長期掛操作說明）。 */
-.mc-present__hint {
-  position: fixed;
-  left: 50%;
-  bottom: 20px;
-  transform: translateX(-50%);
-  padding: 7px 14px;
-  border: 1px solid rgba(230, 235, 245, 0.16);
-  border-radius: 999px;
-  background: rgba(12, 16, 28, 0.72);
-  color: rgba(230, 235, 245, 0.75);
-  font-size: 12.5px;
-  white-space: nowrap;
-  pointer-events: none;
-  animation: mc-present-hint 5s ease forwards;
-}
-@keyframes mc-present-hint {
-  0% { opacity: 0; }
-  6% { opacity: 1; }
-  80% { opacity: 1; }
-  100% { opacity: 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .mc-present__hint { animation: none; }
-}
+/* 2026-07-31：舊舞台操作層（`.mc-present__controls` / `__navbtn` / `__hint` ＋ `@keyframes
+   mc-present-hint`）同上一併刪除——這些規則的消費者 PresentStage.tsx 已改用 `.mc-stage3__controls`
+   等 globals.css 規則，該 keyframes 也只被此處的 `.mc-present__hint` 使用，無其他引用。 */
 
 /* ── /present/start 準備頁（掛 AppShell）：選 deck → 播放。沿用 .mc-deckgrid / .mc-deckcard。 ──────── */
 .mc-pstart { display: flex; flex-direction: column; gap: 22px; }
-.mc-pstart__head { display: flex; flex-direction: column; gap: 6px; }
-.mc-pstart__h1 { margin: 0; font-size: 24px; }
-.mc-pstart__lead { margin: 0; color: var(--mc-text-muted); font-size: 14px; max-width: 68ch; }
-.mc-pstart__h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--mc-text-2); }
+/* 2026-07-31：舊版式的 `__head` / `__h1` / `__lead` / `__h2` 已刪——PresentStart 改用 globals.css
+   的 `.mc-pagehead` 家族，這幾條零引用（同下方 `__launch*` 家族）。 */
 /* 選中的 deck 卡：加色框＋淡底（顏色不是唯一訊號——同時有 aria-pressed 與 accent badge）。 */
 .mc-deckcard.is-selected {
   border-color: var(--mc-accent);
   background: var(--mc-accent-soft);
   box-shadow: 0 0 22px -10px rgba(139, 92, 246, 0.45);
 }
-.mc-pstart__launch {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 18px 26px;
-  padding: 18px;
-  border: 1px solid var(--mc-border);
-  border-radius: var(--mc-r-lg);
-  background: var(--mc-panel);
-}
-.mc-pstart__launch-id { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.mc-pstart__launch-label {
-  font-family: var(--mc-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--mc-text-muted);
-}
-.mc-pstart__launch-title { margin: 0; font-size: 17px; font-weight: 700; }
-.mc-pstart__launch-meta { margin: 0; font-size: 13px; color: var(--mc-text-muted); }
-.mc-pstart__launch-actions { flex: 2 1 380px; display: flex; flex-wrap: wrap; gap: 16px; }
-.mc-pstart__action { flex: 1 1 200px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.mc-pstart__action-hint { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--mc-text-muted); }
+/* 2026-07-31：舊 launch 卡（`__launch` / `__launch-id` / `__launch-label` / `__launch-title` /
+   `__launch-meta` / `__launch-actions` / `__action` / `__action-hint` / `__tip`）已整批刪除——
+   PresentStart 改用 globals.css 的 `.mc-launchcard` 家族，tsx 只剩 `.mc-pstart`、`__grid`、`__pick`、
+   `__action-link` 四個 class。`__action-link`（下一行）仍在用，保留。 */
 .mc-pstart__action-link { color: var(--mc-accent); font-weight: 600; }
-.mc-pstart__tip { flex: 1 1 100%; margin: 0; padding-top: 4px; border-top: 1px solid var(--mc-border); font-size: 12.5px; color: var(--mc-text-muted); }
