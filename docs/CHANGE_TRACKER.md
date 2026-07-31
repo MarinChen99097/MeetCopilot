@@ -35,6 +35,194 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-07-31 17:20 | /simplify 套用（13 項）——去重／死碼／單一真相來源
+- **工作區**: packages/shared, apps/server, apps/web
+- **類型**: refactor
+- **檔案**: `packages/shared/src/slide-spec.ts`, `apps/server/src/generation/pptx-render.ts`, `apps/server/src/org-routes/usage-queries.ts`, `apps/web/components/slide/slide-chart.tsx`, `apps/web/components/spend/SpendDashboard.tsx`, `apps/web/components/hud/HudView.tsx`, `apps/web/components/home/HomeDashboard.tsx`, `apps/web/components/studio/SlideEditor.tsx`, `apps/web/components/sim/MeetingSimulator.tsx`, `apps/web/components/present/PresentStart.tsx`, `apps/web/app/globals.css`, `apps/web/app/studio-present.css`, `apps/web/messages/en.json`, `apps/web/messages/zh-TW.json`, `docs/DESIGN_APPLY_CONTRACT.md`, `docs/design-handoff/*`（新增）
+- **改了什麼**（全部**行為不變**，無任何測試斷言被修改）：
+  1. `pptx-render.ts`：`mixWithWhite`／`mixWithBlack` 各自複製的 parseInt→位移→round→padStart 邏輯刪除，改為 `mixHex(hex,"FFFFFF"|"000000",ratio)` 的一行委派（逐通道、逐捨入等價）。
+  2. `slide-spec.ts` 新增 `SLIDE_DEFAULT_THEME = { bg:"F7F5F1", text:"15130F", accent:"12708C" }`（大寫無 `#`——`normalizeHex` 的 fallback 是原樣回傳，小寫會改變 .pptx 輸出字面值）；`pptx-render` 的 `DEFAULT_THEME` 三色與 `SlideEditor` 的 `gradientFallback`（Before `?? "#12708C"` → After `` ?? `#${SLIDE_DEFAULT_THEME.accent}` ``）改為引用；CSS 端無法 import，`studio-present.css` 註解改指此常數。
+  3. `usage-queries.ts`：四處 `1.25`（2 段 SQL 的 `COALESCE(cost_tax_multiplier, 1.25)` ＋ 2 處 JS `?? 1.25`）收斂為檔頭 `LEGACY_TAX_MULTIPLIER`，SQL 以模板內插產生逐字相同的字串；註解寫明**不得**改接 env 可調的 `DEFAULT_TAX_MULTIPLIER`（會讓歷史列隨 env 浮動）。
+  4. `slide-chart.tsx`：`DonutChart` 兩分支逐字重複的 18 行 `<svg>` 提為 `const donut`，`centerValue` 分支包 `.chart__donut-slot`＋圓心數字，另一分支直接用——DOM 逐字等價。
+  5. `SpendDashboard.tsx`：主明細表與 by-meeting 表重複的兩層佔比條抽成 `<MeterBar pct>`（pct 仍由各呼叫端用自己的分母算好）。
+  6. `HudView.tsx`：三處 desk 早退分支手抄的雙 `<section>` 骨架抽成 `deskFrame(main, busy)`；`aria-busy={busy ? "true" : undefined}` 與原本「有寫／沒寫」輸出相同。
+  7. `HomeDashboard.tsx`：KPI 三支 fetch 的 `.then(alive && set).catch(()=>undefined)` 樣板抽成 `kpiJob`（回傳仍永不 reject → `Promise.all`／`kpiReady` 時序不變）。
+  8. 死碼刪除：`globals.css` 的 `.mc-companygrid`／`.mc-companycard*` 全家族＋`.mc-crm__controls`／`__search`（CRM 已改表格＋chip）、`.mc-home__agendaempty`／`__agendahint`（空態改走 StateBoundary）；`studio-present.css` 的 `.mc-pstart__head/__h1/__lead/__h2/__launch*/__action/__action-hint/__tip`（改用 `.mc-pagehead`＋`.mc-launchcard`）。三處均以墓碑註解取代，`PresentStart.tsx:102` 那條已失效的「住在 studio-present.css」註解同步改寫。
+  9. 孤兒 i18n 鍵：`home.phasePreDesc`／`phaseLiveDesc`／`phaseDrillDesc` 自 en/zh-TW 雙檔刪除（PHASES 只渲染 tag＋title，無動態組字）；parity 472/472 仍相等。
+  10. `MeetingSimulator.tsx`：兩處 `var(--mc-accent, #7c6cff)` 的舊紫 fallback 刪除（`--mc-accent` 在 `:root` 與深色皆無條件定義，fallback 永不觸發）。
+  11. `docs/design-handoff/`：把 session scratchpad 的 `DESIGN_INVENTORY.md`＋`MeetCopilot.dc.html` 原封複製進 repo（md5 逐位元相同），`DESIGN_APPLY_CONTRACT.md` 第 4–6 行指標改指 repo 內副本，§0–§3 條文逐字不動。
+- **為什麼**: 本輪重設計留下多處「同一份邏輯／同一段 markup／同一個魔數」的複製貼上與中途版死碼，改一處漏一處就是靜默走樣（稅率不一致、環圈兩型分歧、預設色三處鏡射）。設計稿指標指向會消失的 scratchpad，會讓數十處 `INVENTORY §A7` 註解變懸空。
+- **跳過**（未套）：`SuggestionQueue.isTalkTrack` 的三步→一句壓縮——I2 收緊剛落地且該函式是所見即所批准的判準，收益（3 行）不值得再動一次剛驗過的資產。
+- **回歸**（全綠、無斷言變更）：shared build ✓／crm build＋vitest **88 passed**／server tsc ✓＋vitest **456 passed**（66 檔）／web tsc ✓＋next build **19 路由** ✓／i18n parity **472 = 472**。
+
+### 2026-07-31 16:30 | code-review 確認項——isTalkTrack 收緊（I2）＋孤兒鍵＋死 CSS＋pill token
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/components/hud/SuggestionQueue.tsx`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`, `apps/web/app/studio-present.css`, `apps/web/components/sim/MeetingSimulator.tsx`
+- **改了什麼**:
+  (1) **`isTalkTrack` 收緊（I2，本次重點）**：Before
+  ```ts
+  const body = slide.blocks.filter((b) => b.type !== "heading" && b.type !== "subheading");
+  if (body.length > 1) return false;
+  return body.every((b) => b.type === "paragraph" || b.type === "quote");
+  ```
+  → After
+  ```ts
+  const textual = slide.blocks.filter((b) => TALK_BLOCK_TYPES.has(b.type)); // heading|subheading|paragraph|quote
+  if (textual.length !== slide.blocks.length) return false; // 有任何非文字 block → 縮圖分支
+  return textual.length <= 1;
+  ```
+  判準改為「**slide 的全部文字內容 ＝ 話術卡會顯示的那一行**」。Before 把 heading+subheading／heading+paragraph／heading+quote 都判成話術卡，而話術卡只印 `talkText()` **一行**（優先 heading）**且藏掉「編輯後加入」鈕**——報告者看到一行、按「加入簡報」，實際 APPEND 進 live deck 的卻含他沒看過的第二段文字。After 這三型與任何含 stat/bullets/features/chart/table/timeline/steps/image/two-col 的頁一律落**縮圖分支**（SlideRenderer 預覽＋3 鈕）。**wire 零改動**：兩型送出的 action 仍是 accept/edit/reject，A/S 鍵行為未動，`talkText()`／`EditPanel`／WS 協定一行未改——分類只決定呈現。
+  (2) **孤兒鍵**：zh-TW／en 雙語各刪 `hud.nextUp`（全庫 grep `nextUp` 於 tsx/ts/json 僅命中這兩處 message 定義，零消費端）。parity 掃描 475=475、雙向零差集。
+  (3) **死 CSS**：`studio-present.css` 刪 `.mc-present*` 家族兩段（原 591-611 舞台/通知/指示點/spinner ＋ 原 622-690 操作層/hint），共 ~90 行。逐 selector 查證：`PresentStage.tsx` 早已改用 globals.css 的 `.mc-stage3*`，全庫 grep `mc-present` 在 tsx/ts/json **零引用**（無動態拼接——舊碼的 template literal 亦含 `mc-present` 字面量，故單一 grep 即涵蓋全家族）。**連帶查證**：段內重複定義的 `@keyframes mc-pulse` 一併刪（globals.css:1388 已有同名定義，且 globals.css 由 `[locale]/layout.tsx` 全域載入，本檔消費者 hud/copilot 兩頁都在其下）；`mc-spin` 本就只定義在 globals.css:306。
+  (4) **保留（verifier 警告屬實）**：原 613-620 **不是** `.mc-present*`，而是 `.mc-editor__grid`／`__thumbs`／`__panel`／`.mc-feat-edit` 的 `@media (max-width:960px)` 響應式規則，**活的、未動**。ROM 給的「~592-689 整段刪」範圍若照抄會誤刪這 8 行。同理 `.mc-pstart*`（PresentStart.tsx 在用）亦未動。
+  (5) **pill token**：`MeetingSimulator.tsx` 的 `pill` Before `background: "rgba(255,255,255,0.06)"` → After `var(--mc-surface-2)`（淺色 `rgba(21,19,15,0.045)`／深色 `rgba(255,255,255,0.055)`，雙主題自動翻轉），接續 2026-07-31 15:25 該筆「未處理」欄位列出的同批殘留。
+- **為什麼**: ROM 2026-07-31 16:00 決策 1（`/code-review` 確認項）。核心是 (1)：話術卡「只顯示一行卻 APPEND 整頁」是 I2「所見即所批准」的破口——批准閘的前提是報告者**看得到他在批准什麼**，少給資訊比多給一張縮圖危險得多，故收緊方向一律偏向縮圖分支。
+- **驗收**: `apps/web` `npx tsc --noEmit` **EXIT=0**；`npm run build` **EXIT=0（19 路由，與基準一致、無新增路由）**；i18n parity zh 475 = en 475、雙向零差集、`hud.nextUp` 確認消失。**Playwright DOM readback**（臨時 fixture 頁掛真 `SuggestionDeck`＋真 messages，readback 後已刪除、未進 git）六形狀全數符合預期：
+  | slide 形狀 | 分支 | 鈕數 | 「編輯後加入」 | A 鍵 wire |
+  |---|---|---|---|---|
+  | heading+subheading | THUMB ✓ | 3 ✓ | 有 ✓ | `accept` ✓ |
+  | heading+paragraph | THUMB ✓ | 3 ✓ | 有 ✓ | `accept` ✓ |
+  | 純單行 paragraph | TALK ✓ | 2 ✓ | 無 ✓ | `accept` ✓ |
+  | heading+quote | THUMB ✓ | 3 ✓ | 有 ✓ | `accept` ✓ |
+  | heading only | TALK ✓ | 2 ✓ | 無 ✓ | `accept` ✓ |
+  | heading+stat | THUMB ✓ | 3 ✓ | 有 ✓ | `accept` ✓ |
+
+  關鍵佐證：三個 THUMB 形狀的**第二段文字確實渲染在縮圖裡**（`SUBHEADING_A_HIDDEN_BEFORE`／`PARAGRAPH_B_HIDDEN_BEFORE`／`QUOTE_D_HIDDEN_BEFORE` 皆出現在 `.mc-appr__preview`；heading+stat 的 preview innerText ＝ `HEADING_F | 42% | STAT_F`）——即修正前會被藏起來的內容現在都看得見。kicker 亦隨分支正確切換（THUMB＝「要不要補一頁給對方看」／TALK＝「現在可以這樣說」）。
+
+### 2026-07-31 15:25 | 三個小修——slide eyebrow 對比、spend 首載佔位、sim 深色 inline 殘留
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/app/studio-present.css`, `apps/web/components/spend/SpendDashboard.tsx`, `apps/web/components/sim/MeetingSimulator.tsx`
+- **改了什麼**:
+  (1) **slide eyebrow 對比**：`.slide` 的 `--slide-warn` Before `#a9661a` → After `#9b5e18`。實測（WCAG 2.x 相對亮度）：`#a9661a` on 預設紙底 `#f7f5f1` ＝ **4.190:1**（不過 AA 4.5）；`#9b5e18` on `#f7f5f1` ＝ **4.812:1** ✓。同色相壓深（HSV hue 31.9°→32.1°、S 不變），只動 `.slide` 內的預設 fallback 值——`.slide__eyebrow { color: var(--slide-warn) }` 等**所有變數消費點一行未改**，per-deck theme 由 SlideRenderer 打 inline style 覆寫的機制不受影響。註記：同色在純白上本來就是 4.563:1（所以 globals.css 的 `--mc-warn` 沒破、只有紙底 `#f7f5f1` 破），改後為 5.240:1。
+  (2) **spend 首載佔位**：`SpendDashboard` header 大數字 Before `{fmtUsd(postTaxTotal)}`（`data===null` 時 `postTaxTotal` 退 0 → 首載閃一格 `$0.00`）→ After `{data ? fmtUsd(postTaxTotal) : "—"}`。載入完成（含空區間 → 真的 `$0.00`）與錯誤後行為不變；下方 KPI 卡與明細表不動（明細表本來就有自己的 loading 三態）。
+  (3) **sim inline 殘留**：`MeetingSimulator` 的 `cardStyle` Before `border: 1px solid rgba(255,255,255,0.08)` ＋ `background: rgba(255,255,255,0.02)` → After `var(--mc-border)` ＋ `var(--mc-card)`（比照 SpendDashboard 2026-07-30 的同類修正）。
+- **為什麼**: ROM 2026-07-31 15:10 裁決三個小修。(1) 承接同日 `--mc-text-muted` 壓深的同一條標準（token 預設值必過 AA 4.5），eyebrow 是 kicker 小字、4.19:1 在縮圖尺寸下最吃虧。(2) 首載閃 `$0.00` 會被讀成「這區間沒花錢」，是假數字。(3) 舊深色皮殘留：**查證後發現 `.mc-card` 全庫沒有任何 CSS 規則**（globals.css 只有 `--mc-card` **變數**），所以這 6 張卡的外觀 100% 由此 inline 決定——原值在淺色主題下等於「邊框看不見、底色等於沒有」，並非「反正被 mc-card 蓋掉的冗餘」，故走「清成 token」而非刪除。副作用已知並接受：淺色主題下這 6 張卡從無框透明變成有框白卡（＝與全站其他卡片一致）。
+- **驗收**: `apps/web` `npx tsc --noEmit` **EXIT=0**；對比值以 WCAG 相對亮度公式實算（見上）。
+- **未處理（同檔、超出本次範圍）**: `MeetingSimulator.tsx` 的 `pill` 仍是 `background: rgba(255,255,255,0.06)`（同一批深色殘留，淺色主題下等於無底色）。
+
+### 2026-07-31 13:40 | W4-wire（web）——首頁 KPI／今日議程接真資料、spend 預算條＋單場成本、train 上次分數
+- **工作區**: apps/web
+- **類型**: feat
+- **檔案**: `apps/web/lib/api.ts`, `apps/web/components/home/HomeDashboard.tsx`, `apps/web/components/spend/SpendDashboard.tsx`, `apps/web/components/train/PersonaPicker.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **改了什麼**:
+  (1) **api.ts（唯一 REST 接縫）**：`MeetingRef` 補 `objective?`（023 已落庫）＋補註 `status` 四值與「`createdAt`＝建會時間、模型無 `scheduledAt`」；`listMeetings()` → `listMeetings({page?,pageSize?})`（既有唯一呼叫端無傳參，預設值行為不變）；新 `OrgBudget` 型別＋`OrgUsage.budget?`；新 `OrgMeetingCostRow` 型別＋`getOrgUsageByMeeting({from,to,limit?})`。
+  (2) **首頁（HomeDashboard）**：原本整塊「議程待端點」佔位（`home.agendaPending` 一句話＋按鈕）→ 改接真資料。KPI 列＝本週會議／簡報數／CRM 公司數／本月 AI 花費（後者 **owner/admin 才發請求**，member 連打都不打，該格不存在）。今日議程 ＝ `listMeetings({page:1,pageSize:50})` 前端篩 `createdAt >= 今日00:00 && status!=='completed'`；**滿頁且整頁都落在窗內**才在數字後加 `+`（`todayCapped`／`weekCapped`），不硬算第二頁。三格 KPI 各自 `.catch(()=>undefined)`＝**單支失敗只讓那一格消失，不會 0 兜底也不拖垮別格**；議程面板走 `StateBoundary`（載入 skeleton／錯誤＋重試／空態 EmptyState＋「開一場會議」CTA）。週首固定週一（`(getDay()+6)%7`），花費窗用 **UTC 月初**（與 server `OrgBudget.monthStart` 同定義，否則兩處數字對不上）。
+  (3) **spend**：`data.budget` 存在才渲染 `BudgetBar`（env `ORG_MONTHLY_BUDGET_USD` 沒設 → 後端無此欄 → 整條不出現）；分子取 `spentUsdPosttax`（使用者看到的是含稅），≥80% 轉 `--mc-warn`、超支轉 `--mc-danger` 並改寫「已超出 $X」；文案明寫「本月至今、**與上方查詢區間無關**」（後端該欄的窗恆為 UTC 本月）。新 `ByMeetingSection`（`/api/org/usage/by-meeting`，top 10＋佔比 bar＋StateBoundary 三態），標題與尾註都寫「**會中**成本」並說明「會前的簡報生成／研究／persona 草擬沒有 meetingId、不計入，故本表加總小於總花費——這不是漏帳」。title 缺（會議已刪）顯示 `會議 <id 前 8 碼>`，不編標題。
+  (4) **train**：persona 卡的 readiness 徽章列加「上次 N 分 · M 天前」（`mc-badge--info`）；`lastScore === undefined` ⇒ **整個徽章不渲染**（沒練過 ≠ 0 分），`lastPracticedAt` 缺就只顯示分數。
+  (5) **CSS**：globals.css 檔尾**只新增**一段 W4-wire 區塊（`.mc-kpirow`／`.mc-kpi*`／`.mc-agenda*`），全部吃既有 `--mc-*` token（雙主題自動成立），未改動任何既有規則。train 一行新 CSS 都沒加（複用既有 `.mc-badge--info`）。
+  (6) **i18n**：`home` 命名空間刪 `agendaPending`（版位說明字，已被真資料取代、全庫零引用），新增 `kpiSection`／`kpiWeekMeetings`／`kpiWeekMeetingsSub`／`kpiDecks`／`kpiCompanies`／`kpiAllTime`／`kpiSpend`／`kpiSpendSub`／`agendaCount`／`agendaUntitled`／`agendaEmptyTitle`／`agendaEmptyHint`＋`home.status.{scheduled,completed,canceled,no_show}`（005 CHECK 的四值），**zh-TW／en 雙語同步**（parity 掃描 en 473 = zh 473 鍵、雙向零差集）。
+- **為什麼**: ROM 2026-07-31 13:05 W4 範圍（前端接線）。前置的 W4-backend 盤點結論是「首頁不加端點、由既有清單自湊」，故所有數字都來自既有 REST，零新後端依賴。全程守「後端沒有的欄位不渲染、不留假數字」：設計稿的「該講的都講到 %」「建議採用率 %」「月底預測」「本週還能查幾次」在後端**沒有任何來源**（checklist 命中率與建議採納數不落庫、無預測、配額無週期），因此**繼續不渲染**——不是忘了做。spend 頁沿用該檔既有的「zh 硬寫 + inline style」慣例（全檔本來就沒有 `useTranslations`），沒有為兩個新區塊單獨引入 i18n 造成半英半中的破頁。
+
+### 2026-07-31 13:10 | W4-backend 便宜彙總端點——月預算欄＋單場成本端點＋persona 上次分數（零 migration）
+- **工作區**: packages/shared｜apps/server
+- **類型**: feat
+- **檔案**: `apps/server/src/org-routes/usage-queries.ts`, `apps/server/src/org-routes/index.ts`, `apps/server/src/train/last-score.ts`（新）, `apps/server/src/train/train-service.ts`, `packages/shared/src/train.ts`, `apps/server/src/org-routes/usage-budget-meeting.test.ts`（新）, `apps/server/src/train/persona-last-score.test.ts`（新）, `.env.example`
+- **改了什麼**:
+  (1) **首頁：不加端點**（先盤點的結論）。`GET /api/meetings` 已回 `{id,title,companyId,dealId,deckId,objective,status,createdAt}`（meeting-store.ts:207 `toRef`），今日議程／本週會議數前端自篩即可；deck 數＝`GET /api/decks` 的 `total`、公司數＝`GET /api/crm/companies` 的 `total`、本月花費＝`GET /api/org/usage`。湊法寫進 API_CONTRACT §9 尾註。
+  (2) **月預算**：`usage-queries.ts` 新增 `readMonthlyBudgetUsd()`（env `ORG_MONTHLY_BUDGET_USD`，**每次請求現讀**，空/非數/≤0 → null）、`utcMonthStart()`、`orgMonthToDateSpend()`；`OrgUsage` 加 optional `budget:{monthlyUsd,monthStart,spentUsd,spentUsdPosttax}`，由 `GET /org/usage` 在 env 有設時附掛。**env 未設＝整個欄位不存在**（前端不渲染預算條，不編造上限）。budget 的窗恆為 UTC 本月，與 `from/to` 查詢窗無關。
+  (3) **單場成本**：新端點 `GET /api/org/usage/by-meeting?from&to&limit` → `{items:{meetingId,title?,events,costUsd,costUsdPosttax}[]}`，依 `usage_events.meeting_id` 分組加總、成本由高到低取前 N（預設 10、上限 50）。`LEFT JOIN meetings m ON m.id=u.meeting_id AND m.org_id=u.org_id` 帶標題——**join 條件含 org_id**，故他 org 的會議標題永不外洩。`meeting_id IS NULL`（會前生成／研究／persona 草擬）一律排除，不做歸屬臆測。授權沿用 `requireManager`（owner/admin），無 rate limit（讀端點，照既有慣例）。
+  (4) **重複碼收斂**：三條 `/usage*` 的 `from/to` 解析（parseEpoch＋from>to＋400 天上限，原本各抄一份）抽成 `parseUsageWindow(req,res)`——不合法時**自己送 400** 並回 null，呼叫端 `if (!win) return;`。
+  (5) **persona 上次分數**：新 `train/last-score.ts`——`overallScore(scoresJson)`（相容新格式 `[{label,score}]` 與舊四維 object，取平均四捨五入、clamp 0–100；壞資料回 null）＋`lastPracticeByContact(db,orgId)`（`training_reports JOIN training_sessions ON s.id=r.session_id AND s.org_id=r.org_id WHERE r.org_id=? ORDER BY r.created_at DESC LIMIT 5000`，DESC 取每個 contact 第一筆＝最新）。`train-service.personas()` 於組完清單後**一次查完回貼**（非 per-contact N+1），`PersonaOption` 加 `lastScore?/lastPracticedAt?`；沒練過→兩欄 undefined（**不補 0**）。`seen` 與 `out` 兩個集合分開：最新那場若 scores_json 壞掉就回 undefined，**不退回去拿更舊一場冒充「上次」**（否則時間與分數對不上）。
+  (6) **team 動態：不做**（查證後結論，見「為什麼」）。
+  (7) 測試 +16：`usage-budget-meeting.test.ts` 11 條（env 未設/非法四值 → 無 budget 欄；設 100 → 月上限＋MTD，他 org $9.99 不混入；budget 不隨 from/to 窗變動；by-meeting 401/403 閘；排序＋會前用量不成列；**跨 org**：A 的用量列硬指向 B 的 meetingId → 成本記 A 但標題查不到、`"B 機密會"` 全回應零出現；limit／400）；`persona-last-score.test.ts` 5 條（overallScore 三格式；多次對練取最新、沒練過 undefined；**跨 org**：o2 拿 o1 的 contactId 建 99 分報告 → o1 的 personas 仍 undefined）。
+- **為什麼**: ROM 2026-07-31 13:05 W4 範圍 (b)「便宜彙總端點」。原則是先盤點既有 API 能不能湊、真缺的才加——故只新增**一條**端點（單場成本，既有 API 無法從 usage 明細分頁湊出 top-N 分組）＋**一個** optional 欄位（budget，前端沒有 env 可讀）＋**兩個** optional 欄位（lastScore/lastPracticedAt，避免前端對每個 persona 各打一次 report API）。**零 migration**（只讀既有 `usage_events`／`meetings`／`training_*` 表）。「team 動態」查證後不做：`activities` 表（005_deals_meetings.sql:164）雖存在，但全 repo 唯一觸及它的程式是 `packages/crm/src/contact-merge.ts:300` 的 contact_id 重指，**沒有任何 INSERT 寫入點**＝該表恆空；其餘表沒有跨使用者事件流（`meetings.presenter_user_id` 只能拼出「誰建了會」，已在 meetings 清單裡；`usage_events.user_id` 是花費不是動態；`field_provenance` 是逐欄來源不是 feed）——沒有便宜資料源，依「不發明資料」原則不做。
+
+### 2026-07-31 13:20 | W4-fix（web）——建議卡誠實文案＋chart 防炸＋/sim 錯誤字對比＋死 CSS 清除 232 行
+- **工作區**: apps/web｜apps/server（僅新增一支測試檔）
+- **類型**: fix＋chore
+- **檔案**: `apps/web/components/hud/SuggestionQueue.tsx`, `apps/web/components/slide/chart-guard.ts`（新）, `apps/web/components/slide/SlideRenderer.tsx`, `apps/web/components/slide/slide-chart.tsx`, `apps/web/components/sim/MeetingSimulator.tsx`, `apps/web/components/ui/Markdown.tsx`（註解）, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`, `apps/server/src/generation/slide-chart-guard.test.ts`（新）
+- **改了什麼**:
+  (1) **建議卡誠實文案（ROM 2026-07-31 13:05 裁決 1）**：primary 按鈕 Before `{talk ? t("sayThis") : t("addToDeck")}`（話術型寫「照這樣說」）→ After **兩型統一 `{t("addToDeck")}`＝「加入簡報」／"Add to deck"**。話術型的**大字呈現＋`kickerTalk`「現在可以這樣說」kicker 原樣保留**。i18n：刪 `hud.suggest.sayThis`（全庫零引用）；`hud.suggest.keys`（"鍵盤：A 照著說　S 跳過"）拆成 `keysSlide`／`keysTalk`，兩型都是「鍵盤：A 加入簡報　S 跳過」/"Keys: A add to deck · S skip"，呼叫端 `{talk ? t("keysTalk") : t("keysSlide")}`。**鍵盤處理器一個字沒動**（A→accept、S→reject，輸入框聚焦／in-flight 仍停用）；wire action 不變。
+  (2) **chart 防炸（裁決 2）**：新純函式模組 `chart-guard.ts`（`chartSeriesOk` / `describeShape`，無 React 無 JSX → 測試可直接 import 真跑）。`SlideRenderer` 的 `case "chart"` 在**建立 `<SlideChart/>` element 之前**先驗 `Array.isArray(block.series)`＋`series2` 若存在須為陣列，不合格 `console.warn` ＋ `return null`。根因：`renderSlideBlock` 的 try/catch 只包住「建立 element」，`SlideChart` 函式本體是 React 稍後才執行的，`series.filter is not a function` 丟在 catch 之外 → **炸掉整頁**（/present、/hud 縮圖、/sim 面板一起白）。`slide-chart.tsx` 內部再守一層：Before `series.filter(...)`／`(series2 ?? []).filter(...)` → After `(Array.isArray(series) ? series : []).filter(...)`／`(Array.isArray(series2) ? series2 : []).filter(...)`（合法輸入路徑逐字等價，DOM 不變）。
+  (3) **/sim deckErr 對比（裁決 3）**：`MeetingSimulator.tsx` 的 deck 載入失敗字疊在 `--mc-sunk` 佔位底上，淺色主題 `--mc-danger`(#c0403b) on `--mc-sunk`(#ebe7e0) 實測僅 **4.22:1**（未達 AA 4.5）。新增 token `--mc-danger-on-sunk`：淺色 `color-mix(in srgb, var(--mc-danger) 80%, black)` → #9a332f = **5.90:1** ✓；深色維持 `var(--mc-danger)`(#e5716b) on #151717 = **5.92:1** ✓（壓深反而變糊）。錯誤字改吃該 token。
+  (4) **死 CSS 清除**：globals.css **2493 → 2261 行（-232）**。刪除全庫零 tsx 引用的舊皮規則群：`.mc-cap*`＋`.mc-vu`、`.mc-hud`／`.mc-hud__*`／`.mc-hud--*`＋其 `@media (min-width:860px)` 兩欄 grid、`.mc-checklist*`、`.mc-sig*`／`.mc-line*`、`.mc-cardstream`／`.mc-infocard*`／`.mc-trust*`＋`@keyframes mc-trust-pulse`、`.mc-sugqueue`／`.mc-sugcard*`／`.mc-sugbtn`／`.mc-sugedit`、`.mc-slideprev*`、`.mc-cockpit*`（含 `.mc-shell__body .mc-cockpit` 與兩個斷點）。**保留**：`kbd{}`（元素選擇器，非死 class）、`@media (prefers-reduced-motion)`、`.mc-transcript`（ScoreReport.tsx:116 仍用）。刪前逐個 grep 確認 tsx/ts/json 零引用。
+  (5) 唯一殘留引用點 `MeetingSimulator.tsx` 的 `<div className="mc-card mc-cockpit__hud">` → 改 `className="mc-card"`：內嵌 HUD 的單欄收斂現已由 W3 的 `section.mc-hudm` 規則負責（`HudInner rootTag="section"` 自己輸出該 class），舊覆寫是配舊 `.mc-hud` 兩欄 grid 才需要的。`Markdown.tsx:35` 註解裡的 `mc-infocard__body` → `mc-intel__body`。
+  (6) **新增 probe 測試** `apps/server/src/generation/slide-chart-guard.test.ts`（10 測，全綠）：真跑 `chartSeriesOk`（`series:null`／`"x"`／物件／undefined 全判不合格；`series2:"x"` 不合格但 `series2:null` 合格）＋原始碼片段鎖住「守衛在 element 建立之前」與 slide-chart 兩層 filter 守衛，並斷言舊寫法不得復活。放在 apps/server 是因 apps/web 無測試 runner，沿用 `slide-legacy-lock.test.ts` 既有的跨包手法（該檔本來就讀 apps/web 的 SlideRenderer.tsx）。
+- **為什麼**: ROM 2026-07-31 13:05 三項裁決。(1) 「照這樣說」讓報告者以為只是唸一句、什麼都不會動，實際 accept 一樣把那頁 APPEND 進 live deck（同一條 I1/I2 路徑）——按鈕必須說出真正會發生的事。(2) LLM 回傳或舊資料的 chart 欄位形狀不可信，一顆壞 block 不得炸掉會議中的整個畫面。(3) 錯誤訊息是最需要讀得到的字，淺色主題下不得低於 AA。(4) W3 已把 cockpit/hud/stage 全面換到新 class（該包在 globals.css:1688 自述舊規則成死碼、留待 W4 清），死 CSS 留著只會讓後人不確定哪一套才是活的。
+- **驗收**: web `npx tsc --noEmit` **EXIT=0**；`npx next build` **EXIT=0、19 路由（不減）**；globals.css 大括號平衡 0／最小深度 0；i18n parity **461/461**（only-en、only-zh 皆空）；`vitest run slide-chart-guard slide-legacy-lock` **30/30 綠**（legacy-lock 20 測全綠＝chart 正常路徑逐字等價未破）；全庫 grep `mc-cockpit|mc-cap__|mc-hud__|mc-sugcard|mc-checklist|mc-line__|mc-infocard` 於 tsx/ts/json **零命中**（僅剩註解）。
+  **Playwright（載入 `next build` 產出的正式 CSS bundle，非理論值）**：deckErr 對比 light **4.22:1 → 5.91:1**（瀏覽器回 `color(srgb 0.602353 0.200784 0.185098)` ＝ #9a332f on #ebe7e0）、dark **5.92:1 → 5.92:1**（不變，本來就過），兩主題皆 ≥4.5 ✓；建議卡 DOM readback——zh 兩型 primary 皆「加入簡報」、en 皆 "Add to deck"，kicker 仍分「要不要補一頁給對方看」／「現在可以這樣說」，話術型仍只有 2 顆鈕（無「編輯後加入」），kbd 皆「鍵盤：A 加入簡報　S 跳過」/"Keys: A add to deck · S skip"，primary 觸控高 40px。截圖 `scratchpad/appr-{zh-TW,en}-{light,dark}.png`。
+
+### 2026-07-31 12:19 | W3 全站重設計——cockpit 三欄 Signal Desk＋I2「建議卡即批准卡」＋hud 手機視圖＋stage 新皮
+- **工作區**: apps/web
+- **類型**: refactor（UI 重塑；**WS 協定與授權零改動**）
+- **檔案**: `apps/web/components/copilot/CockpitView.tsx`, `apps/web/components/copilot/CopilotView.tsx`, `apps/web/components/copilot/VuMeter.tsx`, `apps/web/components/copilot/use-elapsed.ts`（新）, `apps/web/components/hud/HudView.tsx`, `apps/web/components/hud/SuggestionQueue.tsx`, `apps/web/components/hud/ChecklistPanel.tsx`, `apps/web/components/hud/InfoCardStream.tsx`, `apps/web/components/hud/TranscriptStream.tsx`, `apps/web/components/hud/DeepResearchBox.tsx`, `apps/web/components/hud/SlidePreview.tsx`（刪）, `apps/web/components/present/PresentStage.tsx`, `apps/web/app/[locale]/copilot/page.tsx`, `apps/web/app/[locale]/hud/page.tsx`, `apps/web/app/globals.css`（**只新增 W3 區段 :1916-2485**）, `apps/web/messages/en.json`, `apps/web/messages/zh-TW.json`
+- **改了什麼**:
+  (1) **cockpit 三欄 Signal Desk**（`.mc-desk` = 230px rail / 1fr main / 372px side）：`CopilotInner` 加 `variant="rail"`（LIVE 列＋VU＋同意閘＋主按鈕＋「這場會議」事實欄），`HudInner` 加 `layout="desk"`（回傳 `.mc-desk__main`＋`.mc-desk__side` 兩個 grid 子節點）。creds 仍由 CockpitView 擁有，建會後就地下發，兩端各開一條 WS（capture＋hud）＝原行為。
+  (2) **I2 批准形態＝建議卡即批准卡**（ROM 2026-07-30 21:17 決策 1）：`SuggestionQueue` 由「垂直佇列」改為 `SuggestionDeck`（一次顯示最前面一則＋`第 N/M 則`）。新純函式 `isTalkTrack(slide)`（body block ≤1 且只有 paragraph/quote）分兩型——話術：大字 `.mc-appr__line`＋「照這樣說／跳過」；補充頁：`SlideRenderer size="thumb"` 真縮圖＋「加入簡報／編輯後加入／跳過」。**送出的 wire 訊息完全不變**（`suggestion_action` × accept/edit/reject），EDIT 面板（eyebrow＋first heading → `editedSlide`）逐字保留。A/S 快捷保留（輸入框聚焦／in-flight 時停用）。
+  (3) **非樂觀更新加固**：`HudInner` 新增 `pendingActions: ReadonlySet<string>` in-flight 集合，按鈕只送訊息＋disabled＋`aria-busy`，卡片只有收到 `suggestion_result`（或本地 expiresAt 逾時）才 `settle()` 移除。checklist 同理（`inFlight` 只做視覺淡化，狀態一律等下一份全量 snapshot）。
+  (4) **checklist 兩 variant**：`"desk"`＝cockpit 右欄常駐（標頭進度條＋混排可勾列表＋分類 tag＋「正在講」左脊）；`"bar"`＝/hud 手機收合單行（`max-height:48px`，進度＋下一項，點開分三組）。replace 語意 reducer、分母排除 skipped、全 skipped 不除零——全部逐字保留。
+  (5) **hud 手機視圖**（`.mc-hudm`）：頂列（LIVE＋經過時間＋簡報頁）→ 清單列 → 批准卡 → 情報 tab（`filterIntel` 依既有 `InfoCardKind` 分「對方的資料／我們可以說」，**未新增 wire 欄位**）→ 逐字稿／深查改**摺疊保留**（設計稿手機版把兩者整個砍掉，這裡不跟——第二裝置可用性不得回退）。ConnectPanel 貼連結流程原樣換皮。
+  (6) **stage 新皮**（`.mc-stage3*`，取代 `.mc-stage*`）：深灰 `#111211` 底＋內縮 16:9 淺紙＋重陰影，**顏色寫死 hex 不接 `--mc-*`**（app 切主題不得改變被分享出去的畫面；實測 stage-light.png 與 stage-dark.png 位元組數相同）。I3：`PresentStage.tsx` import 白名單**一個都沒加**；控制列**不放**設計稿那兩句常駐說明（其一直接提到 HUD，且會被一起分享）。
+  (7) 刪 `hud/SlidePreview.tsx`（其職責被批准卡的 `SlideRenderer` 縮圖取代；全庫零殘留 import）；新 `copilot/use-elapsed.ts`（`useElapsedLabel`＝從 client 事件起算的真實經過時間，刻意不用牆上時鐘以免 hydration mismatch）。
+  (8) `/copilot` 與 `/hud` 的 page.tsx 各加 `import "../../studio-present.css"`——批准卡縮圖要用 `.slide*` 規則，那支 CSS 只被 studio/present 匯入過。
+  (9) i18n：新文案全進雙語（含本輪補的 `copilot.vuLabel`，把 VuMeter 原本寫死的中文 `aria-label` 換成 prop）；parity 461=461、`only en`／`only zh` 皆空。
+  (10) 溢出防護：新增 `section.mc-hudm { min-height:0; max-width:none; padding:8px 6px 12px; }`。`.mc-hudm` 的 `min-height:100dvh` 只有「整個第二裝置畫面」才成立，而 `HudInner` 也被 `/sim`（`MeetingSimulator.tsx:576`，`rootTag="section"`）內嵌在一張 `minHeight:360` 的卡片裡——不加這條會把該面板撐成一整屏高。standalone `/hud` 走 `<main>`（rootTag 預設），不受影響。**未改任何既有規則、未動 sim 的檔案。**
+- **為什麼**: DESIGN_APPLY_CONTRACT §2 W3。舊 cockpit 是兩欄堆疊、建議是一條垂直佇列＋另一塊縮圖預覽，報告者在會議中要同時掃三處才知道「現在要不要按」；設計稿把批准動作收斂成主舞台單卡，使用者拍板「建議卡即批准卡」。重塑全程只動呈現層——protocol.ts 未改一字，presenter 身分閘仍在 server，前端不代為判斷授權。
+- **驗收**: web `tsc --noEmit` EXIT=0；`next build` EXIT=0、19 路由（不減）；i18n parity 461/461；Playwright 雙主題走查（cockpit 三欄／兩型建議卡／建會表單／hud 430px／stage）**console errors: 0**；I2 攻擊自測（掐斷 WS send 後點「加入簡報」）＝卡片仍在、in-flight、按鈕 disabled，收到 server `suggestion_result` 才消失；checklist 勾選 `1/4 → 1/4` 不動；A 鍵送 `{"type":"suggestion_action","action":"accept"}`、S 鍵送 `reject`，全程 wire 型別只有 `hello`／`suggestion_action`；stage DOM 稽核 `shell=0`、HUD 詞彙命中 0。
+
+### 2026-07-31 09:27 | W2.5 七項小修——對比／配色對齊（螢幕↔pptx）／pptx 預設淺紙／marker 匯出／空殼守門／渲染防炸
+- **工作區**: apps/web｜apps/server
+- **類型**: fix
+- **檔案**: `apps/web/components/sim/MeetingSimulator.tsx`, `apps/web/app/globals.css`, `apps/web/components/slide/slide-chart.tsx`, `apps/web/components/slide/SlideRenderer.tsx`, `apps/web/components/studio/BlockEditor.tsx`, `apps/web/components/studio/SlideEditor.tsx`, `apps/server/src/generation/pptx-render.ts`, `apps/server/src/generation/slide-gen.ts`, `apps/server/src/generation/slide-new-blocks.test.ts`, `apps/server/src/generation/slide-legacy-lock.test.ts`
+- **改了什麼**:
+  (1) **/sim 灰字**：8 處 `var(--mc-text-dim, #9aa3b8)` → `var(--mc-text-2)`（`--mc-text-dim` **從未被定義過**，等於永遠吃寫死的冷灰 fallback，在新的暖米白底上只有 2.20:1）；`#e5657f`（錯誤字，2 處：SetupPanel startErr／預覽 deckErr）→ `var(--mc-danger)`。連帶把預覽佔位框 Before `background:"#000"` → After `var(--mc-sunk)`——不改的話上面那行剛 token 化的提示字會壓在純黑上，反而更糟。
+  (2) **globals.css `--mc-text-muted` 兩值**（ROM 2026-07-31 09:05 裁決；只動這兩行）：淺色 `#9c9488`→`#7d766a`（on `--mc-card` 3.00→**4.50:1**）、深色 `#7b776f`→`#8f8a81`（on `--mc-card` 3.47→**4.50:1**）。
+  (3) **圖例 swatch 對色**：`slide-chart.tsx` paired 圖例 Before `PALETTE[i]`（accent／accent-2 兩個彩色）→ After 新增 `PAIRED_COLORS = ["var(--slide-sunk)","var(--slide-accent)"]`，與 `studio-present.css:245-246` 的長條實色逐格一致（原本圖例色 ≠ 長條色）。
+  (4) **pptx paired 配色**：`addChartBlock` Before 一律 `chartPalette(...)` → After `paired ? pairedChartColors(theme) : chartPalette(...)`；新增 `mixHex()`＋`pairedChartColors()`＝`[mixHex(text,bg,0.07), accent]`，即螢幕 `--slide-sunk`（`color-mix(text 7%, bg)`）＋ accent。預設主題下算出 `E7E5E1`／`12708C`（測試斷言此二值出現在 chart XML）。
+  (5) **pptx 預設主題深藍→淺紙**（裁決的外觀變更）：`DEFAULT_THEME` Before `bg 18233B / text E6EBF5 / accent 22D3EE` → After `F7F5F1 / 15130F / 12708C`（對齊 `studio-present.css` 的 `--slide-bg/-text/-accent`）。連帶 `resolveTheme.muted` Before 恆為 `MUTED(96A2C2)` → After **僅在該頁沒有顯式 `theme.text` 時**改用 `DEFAULT_THEME.muted(5C564C)`——否則 96A2C2 藍灰壓在 F7F5F1 淺紙上只有 2.4:1，副標/圖說幾乎看不見；**有顯式 theme 的 per-deck 路徑逐字不變**（新增測試同時鎖兩邊）。
+  (6) **`bullets.marker` 進 pptx**：新增 `BULLET_PREFIX = {check:"✓ ", cross:"✕ ", dash:"— "}`；有 marker → 文字前綴＋`bullet:false`（關掉原生圓點，否則變「• ✓ …」），無 marker／`dot` → 逐字維持原本 `bullet:{indent:14}` 的圓點清單。
+  (7) **supplement 空殼守門**：`generateSupplementSlide` Before `return slide.blocks.length > 0 ? slide : null` → After 追加 `hollow = slideQaIssues(slide).includes(timeline-missing|matrix-missing)`，命中即回 null。理由：deck 生成路徑有 `reviseSlides` 可重做，會中補充頁沒有（單張、即時），版式主角 block 被 sanitize 濾掉就只剩一個標題 → append 進 deck 是一張沒人看得懂的空白版式頁。
+  (8) **渲染防炸**：`renderSlideBlock` 改成 try/catch 薄包裝（壞 block 回 null＋`console.warn` 一行），原 switch 原封不動搬進 `renderSlideBlockInner`；`default:` 分支保留 `never` 窮舉檢查但執行期改回 `null`（原本會把 block 物件當 ReactNode 回給 React ＝ 整頁炸）。`BlockEditor` TableFields 欄數下限 2（`canRemoveCol = cols > 2`，到底時 `disabled`＋title 說明）。`SlideEditor.gradientFallback` 舊紫粉 `#8b5cf6→#ec4899` → `#12708C→#74C3D3`。
+  (9) **測試 +9**（421→430，63 檔不變）：pptx marker 前綴實測 `✕ 對帳靠人工`／`✓ 15 分鐘…`；`buNone` vs `buChar` 二選一；paired chart 色 `E7E5E1`＋`12708C`；預設淺紙三色到位且舊四色（18233B/E6EBF5/22D3EE/96A2C2）皆不出現；顯式 theme 仍走 96A2C2；空殼守門 timeline／matrix 回 null＋content 頁不受影響；legacy-lock 補鎖「防炸包裝只加在最外層」。
+- **為什麼**: ROM 2026-07-31 09:05 七項裁決。共同根因是重設計把底色從深色翻成淺紙後，**所有寫死的深色時代顏色都反轉成低對比**（`--mc-text-dim` 這種從未定義的變數尤其隱形：tsc/build 全綠、console 無聲，只有量 computed color 才看得到）；同時螢幕端新版式的配色（paired 長條、淺紙預設）沒有同步到 pptx 匯出端，破壞「畫面 ＝ 匯出」不變量。防炸與空殼守門則是把「會中一張壞頁炸掉整場」的尾風險關掉。
+
+
+### 2026-07-30 23:20 | W1 全站重設計④——修 `--mc-font` 在 :root 失效導致全站掉回 Times New Roman
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/app/globals.css`
+- **改了什麼**: Before `:root { --mc-font: var(--font-display), var(--font-tc), system-ui, …; }` → After `:root` 只放**不含 var() 的純 fallback stack**，另在 `body` 區塊重新定義 `--mc-font`／`--mc-font-display`／`--mc-font-mono` 把 next/font 的三個變數接上去。根因：next/font 的 `--font-display/-mono/-tc` 是掛在 `<body className>` 上的，而 custom property 的 `var()` 替換發生在**宣告處**——`:root` 上取不到它們 ⇒ `--mc-font` 整條變 guaranteed-invalid（實測 `getComputedStyle(:root).--mc-font === ""`）⇒ `body{font-family:var(--mc-font)}` 失效 ⇒ 掉回瀏覽器初始值 **Times New Roman**，且三個字族一個都沒下載（實測 `document.fonts` loaded 陣列為空、零個 woff2 請求）。修完實測：body/h1 computed＝`"Space Grotesk"`、kicker computed＝`"IBM Plex Mono"`、9 個 woff2 皆 200、loaded 含 Space Grotesk／IBM Plex Mono／Noto Sans TC。順帶調側欄標頭讓 wordmark 不再被主題鈕擠掉（sidebar padding 12→10px、head gap 6→5px、wordmark 15.5→15px `-.02em`、themeswitch 鈕 22→20px）。
+- **為什麼**: 舊版 `--mc-font` 是純 system stack 所以同樣寫法不會爆；改成 next/font 後才踩到這個 CSS 變數作用域陷阱。這種失效是**靜默**的（不進 console、tsc/build 全綠），只有實機量 computed font-family 才抓得到——截圖上「標題變襯線體」是唯一線索。
+
+### 2026-07-30 22:40 | W1 全站重設計③——一般畫面逐一重做（home／crm 列表＋詳情／present-start／train／spend／team）
+- **工作區**: apps/web
+- **類型**: refactor
+- **檔案**: `apps/web/components/home/HomeDashboard.tsx`, `apps/web/components/crm/CompanyListView.tsx`, `apps/web/components/crm/CompanyDetailView.tsx`, `apps/web/components/present/PresentStart.tsx`, `apps/web/components/train/PersonaPicker.tsx`, `apps/web/components/spend/SpendDashboard.tsx`, `apps/web/components/settings/TeamSettingsView.tsx`, `apps/web/app/globals.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **改了什麼**:
+  (1) **共用版式原語**（globals.css 新增）：`.mc-panel`／`.mc-pagehead`（kicker→29–32px h1 `-.02em`→lead→右側動作）／`.mc-navlink`／`.mc-filterbar`＋`.mc-chipfilter`／`.mc-table`（`__scroll` 讓表格自己橫捲、body 永不橫捲）＋`.mc-table__head/__row`／`.mc-avatar`／`.mc-statustag`／`.mc-bar`。
+  (2) **首頁**（§B1）：Before 三欄 PRE/LIVE/DRILL flow＋動畫 rail → After 日期 mono kicker＋32px h1＋脈衝 primary CTA，下方 2 欄（左 1.6fr「今天的會議」面板／右 1fr 三張階段卡）。**4 張 KPI 與議程列表刻意不渲染**（需 meetings repo／跨會議 checklist 聚合／budget，全部不存在——§D1 P0），左欄改給一句實話＋「開一場會議」出口。日期用 `Intl.DateTimeFormat` 且**只在掛載後計算**（時區在 server 算會對不上）。
+  (3) **CRM 清單**（§B6）：卡片牆 → 表格；`<select>` → 5 顆狀態 chip；`ConfidenceBadge` → 進度條＋mono 百分比（≥75 ok／≥50 warn／<50 live）；狀態文案改口語（還沒聊過／談到一半／已成交／沒下文了）。設計稿的「誰做決定」「下次見面」後端無資料 → **不渲染**，版位讓給既有真欄位「產業」；篩選 chip **不顯示計數**（無 facet count API）。分頁、＋新增客戶展開表單、三態全部保留。整檔改走 i18n（新增 `crm.*` 30 鍵）。
+  (4) **公司詳情**（§B7）：header 27px h1／52px 圓角方 logo／tab 38px＋mono 計數 badge；新增「開會時用這份資料」→ /copilot（§B7 差異 6）。設計稿把 9 tab 砍成 5、overview 換成 6 張銷售敘事卡＝**需要不存在的敘事聚合層**（§D1），故只換版式配色，tab 與欄位一字不動。
+  (5) **/present/start**（§B4）：deck 卡片牆 → 左欄橫向列表列（104px 頁數縮圖佔位｜標題＋meta｜已選/選擇）＋右欄 340px sticky 啟動卡。設計稿的「開始前確認三件事」preflight 三項都無後端欄位 → 不做假勾選，只保留真判斷（有無會議 session ⇒ 連線播放能否按）。**兩條播放路徑保留**（設計稿收斂成一顆鈕是原型缺漏）。新 class 全部放 globals.css，**刻意不動 studio-present.css 裡的 `.mc-pstart__*`（W2 檔案）**，且 markup 不再併用 `.mc-pstart__head`（與 `.mc-pagehead` 的 flex-direction 會打架）。
+  (6) **/train**（§B9）：只換 header 版式＋persona 卡（13px 圓角、acc 框＋accSoft 底、34px 方 avatar、3 欄 grid）。設計稿改成 3 個抽象「客戶類型」並砍掉情境模式／語言／難度／目標＝**產品語意變更**，契約未授權 → 對象仍綁 CRM persona、設定全留。
+  (7) **/spend**（§B10）：header 換成「區間 kicker ＋ 大金額 h1」；**inline style 的寫死色全清**——Before `rgba(255,255,255,.08)` 卡框／`var(--mc-text-dim, #9aa3b8)`（`--mc-text-dim` 根本沒定義，等於永遠吃 fallback 灰）／`#e5657f`／`rgba(255,255,255,.07)` 進度槽 → After `var(--mc-border)`／`var(--mc-text-2)`／`var(--mc-danger)`／`var(--mc-sunk)`，表頭改 mono。月上限／預測／單場成本／週配額後端皆無 → 不渲染；區間鈕、分組 segmented、逐筆明細表全部保留。
+  (8) **/settings/team**（§B11）：兩個 `<section>`（成員／待接受邀請）合併成**一張 4 欄表**＋狀態欄（使用中／還沒接受）；設計稿的「最近做了什麼」後端無欄位（`OrgMember` 只有 `createdAt`）→ 改渲染真實的「加入／邀請時間」。設計稿砍掉的角色 select／移除／撤銷**全部保留**。新增 `org.team.*` 8 鍵。
+  (9) 側欄標頭 238px 內要塞 logo＋wordmark＋主題鈕＋收合鈕：gap 10→6px、wordmark 允許 ellipsis、收合鈕 30→28px（截圖實測 wordmark 會壓到主題鈕）；rail（64px）時隱藏主題 segmented 與 `en` 欄避免溢出。
+- **為什麼**: DESIGN_APPLY_CONTRACT §2 W1「畫面逐一照 INVENTORY §B 的行號重做」＋§1 資料不變量「後端沒有的欄位不渲染、不留假數字」。設計稿有 20+ 個綁定欄位在後端不存在（§D1），照抄就是編造數字給使用者看；因此一律「有資料就照設計做、沒資料就留版位」，缺口清單交給 W4 補端點後再接。設計稿同時砍掉大量既有能力（分頁、篩選表單、播放雙路徑、對練設定、花費明細、成員管理操作）——那是單一 shell 原型的展示缺漏，不是產品決策，故全部保留。
+
+### 2026-07-30 22:05 | W2 全站重設計②——slide 模板全鏈（新 3 block／新 2 template／17 版式 CSS／生成 prompt／pptx 映射）
+- **工作區**: packages/shared｜apps/server｜apps/web
+- **類型**: feat
+- **檔案**: `packages/shared/src/slide-spec.ts`, `apps/server/src/generation/slide-gen.ts`, `apps/server/src/generation/pptx-render.ts`, `apps/server/src/generation/slide-legacy-lock.test.ts`（新）, `apps/server/src/generation/slide-new-blocks.test.ts`（新）, `apps/web/app/studio-present.css`, `apps/web/components/slide/SlideRenderer.tsx`, `apps/web/components/slide/slide-chart.tsx`, `apps/web/components/studio/BlockEditor.tsx`, `apps/web/components/studio/slide-block-ops.ts`
+- **改了什麼**:
+  (1) **shared 契約（純新增）**：`SlideBlock` 加 `table{headers,rows,highlightColumn?}`／`timeline{ticks,tracks}`／`steps{steps}`；既有 block 加選填欄位 `stat.desc?`、`bullets.marker?`（`BULLET_MARKERS`＝dot/check/cross/dash）、`chart.series2?/seriesNames?/centerValue?/centerLabel?`；`SLIDE_TEMPLATES` 6→8（＋`timeline-gantt`／`comparison-matrix`，`AI_GENERATION_TEMPLATES` 因此也含新版式）；新型別 `TimelineTick/TimelineTrack/StepItem/TimelineEmphasis` 與版面上限常數 `MAX_TABLE_COLUMNS=4/MAX_TABLE_ROWS=6/MAX_TIMELINE_TICKS=6/MAX_TIMELINE_TRACKS=4/MAX_STEPS=5`（server sanitize＋prompt＋測試共用，不各自硬列）；`extractSlideText` 補三個新 case 與 chart/stat 的新欄位——**新欄位一律接在既有 push 之後且以 if 守衛**，舊 spec 輸出逐字不變。timeline 用語意 `emphasis`（on/warn/off）而非 hex，色由渲染器從 `--slide-accent` 衍生，才吃得到 per-deck theme。
+  (2) **CSS 17 版式（`studio-present.css`，單位一律 cqw ⇒ 編輯器畫布與舞台同尺度）**：`.slide` 預設 token **深卡→淺紙**——Before `--slide-bg:var(--mc-card)`／`--slide-text:var(--mc-text)`（跟 app 主題走）→ After 寫死 `#f7f5f1`／`#15130f`／`#12708c`（設計盤點 §A9：投影出去的畫面永遠淺色、與 app 深/淺主題脫鉤）；新增 `--slide-mono-font`／`--slide-dim`／`--slide-accent-soft`／`--slide-sunk`／`--slide-warn`。eyebrow 改 mono kicker（去 uppercase／去粗體、11px÷820 ≈ 1.35cqw，與舞台 15px÷1120 同尺度）；mesh 三層 radial-gradient → 封面/分節左側 accent 粗條（§C16 的風格轉向）；標題 4.6→3.5cqw＋`letter-spacing:-.02em`、內文 2.3→1.95cqw/1.75 行高。新增 `.slide-block--table/--timeline/--steps`、`bullets--check/cross/dash` marker 變體、`.stat__desc`、`.chart__bars--paired`／`.chart__donut-center`／`.chart__series-legend`，以及 `.slide--timeline-gantt`／`.slide--comparison-matrix` 兩個頁級版式。其餘 15 個設計版式以「既有 template × block 組合＋CSS 選擇器」表達，**不增 enum**：`hero-single-stat`＝`.slide--stats .slide__body:has(> .slide-block--stat:only-of-type)`（整頁 accSoft＋96px 大數字）、`pull-quote-dark`＝`.slide--section .slide__body:has(.slide-block--quote)`（整頁反底）、`before-after`＝`.slide--content` 的 two-col 兩欄各自成面＋bullets marker、`image-full-caption`＝`:has(.slide-block--image)` 時圖 absolute 鋪底＋底部漸層字幕層、`paragraph-explainer`/`bullet-highlights`＝單一段落/條列時垂直置中。`--slide-*` per-deck override 機制不動（inline style 仍蓋得掉全部）。
+  (3) **renderer**：`renderSlideBlock` 加 table/timeline/steps 三分支（table 以 grid＋`--table-tracks` 完整 track list 表達首欄較寬；timeline 的 startPct/widthPct 再 clamp 一次；steps 序號 `01/02…` 與色階由 index 衍生，不進資料）；stat 多一個 `desc ? … : null`、bullets 的 marker class 用 `filter(Boolean).join(" ")` ⇒ **無 marker 時 class 字串逐字等於舊值**。`slide-chart` 的單序列與無 centerValue 路徑刻意保留原 DOM（成對/圓心走另一分支）。`EditableSlide` 未改：新 block 自動落到既有 `default: renderSlideBlock` ⇒ 就地編輯態唯讀顯示、編輯走 BlockEditor（符合契約「至少要有表單可編」）。`BlockEditor` 加 table/timeline/steps 表單（表頭增刪同步所有列，結構上不可能產生列長≠欄數）＋stat.desc／bullets.marker／donut 圓心欄位＋新版式中文標籤；`slide-block-ops.newBlock` 補三個 case（窮舉 switch 否則編譯不過）。
+  (4) **server 生成**：`BLOCK_SCHEMA` enum ＋屬性補齊（`rows` 走 `{cells:string[]}` 物件包裝——巢狀陣列在結構化輸出較不穩，sanitize 兩種形狀都收）；`sanitizeBlock` 新增三個 case 與守門：table 列長補/裁到欄數、<2 欄或全空列濾除、highlightColumn 越界丟棄；timeline `startPct+widthPct>100` 夾回版面內、軌道全滅則整個 block 濾除；chart `series2` 長度不等於 `series` 即退回單序列（寧可不畫也不畫錯）、`centerValue` 只對 donut 生效。prompt：`TEMPLATE_INTENT_ZH`／`BLOCK_SHAPE_PROMPT_ZH` 納入新版式與新欄位；**supplement（會中補充頁）版型選擇規則**沿用既有「依訊號選版型」寫法擴編——時程/什麼時候能上線→`timeline-gantt`、對方說在比誰/競品對比→`comparison-matrix`、接下來怎麼做→`content＋steps`、現況 vs 導入後→two-col＋cross/check marker、客戶原話→section＋quote，並新增第 (3) 條**事實紀律**（table 競品欄／chart 數值／timeline 時間只能引用逐字稿已出現或我方已驗證的資訊，湊不出就退回純文字版型）。`slideQaIssues` 加 `timeline-missing`／`matrix-missing`（主角 block 被濾掉的空殼頁會進 reviseSlides 重做），revise prompt 同步。
+  (5) **pptx 匯出（每個新版式都帶映射，實測產檔）**：`addTableBlock` 走**原生 `addTable`**（可在 PowerPoint 內續編）、首欄較寬、highlightColumn 吃 accent 淡底；`addTimelineBlock` 刻度色條＋每軌「槽＋條」兩個矩形（百分比幾何鏡射螢幕）；`addStepsBlock` 橫排等分欄＋頂色條＋序號/標題/說明/負責人；chart `series2` → 第二個 data set（自動開 legend）、donut `centerValue` → 疊一個置中文字框；`estimateHeight` 補三個 case；`renderSlide` 兩個新 template 路由到 `renderContent`（版面同為「標題＋一個主 block 吃滿」）。**修一個實測抓到的漏**：`renderStats` 自己畫 stat 卡（不走 layoutBlocks），原本會把 `stat.desc` 整段吞掉 → 改成有 desc 時輸出 label/desc 兩段 run。
+  (6) **測試 +2 檔 +46 測**（server 61 檔 375 測 → **63 檔 421 測**）：`slide-legacy-lock.test.ts`＝舊 spec 逐字等價鎖定（extractSlideText golden／renderSlideBlock 既有分支 JSX 原文比對／舊 deck pptx 匯出文字 golden／sanitizeBlock 對舊 block 的輸出形狀）；`slide-new-blocks.test.ts`＝新 block sanitize 往返與上限守門、extractSlideText 涵蓋、supplement mock LLM 回新版式過 zod、**pptx 對含全部新 block/新 template 的 deck 實測產檔**（解壓驗 `<a:tbl>`／軌道圖形數／`01–04` 序號／雙序列名稱／圓心數字）。
+- **為什麼**: DESIGN_APPLY_CONTRACT §2 W2。設計稿 16 個陳列版式＋1 個舞台版式與現行「6 template × 10 block」二維模型不對齊：多數是換皮（能用既有組合＋CSS 表達），但 `timeline-gantt`／`comparison-matrix` 現有 blocks 完全無法表達（chart 只吃 `{label,value}` 無法表達「起點＋長度」；two-col 只有兩欄），故必須新增 block 型別；`steps` 則是 features 加不上序號/負責人/橫排。新版式要能在**會中**被自動選用，所以 supplement prompt 與 zod/Gemini enum 必須同步——但競品表與時程是幻覺代價最高的內容（會當眾說錯），故同步加事實紀律條款與 sanitize 硬守門。向後相容鐵律（既有 deck 逐字不變）用 A/B 實證：把 `git show HEAD:pptx-render.ts` 與現版並排跑同一份舊 deck，`ppt/slides/slideN.xml` **全文完全相同**，該結果即 golden 落進回歸測試。
+
+### 2026-07-30 21:40 | W1 全站重設計①——token 全套替換（雙主題）＋next/font 三字族＋AppShell 主題切換
+- **工作區**: apps/web
+- **類型**: refactor
+- **檔案**: `apps/web/app/globals.css`, `apps/web/app/[locale]/layout.tsx`, `apps/web/components/AppShell.tsx`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **改了什麼**: (1) `:root` token 表整塊重寫：Before 深藍紫單主題（`--mc-bg:#0a0f1a`／`--mc-accent:#8b5cf6`／`color-scheme:dark`）→ After **設計稿 18 變數雙主題**，變數名沿用 `--mc-*` 重新映射（`--mc-bg:#f2efea`／`--mc-card:#ffffff`(=--panel)／`--mc-panel:#faf8f4`(=--panel2)／`--mc-accent:#12708c`／新增 `--mc-sunk`／`--mc-line2`／`--mc-warn-soft`／`--mc-warn-line`／`--mc-live`／`--mc-shadow`／`--mc-scrim`）；**淺色為預設**（`:root` 與 `:root[data-theme="light"]` 同一份），深色走 `:root[data-theme="dark"]`；`color-scheme` 跟著主題切（light/dark），否則淺色下 UA select／捲軸仍深色。(2) 全檔硬寫色掃乾淨：`rgba(139,92,246,*)`×32＋`#c4b5fd`／`#cdbcff`／`#7dd3fc`／`#6ee7b7`／`rgba(216,246,81,*)`（萊姆）／`rgba(109,124,255,*)`／`rgba(38,50,82,.5)`／`rgba(150,162,194,*)` 等 → 全改 `color-mix(in srgb, var(--mc-*) N%, transparent)` 或對應 token；6 處 `color:#fff` → `var(--mc-accent-contrast)`／`var(--mc-accent)`（深色主題 accInk 是**深色**，寫死白字會近黑底白字翻車）。(3) radius 刻度 3 檔→6 檔（`--mc-radius:9px` 為預設，新增 `--mc-r-xs:5px`、`--mc-r-lg:14px`）。(4) `.mc-kicker` 照 §A7 重做：去掉 `::before` 圓點＋`text-transform:uppercase`＋`font-weight:600`（內容是繁中），改 10.5px/.14em/400；`--live` 圓點改由 `.mc-kicker--live::before` 長出。(5) 新增共用原語 `.mc-sr`／`.mc-mono`／`.mc-bar`(進度條，含 --lg/--warn/--ok/--live)。(6) 字體：Geist/Geist_Mono → **Space Grotesk＋IBM Plex Mono＋Noto Sans TC**（`next/font/google` 自架，不用 Google Fonts `<link>`），`--font-display`／`--font-mono`／`--font-tc`。(7) `layout.tsx` `<head>` 加同步 inline bootstrap script 讀 `localStorage["mc.theme"]` 掛 `data-theme` 到 `<html>`——避免 FOUC。(8) `AppShell`：側欄標頭加 `ThemeSwitch`（☀/☾ segmented，狀態單一真相＝`<html data-theme>`、localStorage 持久）；nav 每項加英文縮寫欄 `en`（TODAY/CLIENTS/SLIDES/SHOW/LIVE/PRACTICE/COST/TEAM，語言中立→不進 i18n）；nav 標籤改口語繁中（新 i18n key `nav.item*`）；側欄寬 248→238px；active 態從紫光暈改 accSoft 底＋accLine 框＋acc 字；avatar 圓形漸層→28px 圓角方＋mono。**保留**設計稿沒畫的 rail 收合、≤880px 抽屜、`adminOnly` 權限分支、登出、/sim 群組。
+- **為什麼**: DESIGN_APPLY_CONTRACT §0／§2 W1：全站直接取代為新設計語言，淺色預設；沿用 `--mc-` 名減少全庫改名面。舊 CSS 有 2000 行深色 token 消費端，若只加新名不改舊值＝雙皮並存；硬寫色不掃＝淺底上仍是深色殘留。字體改 `next/font` 是 CSP／效能要求（契約 §0 明列不得用 `<link>`）。
+
+
 ### 2026-07-30 16:55 | C2 對抗驗證修正——三態負結果標記（§11.1 v1.4）＋匯入端點掛共用限流桶（§11.5 v1.4）
 - **工作區**: apps/server｜packages/crm
 - **類型**: fix

@@ -36,6 +36,105 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-07-31 17:20 | /simplify 套用批的四項執行期裁決（跳過 isTalkTrack、常數大小寫、設計稿進 repo、CSS 墓碑）
+- **誰決定**: Fable 指派之清理套用 agent（執行期裁決，據現地查證與回歸結果）
+- **決策**:
+  1. **跳過 `SuggestionQueue.isTalkTrack` 的一句化**（候選清單第 5 項）。指派時的守則明寫「收益小又碰剛驗過的（SuggestionQueue 的 I2 修剛落地）就跳過」——該壓縮只省 3 行、且該函式正是 I2「所見即所批准」的判準本體，剛在 16:00 批收緊並驗證過。等價性雖已逐情形核對（空 blocks／單一文字／單一非文字／多 block 四種），但不值得為 3 行再動一次剛驗過的資產。**其餘 12 項全部套用**（候選清單有兩組重複描述——donut 與稅率各出現兩次——實際獨立項為 13，扣掉跳過的 1 項）。
+  2. **`SLIDE_DEFAULT_THEME` 用大寫 hex，刻意不跟 `CHART_ACCENT_HUES` 的小寫慣例**。候選建議寫成 `bg:"f7f5f1"`，但 `pptx-render.normalizeHex` 的 fallback 分支是 `return … : fallback;`——fallback **原樣回傳、不經 `toUpperCase()`**，改小寫會讓無主題頁的 .pptx 輸出字面值從 `F7F5F1` 變 `f7f5f1`，`slide-new-blocks.test.ts:551-553` 立刻轉紅。慣例一致性 < 行為不變，故取大寫並在常數註解寫明原因。
+  3. **設計稿兩份檔案複製進 `docs/design-handoff/`（不是搬移、不改契約條文）**。只複製 `DESIGN_INVENTORY.md`＋`MeetCopilot.dc.html`（契約第 4–6 行點名的兩份，md5 逐位元相同）；同目錄的 `support.js` 不複製——契約未引用、且是原型執行檔而非設計真相。`DESIGN_APPLY_CONTRACT.md` 只改指標三行，§0–§3 規範條文一字未動。
+  4. **死 CSS 一律留墓碑註解，不留空白**。三處刪除（`.mc-companycard*` 家族、`.mc-pstart__launch*` 家族、`.mc-home__agendaempty`）各補一段註解寫明「誰取代了它、grep 零引用」，沿用本檔案既有慣例（`studio-present.css:591` 的 `.mc-present*` 墓碑）——避免下一位看到 `.mc-launchcard` 與舊名並存時誤以為漏刪，或把已刪的類名重新加回。
+- **脈絡與理由**: /simplify 候選是「建議」不是「指令」，套用者需就地驗證每一項是否真的行為不變。本批 13 項獨立候選中，2 項的建議寫法若照抄會改變行為（常數大小寫）或超出授權範圍（碰剛驗過的 I2 判準），故就地修正與跳過。
+- **考慮過的替代**: (1) 連 isTalkTrack 一起套（否——違反指派守則，且 I2 判準的任何改動都該配一次完整走查，不該搭清理批的便車）；(2) 把 `SLIDE_DEFAULT_THEME` 寫小寫再改 `normalizeHex` 補 `toUpperCase()`（否——那是**行為變更**，會動到 per-deck theme 路徑的輸出，遠超清理授權）；(3) 設計稿用「搬移」或只留連結（否——scratchpad 隨 session 消失，只留連結等於留懸空引用）；(4) 死 CSS 直接刪不留註解（否——本檔既有慣例是留墓碑）。
+- **影響**: packages/shared（新增 `SLIDE_DEFAULT_THEME` 匯出，additive、不改既有形狀）、apps/server（pptx-render／usage-queries）、apps/web（7 個元件＋2 個 css＋2 個 messages）、docs（DESIGN_APPLY_CONTRACT 指標＋新增 design-handoff/ 兩檔）；CHANGE_TRACKER 1 筆。全鏈回歸全綠且**無任何測試斷言被修改**：crm 88、server 456（不減）、web 19 路由、i18n parity 472=472。未 commit／未部署（待使用者核准）。
+
+### 2026-07-31 16:30 | 執行 16:00 修正批時的四項現場裁決（死 CSS 範圍縮小、keyframes、token 選擇、話術卡邊界）
+- **誰決定**: Fable 指派之修正 agent（執行期裁決，據現地查證）
+- **決策**:
+  1. **死 CSS 刪除範圍由「~592-689」縮小為「591-611 ＋ 622-690」兩段**，中間的 **613-620 保留不動**。
+  2. `studio-present.css` 段內重複定義的 **`@keyframes mc-pulse` 一併刪除**（非僅刪 selector）。
+  3. `MeetingSimulator.tsx` pill 白膜底改吃 **`--mc-surface-2`**（而非 `--mc-card`／`--mc-border`）。
+  4. `isTalkTrack` 的 `textual.length <= 1` **採字面實作（含 0）**：blocks 完全為空的 slide 仍判為話術卡。
+- **脈絡與理由**:
+  1. 16:00 決策已預警「verifier 指出區段內 613-620 疑似非死碼，刪前逐 selector grep 再驗」——**查證屬實**：613-620 是 `.mc-editor__grid`／`__thumbs`／`__panel`／`.mc-feat-edit` 的 `@media (max-width:960px)` 響應式規則，與 `.mc-present*` 無關且**活著**（編輯器窄視窗收單欄）。照 ROM 字面的連續範圍刪除會誤傷。同理 `.mc-pstart*`（PresentStart.tsx 在用）雖名字相近亦不在刪除範圍。`.mc-present*` 本身則確認為真死碼：PresentStage.tsx 已改用 globals.css 的 `.mc-stage3*`，全庫 grep `mc-present` 在 tsx/ts/json 零引用。
+  2. 該 keyframes 只服務被刪的 `.mc-present*` 規則，留著即孤兒；且 globals.css:1388 已有同名 `mc-pulse` 定義，而 globals.css 由 `[locale]/layout.tsx` 全域載入、涵蓋本檔僅有的兩個消費者（hud／copilot 兩頁），刪除後所有現存 `mc-pulse` 消費者（`.mc-stage3__waitdot--connecting`、`.mc-call__dot` 等）仍解析得到定義。反之若留著，兩份同名 keyframes 並存會依載入序互相覆蓋，是更差的狀態。
+  3. pill 是**淡色薄膜**（原 `rgba(255,255,255,0.06)`），語意上是 wash 而非卡片面。`--mc-card` 是不透明面色（淺色 `#ffffff`）會讓 pill 變成實心白塊、失去「淡標籤」外觀；`--mc-surface-2` 定義即為 hover wash（淺色 `rgba(21,19,15,0.045)`／深色 `rgba(255,255,255,0.055)`），深色值與原本的 0.06 幾乎等值，淺色則自動翻成深墨淡底——**雙主題都成立且視覺變化最小**。註：同檔 `cardStyle` 15:25 已改吃 `--mc-card`，兩者用不同 token 是刻意的（面 vs 膜）。
+  4. 0 blocks 的 slide 在舊實作下同樣回 true（`[].every()` ＝ true），**維持既有行為、不引入新分支**；且此形狀在 I2 上無風險——沒有任何內容會被藏起來（話術卡印空字串，縮圖也會是空頁），不構成「所見≠所批准」。
+- **考慮過的替代**:
+  1. 照 ROM 字面刪 592-689 連續段 → 會誤刪活的響應式規則，**否決**（這正是 16:00 要求逐 selector 復驗的原因）。
+  2. 只刪 selector、保留 keyframes 以求「最小改動」→ 留下無消費者的孤兒＋與 globals.css 同名衝突，**否決**。
+  3. pill 用 `--mc-card`（與同檔 cardStyle 一致）或 `--mc-border` → 前者變實心塊、後者是線色不是面色，**均否決**。
+  4. 收緊為 `textual.length === 1`（空頁改走縮圖）→ 屬於本次 I2 目標之外的行為變更，無風險收益，**否決**。
+- **影響**: `apps/web/app/studio-present.css`（少刪 8 行、`.mc-editor__*` 響應式保住）、`apps/web/components/sim/MeetingSimulator.tsx`、`apps/web/components/hud/SuggestionQueue.tsx`。驗收：web tsc EXIT=0＋build EXIT=0（19 路由不變）＋i18n parity 475=475＋Playwright DOM readback 六形狀全通過（詳見 CHANGE_TRACKER 2026-07-31 16:30）。**教訓**：ROM/review 給的行號範圍是線索不是授權，跨越註解區塊的連續範圍常混入他族 selector，刪前必須逐 selector 復驗。
+
+### 2026-07-31 16:00 | /code-review 裁決：修 1 confirmed（話術卡藏內文＝I2 知情批准回退）＋3 清理；polish 追認
+- **誰決定**: Fable（9 agents：polish＋5 鏡頭（3 鏡頭零 finding）＋逐 finding 反駁）
+- **決策 1（修，83 分）——話術卡藏內文**：`isTalkTrack` 對 section（heading+subheading）與 heading+paragraph/quote 形狀回 true → 卡上只顯示 heading，**subheading/paragraph/quote 的實質內容（如報價數字）零渲染、無縮圖、無編輯鈕**——報告者批准了自己沒看過的內容＝**I2 知情批准在最常見補充頁形狀上實質失效**（對舊 SlidePreview 的回退；wire/authz 機制本身完好）。修法照 verifier correctedFix：**isTalkTrack 僅在「整頁全部文字內容＝卡上顯示的那一行」時成立**（textual blocks ≤1 且無其他 block），其餘落縮圖分支（SlideRenderer 預覽＋編輯後加入）——回到使用者 07-30 拍板的形態。
+- **決策 2（修，killed 中 refuted:false 撈回）**：`hud.nextUp` 孤兒鍵刪除（55 分，真孤兒）；`.mc-present*` 死 CSS 家族 ~98 行（60 分，W4 清理 grep 清單漏掃）——**刪前逐 selector grep 再驗**（verifier 指出區段內 613-620 疑似非死碼）。加 polish 回報的 `MeetingSimulator.tsx:595` pill 舊白膜底。
+- **polish 追認**：eyebrow `#9b5e18`（紙底 4.81 ✓；section 反底頁 3.54 但 28.8px large text 門檻 3:1 過，接受）；**sim 六卡「清成 token」屬刻意視覺變化**（`.mc-card` class 全庫根本無 CSS 規則、外觀 100% 由 inline 決定——polish agent 查證推翻了我派工單的前提），淺色下變有框白卡與全站一致，**追認**。
+- **後續**: 修正＋/simplify＋總回歸 → WORKLOG → commit 提案待核准。
+
+### 2026-07-31 15:10 | W4 雙路總驗證 PASS；殘餘裁決（warn 族接受／slide eyebrow 修／載入 $0 修）＋agent 裁決項全數追認
+- **誰決定**: Fable
+- **W4 結果**：fix（話術卡誠實化＋chart 防炸＋deckErr 5.91:1＋死 CSS −232 行）∥ backend（首頁**零新端點**自湊、usage 加 `budget` optional 欄＋`by-meeting` 端點含跨 org join 鎖、train lastScore 一次查回貼非 N+1、team 動態**查證後不做**——activities 表恆空無寫入點）→ wire（home KPI 單支失敗只滅那格不兜 0、spend 預算條 env 未設整條消失、「會中成本」誠實文案、train 徽章無紀錄不渲染）。**regression PASS＋adversarial PASS**。server 66 檔 456 測、parity 476/476、12 態截圖零 console error。
+- **裁決（修，併入 polish）**：(a) `.slide__eyebrow` 預設色 4.18:1——全部 flag 中**唯一上舞台（觀眾可見）**者，預設值調至 ≥4.5（per-deck theme 不動）；(b) spend 首載 `data===null` 期大數字閃 `$0.00`——改佔位符「—」，與「拿不到不渲染」原則對齊；(c) sim :589 測試工具內嵌舊深色 inline 殘留順手清。
+- **裁決（接受記檔）**：warn 琥珀 tag 族 3.98–4.30（9.5–12px metadata 級非內文，與 mute 同屬 kicker 家族，併日後 a11y 總議）；mute on sunk 3.65 三處小 badge（11:50 裁決精神涵蓋）；by-meeting 回不透明外 org meeting_id（標題已被 org-join 擋死、測試明文預期）；last-score ORDER BY 無索引（org 報告破萬才需物化，記債）。
+- **agent 裁決項追認**：keysSlide/keysTalk 暫同文（保留分化空間、不發明文案）✓；chart guard 測試放 apps/server（沿 slide-legacy-lock 既有跨包手法）✓；今日議程含 canceled＋灰徽章（誠實呈現）✓；spend/PersonaPicker 沿檔內 zh 硬寫慣例（整檔 i18n 化另立工項）✓；`home.agendaPending` 刪除 ✓。**仍刻意不渲染**（後端無來源，非漏做）：講到%／採用率／月底預測／週配額。
+- **後續**: polish 3 項 → /code-review（全重設計 diff 五鏡頭＋對抗驗證）→ /simplify → WORKLOG 收尾 → commit 提案待使用者核准。
+
+### 2026-07-31 13:05 | W3 對抗驗證 PASS；三項裁決（話術卡誠實文案／chart 防炸補洞／deckErr 對比）＋W4 開跑
+- **誰決定**: Fable（審 W2.5 復驗 11 條＋W3 對抗驗證 3 條）
+- **W3 結果**：對抗驗證 **PASS**——I2 批准卡兩型實測（掐 WS 不樂觀更新、A/S 快捷、EDIT 保留、wire 只有既有 `suggestion_action`）；I3（stage shell=0、hudWords=[]、import 白名單零擴充、**stage 截圖 light/dark 位元組相同＝舞台不吃 app 主題**）；consent 閘不可繞；hud 430px 無溢出；parity 461/461。W3 也正確識別 PresentStart diff 是 W1 的成果而未觸碰（續作紀律成立）。
+- **裁決 1（修）——話術卡「照這樣說」按下去其實會 append 一頁進客戶看得到的簡報**（W3 驗證 finding，行為 100% 確認）：現行後端**只有一種建議實體＝補充頁建議**，`isTalkTrack()` 只是 UI 對「標題＋至多一段」形狀的呈現分類——accept 一律 appendSlide。「照這樣說」文案**未揭露後果**＝報告者以為只是確認話術、客戶端簡報卻多一頁。→ **兩型卡 primary 按鈕統一「加入簡報」**（話術型保留大字呈現與「現在可以這樣說」kicker，僅按鈕誠實化）；鍵盤提示 `hud.suggest.keys` 隨型別給對應文案。**backlog**：真正的「純話術建議」（不 append）需要 server 端新建議型別＋wire 擴充，屬產品功能非本輪。
+- **裁決 2（修）——chart 防炸洞（信心 95）**：`renderSlideBlock` 的 try/catch 只護同步階段，chart 分支回傳 `<SlideChart/>` 惰性元件，`series.filter` 在 React render 期 throw 逃出包裝（10 形狀 probe：9 接住、`series:null` 炸頁）；且 apps/web **全庫零 ErrorBoundary**。可達路徑＝presenter EDIT 寫入＋舊 DB 資料。→ chart 分支建立元件前先驗形狀（`Array.isArray(series)` 等），SlideChart 內部再守一層。
+- **裁決 3（修）——/sim deckErr 4.22:1**：W2.5 換上的 `--mc-danger` 壓在 `--mc-sunk` 上差 0.28——錯誤字壓深（color-mix 或墊 card 底），量測 ≥4.5。
+- **W4 範圍凍結**：(a) 上述三修＋W3 列的死 CSS 清理（舊 `.mc-cockpit*`/`.mc-hud__*` 等零引用規則，例外 `MeetingSimulator.tsx:572` 一處消費者要一併遷移）；(b) **後端小端點**（08:30 拍板）——首頁議程/KPI 優先用**既有** meetings/usage API 湊、真缺的才加端點；spend 月上限（env）＋單場成本（usage 依 meetingId 分組）；train 上次分數（既有 report 表帶出）；**team「最近做了什麼」判定無便宜資料來源＝維持不渲染記 backlog**；(c) 前端接線；(d) 總驗證雙路；(e) 之後照家規 /code-review＋/simplify。
+- **W3 另兩項刻意偏離追認**：手機版逐字稿/深查改摺疊保留（設計稿砍掉＝第二裝置回退，不跟）；stage 控制列兩句提 HUD 常駐文字不做（I3）。「逐字稿標色」不做（`SignalItem` 無 segmentId，憑 label 猜＝假資料）記 backlog。
+- **影響**: W4 workflow（fix∥backend → wiring → verify×2）→ code-review/simplify → commit 提案。
+
+### 2026-07-31 11:50 | W2.5 完成；mute 對比裁決（以 card 為基準）＋W3 斷點續作
+- **誰決定**: Fable
+- **W2.5 結果**：七項全落地（server **63 檔 430 測**、/sim 淺色實測 6.33:1、pptx 預設淺紙含 `resolveTheme.muted` 連帶修——原恆用深藍主題的 `96A2C2` 在淺紙上 2.4:1）。agent 兩處合理擴修獲追認：:311 同顆寫死紅一併 token 化、:509 純黑預覽底改 `--mc-sunk`（不改則剛修好的字壓在黑上更糟）。
+- **裁決——mute 對比以 card 為基準、頁底 3.92:1 接受**：裁決值 `#7d766a`/`#8f8a81` 在 `--mc-card` 上恰 4.50:1（兩值顯然照 card 校準），在頁底 `--mc-bg` 只有 3.92:1。**接受**：mute 絕大多數位於卡片內；再壓深會逼近次級文字色、壓扁三級層次。若日後正式 a11y audit 要求全面 AA 再議。
+- **W3 斷點續作**：W3 於 session 上限中斷時已改 15 檔（含刪 SlidePreview.tsx、新增 use-elapsed.ts、**動到 W1 的 PresentStart.tsx**——越界待它自查還原）；重跑帶續作指令（先 git status/diff 盤點、續作不重練、越界檔只移除自己的改動**嚴禁 checkout 掉 W1 成果**）。
+- **平行建置教訓（第二次撞）**：W2.5 的 `next build` 兩度被 W3 in-flight 的半成品卡住（tsc 錯＋`.next` 併發 chunk 遺失）——**同 workspace 平行包的 build 驗收必須等對方停筆**；已在派工單寫明，日後平行契約直接鎖「build 驗收序」。
+- **影響**: 等 W3＋雙驗證回來 → W4。
+
+### 2026-07-31 09:05 | W1/W2 補驗裁決：7 小修（W2.5）＋pptx 預設主題同步淺紙＋W3 平行開跑
+- **誰決定**: Fable（審兩路補驗 findings）
+- **W2.5 修正清單（全數採納）**：
+  1. `/sim` 淺色 5+ 處 2.2:1 灰字（`--mc-text-dim` 未定義永遠吃冷灰 fallback＋硬寫色）——掉在 W1/W2 契約接縫（sim 入口列 W1 義務、components/sim/** 卻劃給 W2），兩包都沒動 → 修 9 個 inline color 改 token。**契約教訓：檔案所有權表與義務表要交叉核對。**
+  2. **落實 08:30 裁決 1**：`--mc-text-muted` 淺 `#9c9488`→`#7d766a`、深 `#7b776f`→`#8f8a81`（≥4.5:1）。
+  3. 成對雙序列**圖例 swatch 與長條色不符**（swatch accent/accent-2、實際長條 sunk/accent）＝觀眾會看反前後對比 → swatch 改 sunk/accent。
+  4. 成對雙序列 **pptx 配色與螢幕相反** → pptx paired 分支對齊螢幕（灰、accent）。
+  5. `bullets.marker`（✓/✕/—）語意**不進 pptx** → 匯出端映射記號（前綴字符或 bullet code）。
+  6. supplement 空殼頁可進批准佇列（新模板核心 block 被 sanitize 全濾後只剩標題仍 suggest）→ 生成端補「新模板缺核心 block＝不 suggest」守門。
+  7. `renderSlideBlock` 對畸形 block 整頁炸（**既有類別**，probe 實測 8 種形狀 throw、web 無 ErrorBoundary）→ 逐 block try/catch 落防（壞 block 跳過不炸頁，舊新 block 同受益）；BlockEditor TableFields 補最少 2 欄下限（與 server sanitize 同規）。另 SlideEditor `gradientFallback` 舊紫粉漸層→新設計 teal 系。
+- **裁決（pptx 預設主題）——同步淺紙，接受舊 themeless deck 匯出外觀改變**：驗證指出契約兩要求互斥（螢幕預設已淺紙 vs 舊 spec 匯出逐字相同），W2 保守選了保舊等價 → 我裁決**匯出端 DEFAULT_THEME 同步淺紙**。理由：使用者明示「直接套用新的、不分新舊版」，themeless deck 螢幕淺、匯出深＝**WYSIWYG 斷裂才是怪異**；「匯出逐字相同」回歸鎖的本意是防意外漂移，不是把舊外觀凍進刻意的全面重設計。有 per-deck theme 的 deck 不受影響。
+- **假陽性紀錄（供日後驗證方法論）**：深色首頁按鈕量到 1.24:1 白底白字＝`.mc-btn` 的 `transition: background .15s` 在瞬切主題後立即量測撞過渡中間值——**自動對比稽核切主題後必須等 transition 結束再量**。
+- **W3 與 W2.5 平行**（檔案零重疊：W3=copilot/hud/PresentStage；W2.5=sim/slide-chart/studio-present/pptx-render/slide-gen/globals tokens 兩值）。
+- **環境待清（使用者）**：殘留行程 PID 33864（next start :3100）、PID 2020（fakechat :8787）、:8799 API stub——kill 被權限攔，請使用者手動清。
+- **影響**: W2.5 修正包＋W3 派工；DESIGN_APPLY_CONTRACT 不改版（修正皆在原範圍內；pptx 預設主題裁決以本則為準）。
+
+### 2026-07-31 08:30 | W1/W2 完成；W1 四項設計疑義裁決（mute 對比破例調整＋三項維持）
+- **誰決定**: Fable（審 W1/W2 實作回報後裁決；兩路驗證撞週上限延至今晨補跑）
+- **W1/W2 結果摘要**：W1＝tokens 全套替換（`--mc-*` 名沿用、值換設計稿雙主題）＋9 畫面重做＋12 項未設計畫面重調；**自抓一個全綠工具鏈都測不到的真 bug**——next/font 變數掛 `<body>` 而 `--mc-font` 在 `:root` 引用＝guaranteed-invalid → 全站掉回 Times New Roman、三字族零下載（tsc/build/console 全綠，只有量 computed font-family 才抓得到）→ 已修（`:root` 純 fallback、`body` 接 next/font）。W2＝shared 6→8 模板＋3 新 block＋17 版式（15 個不增 enum 用 template×block＋選擇器表達）＋supplement 版型規則納新版式**＋事實紀律**（競品欄/數值只能引用逐字稿已現或已驗證資訊，湊不出退回純文字——防會中幻覺數字上簡報）＋pptx 全映射實測產檔＋舊 spec A/B 逐字等價實證。數字：server **63 檔 421 測**（+46）、web build 19 路由、parity **359/359**。
+- **裁決 1（破例調整）——mute 文字對比 2.4–2.6:1 不合格**：設計稿凍結色表的 `--mute`（淺 `#9c9488`／深 `#7b776f`）用在 10.5px mono kicker/meta/頁數＝實測最差 2.4:1，遠低於小字所需。**這正是使用者 /goal「前端沒有怪異的地方」要防的**（灰到讀不到的小字）。→ 契約「逐值照抄」在此破例：淺色 `--mute` 壓深至 ≈`#7d766a`（≥4.5:1）、深色提亮至 ≈`#8f8a81`；其餘 17 變數不動。屬可及性凌駕逐 px 忠實，視覺位移極小。
+- **裁決 2（維持）——側欄圖示保留既有 SVG**：設計稿的幾何字符（◆▣▤…）跨平台字型渲染不穩＋可及性差，W1 判斷正確；`en` 縮寫欄照設計補上。
+- **裁決 3（維持）——設計稿沒畫的既有能力一律保留**：CRM 分頁/新增表單、present 兩條播放路徑、train 全部設定、spend 明細、team 管理、/sim 入口——單一 shell 原型的展示缺漏≠產品下架決策。使用者若要砍任何一項需明示。
+- **裁決 4（維持）——train 不改抽象客戶類型**：設計稿把對練對象畫成 3 個抽象類型＝產品語意變更（現行綁 CRM persona），契約未授權，W1 只換皮不換語意，正確。
+- **附帶**：W1/W2 平行 `next build` 搶 `.next` 撞 ENOENT 一次（清掉重建即綠）——**教訓：同 workspace 平行包的 build 驗收要錯開或各自 BUILD_DIR**，記入日後平行派工注意。
+- **影響**: mute 調整＋兩路補驗（W1 對比度攻擊會順帶驗 mute 修後值）＋W3 派工在補驗綠後發。
+
+### 2026-07-30 21:17 | 全站前端重設計套用立項（claude.ai/design 交付）＋新 slide 模板入會中生成——四項拍板
+- **誰決定**: 使用者（提供 claude.ai/design 專案「MeetCopilot 前端重设计」＋指示「逐一把新的前端套用上去，不必分新舊版，直接套用新的；並確認會中 AI 可自動套用新 slide 模板生成簡報」＋/goal「全部前端都要套上，前後端都有接上，所有功能正常，前端沒有怪異的地方」＋2 個 AskUserQuestion 拍板）＋Fable（盤點後的風險裁決與分工凍結）
+- **設計交付物**: 經 DesignSync MCP 讀入（projectId 254c5bd4…），存 session scratchpad `design-handoff/`（MeetCopilot.dc.html 116KB＋support.js＋Directions 早期三方向稿＋github.md）。Opus 盤點產出 `design-handoff/DESIGN_INVENTORY.md`（**後續實作的唯一設計真相**）：11 畫面＋17 個 slide 版式（10 換皮／5 半新／2 全新）；設計語言＝暖米白淺色預設＋中性暖灰黑深色（`data-theme` 雙主題、18 個同名變數）、Space Grotesk＋IBM Plex Mono＋Noto Sans TC，與現行 `--mc-*` 零名稱交集＝全套替換。
+- **決策 1（使用者拍板）——I2 批准形態＝「建議卡即批准卡」**：盤點揪出設計稿建議卡只有「照這樣說／跳過／幫我查」、**沒有補充頁批准入口＝I2 斷路**（觸及不變量、依憲法停下來問）。拍板：補充頁建議也走主舞台卡＝附頁面縮圖預覽＋「加入簡報／**編輯後加入**／跳過」三鈕（**EDIT 路徑保留**）；話術建議與補充頁建議同一個主舞台位、按鈕隨類型切換，維持設計稿的單主舞台節奏。
+- **決策 2（使用者拍板）——資料缺口＝順帶補後端小端點**：設計稿 30+ 個後端沒有的欄位（首頁今日議程＋4 KPI、花費月上限＋單場成本、對練上次分數、團隊動態…）——便宜的彙總端點這輪順手補（月上限走 env、上次分數從既有 report 表帶出、議程/KPI 從既有 meetings/usage 彙總），真沒有的資料**不渲染不留假數字**。
+- **決策 3（Fable 裁決）——I3/合規紅線**：(a) 設計稿原型結構會把側欄帶進 `/present` 舞台（sc-if 兄弟節點）——**照抄即違反 I3**；實作一律維持舞台獨立 route＋零 chrome＋import 白名單，只取設計稿「框內」視覺；控制列兩句提及 HUD 的常駐文字刪除。(b) **consent 同意閘與 session setup 相位在設計稿消失——不可移除**，以新皮重做。(c) 設計稿為純桌機（0 個 @media）——**不得回退 hud 手機可用性**（第二裝置是產品模型的一部分）；高密度畫面桌面優先可接受。
+- **決策 4（Fable 裁決）——模板系統擴充路線**：新增 block 型別 `table`／`timeline`／`steps`＋既有 block 擴充（`stat.desc`、`bullets.marker`、chart 多序列＋donut 中心值）；2 個全新版式（timeline-gantt、comparison-matrix）入 `SLIDE_TEMPLATES` enum。**這是對「SlideSpec 契約不變」既有凍結的刻意解凍**（使用者明示要 AI 會中用新模板）——全鏈波及：shared zod／Gemini responseSchema enum／SlideRenderer／studio-present.css／EditableSlide／pptx 匯出／**supplement 生成 prompt 的版型選擇規則**（會中自動選新模板的入口就在這）。單位一律換算 `cqw`（設計稿 px 在編輯器/舞台字級差 1.8×）。`--slide-*` per-deck theme override 機制不動（anchor 繼承基礎）；slide 預設 fallback 由深色卡改淺色紙張。
+- **分工凍結（平行先鎖檔案所有權）**: W1 tokens/AppShell/一般畫面（globals.css＋非會中元件）∥ W2 slide 模板全鏈（shared slide-spec＋server generation＋studio-present.css＋SlideRenderer/EditableSlide/pptx＋sim）→ W3 cockpit/hud/stage（吃 W1 tokens＋W2 renderer，落決策 1 的批准卡）→ W4 後端小端點＋接線＋i18n＋全面驗證（I3 攻擊、I2 攻擊者憑證含 EDIT、雙主題截圖走查）＋code-review/simplify。未設計到的 12 項畫面（login/sim/wizard/ScoreReport/ui 元件…）＝**換 tokens 重調、同語言不逐 px**。
+- **影響**: 契約檔 `docs/DESIGN_APPLY_CONTRACT.md`（本輪凍結）；apps/web 全域；packages/shared slide-spec；apps/server generation/decks；後端小端點。
+
 ### 2026-07-30 16:42 | C2 對抗驗證裁決：兩條契約漏洞（v1.4 更正）＋實作四項自主決策追認
 - **誰決定**: Fable（依 C2 雙路復驗結果裁決；本 session 第四次由對抗路抓到我方設計/契約缺陷）
 - **C2 實作與契約復驗結果**：契約六小節逐條 pass（信心 90–95）；對抗路 10 個惡意 pptx fixture（重排/孤兒頁/隱藏頁/缺 rel/壞 XML/重複 rId…）**零錯位寫入路徑**——§11.2 的對齊守門設計成立；併發去重、計費覆蓋、I1/I3 鄰接面、buffer detach 全數實測乾淨。crm 87 測＋server 61 檔 370 測＋web 19 路由。

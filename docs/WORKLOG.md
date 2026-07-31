@@ -337,4 +337,23 @@
   1. **偵察→契約 v1.3 凍結**（MEETING_CHECKLIST_CONTRACT §11 六小節；ROM 15:40）：Gemini 讀圖能力已存在（`GenerateJsonOptions.images`）、兩解析器都逐頁、新匯入 PNG 在記憶體。**最高風險＝頁序對齊**：既有 parser 用 slideN.xml 檔名數字排序＝錯的權威（重排過的 pptx 文字靜默錯位→翻頁勾稽誤劃）→ 頁序權威改 `presentation.xml sldIdLst`＋數量守門，**對齊存疑整份丟、改走讀圖**（寧付成本不寫錯位文字）。讀圖硬上限 20 頁/並行 2/attempts 1、kind=`gemini_extract`（admin 標籤「匯入解析」名至實歸）＋匯入路徑補傳 userId。回填端點 `POST /api/decks/:id/extract-text`（fill-empty 冪等、無 job 列），前端唯一觸發＝建會表單選 deck 時 fire-and-forget（零新按鈕）。
   2. **實作＋雙路復驗**：契約六小節逐條 pass（含真 zip fixture 驗重排頁序）；對抗路 **10 個惡意 pptx fixture 零錯位寫入**、併發去重/計費/I1I3 鄰接/buffer detach 全實測乾淨。實作自主決策四項獲追認（getPageImage 帶 orgId、pdf.js pooled Buffer byteOffset 陷阱修在源頭、讀圖 temperature 0＋thinking 0、不 bump updated_at）。
   3. **對抗路抓到兩條契約漏洞（本 session 第四次；ROM 16:42）→ 契約 v1.4＋修妥**：(a) 「空字串不寫」讓讀圖確認無字的頁永遠 NULL → 圖片型 deck 每次選中重燒 20 次讀圖＋第 21 頁後永久飢餓 → **三態語意**（NULL=未抽、`''`=讀圖確認無字、非空=文字；parser 永不寫 `''`——`Math.max(1,minChars)` 門檻）；(b) `POST /api/decks/import` C2 後變 LLM 觸發端點卻不在限流桶（in-flight 以 deckId 為鍵、新 deck 永不命中去重）→ 入共用桶（429 早於 multer 收 50MB 檔）。復驗 probe 實測：5 頁純圖第二輪 **0 次呼叫**（收斂）、25 頁全空第二輪自動輪到 21–25（飢餓解除）、parser 空＋讀圖故障→下輪讀圖仍會跑（fallback 未自宮）。
-  4. **最終數字**：crm **88 測**、server **61 檔 375 測**、web tsc 0＋build 19 路由；API_CONTRACT §4 已補新端點。**部署前注意不變**（PG 未實跑）。C2 之後匯入的 PPT 也有「必講重點」了；**既有匯入 deck 第一次在建會表單被選中時自動回填**。
+  4. **最終數字**：crm **88 測**、server **61 檔 375 測**、web tsc 0＋build 19 路由；API_CONTRACT §4 已補新端點。**部署前注意不變**（PG 未實跑）。C2 之後匯入的 PPT 也有「必講重點」了；**既有匯入 deck 第一次在建會表單被選中時自動回填**。C2 經使用者「ok」核准：commit **`ea05daf`**（23 檔）push origin main。**部署仍未做**（GCP 還是舊版）。
+
+## 2026-07-30（晚）全站前端重設計套用立項（claude.ai/design 交付＋新 slide 模板入會中生成）
+
+- **使用者指示**：用 DesignSync MCP 讀入 claude.ai/design 專案「MeetCopilot 前端重设计」（使用者親自改過的前端＋新增 DynamicSlide 模板）；「逐一把新的前端套用上去，不必分新舊版，直接套用新的；並確認會中 AI 可自動套用新 slide 模板生成簡報」。/goal＝「全部前端都要套上，前後端都有接上，所有功能正常，前端沒有怪異的地方」。
+- **設計交付物**：主稿 116KB＋dc-runtime，存 session scratchpad `design-handoff/`；Opus 盤點產出 `DESIGN_INVENTORY.md`（**實作唯一設計真相**）——11 畫面＋**17 個 slide 版式**（10 換皮／5 半新／**2 全新**：timeline-gantt 甘特時間表、comparison-matrix 競品比較表）；設計語言＝暖米白淺色預設＋暖灰黑深色（`data-theme` 雙主題、18 變數）、Space Grotesk＋IBM Plex Mono＋Noto Sans TC——與現行深色「會議控制室」全套替換。
+- **盤點揪出的紅線（ROM 2026-07-30 21:17）**：設計稿建議卡**沒有補充頁批准入口＝I2 斷路**（停下來問，使用者拍板「**建議卡即批准卡**」：縮圖＋加入簡報／編輯後加入／跳過，EDIT 保留）；設計稿原型結構會把側欄帶進 `/present` 舞台（**照抄即違反 I3**，只取框內視覺）；consent 閘在設計稿消失（不可移除，新皮重做）；資料缺口 30+ 欄（使用者拍板「順帶補後端小端點」，真沒有的欄不渲染不留假數字）；設計稿純桌機（hud 手機可用性不得回退）。
+- **契約凍結**：`docs/DESIGN_APPLY_CONTRACT.md` v1.0（四波分工＋檔案所有權鎖定＋不變量落點＋驗收底線）。模板系統擴充＝對「SlideSpec 契約不變」的**刻意解凍**（新 block table/timeline/steps＋擴充 stat.desc/bullets.marker/chart 多序列 donut＋SLIDE_TEMPLATES 加 2 值；supplement 生成 prompt 版型規則納新版式＝會中自動選用入口；pptx 匯不出的版式不得進 enum；舊 spec 渲染逐字等價回歸鎖定）。
+- **執行結果（2026-07-31 全部完成，未 commit 待核准）**：
+  1. **W1**（tokens/AppShell/9 畫面＋12 項未設計畫面重調）：淺色預設雙主題、字體 next/font；**自抓工具鏈全綠也測不到的真 bug**——next/font 變數掛 body、`:root` 引用 guaranteed-invalid → 全站掉回 Times New Roman（只有量 computed font-family 才抓得到）。
+  2. **W2**（模板全鏈）：6→8 模板＋3 新 block（table/timeline/steps）＋17 版式（15 個不增 enum）；**supplement 會中選新模板＋事實紀律**（競品欄/數值只能引用逐字稿已現或已驗證資訊）；pptx 全映射；舊 spec A/B 逐字等價實證。
+  3. **W2.5**（補驗 7 修）：/sim 接縫灰字、mute 對比裁決落實（card 基準 4.50）、雙序列圖例/pptx 對色、bullets 記號進匯出、pptx 預設淺紙（裁決：WYSIWYG 斷裂＞舊外觀凍結）＋連帶修 resolveTheme.muted、空殼守門、渲染防炸。
+  4. **W3**（cockpit/hud/stage，中途撞限額斷點續作成功）：批准卡兩型（話術大字／補充頁縮圖＋編輯後加入）、consent 新皮不可繞、hud 430px、stage 零 chrome（light/dark 截圖位元組相同＝舞台不吃主題）；**對抗驗證 PASS**。
+  5. **W4**（三修∥後端→接線→雙路總驗證 PASS）：chart 防炸補洞（React 惰性渲染逃出 try/catch）、話術卡按鈕誠實化；後端**首頁零新端點**（既有 API 自湊）、usage `budget` optional＋`by-meeting`（org-join 鎖）、train lastScore 非 N+1、team 動態**查證後不做**（activities 表恆空）；接線＝KPI 單支失敗只滅該格、預算條 env 未設整條消失、「會中成本」誠實文案。
+  6. **code-review**（9 agents）：confirmed 1（83 分）＝**話術卡藏內文＝I2 知情批准回退**（isTalkTrack 把 heading+段落形狀歸話術、內文零渲染）→ 收緊為「整頁唯一文字＝卡上那行」才算話術，六形狀 DOM readback 全 PASS；killed 中 refuted:false 撈回 2 清理（L20 再次生效）。
+  7. **/simplify**：16 候選→**12 套用**（含 SLIDE_DEFAULT_THEME 單一真相、稅率常數化、**設計真相檔複製進 repo `docs/design-handoff/`** 防 scratchpad 消失懸空）＋1 有理跳過；apply agent 收到壞插值時**正確拒跑**（指揮官腳本插值 bug，修後續跑）。
+  8. **最終數字**：shared/crm build ✓、crm **88 測**、server **66 檔 456 測**、web tsc ✓＋build **19 路由**、parity **472/472**、零測試斷言被動。
+- **本輪 ROM 共 7 則**（21:17 立項／08:30 W1W2＋四疑義／09:05 W2.5 清單／11:50 mute＋續作／13:05 W3 PASS＋三裁決／15:10 W4 PASS／16:00 review 裁決＋agent 現場裁決一則）；CHANGE_TRACKER 本輪 10+ 筆。
+- **待使用者**：核准 commit＋push；部署另議（**server＋web 都要重建**——動了 shared/server/web；無新 migration；PG 方言債仍在：023/evidence purge 未經真 PG 實跑）。
+- **記債**：純話術建議（不 append 的 server 端新型別）；warn 琥珀 tag 族對比併日後 a11y 總議；spend/PersonaPicker 整檔 i18n 化；last-score 索引（org 報告破萬）；home.phase* 剩餘 6 鍵語意複查；殭屍行程（PID 33864/2020/8799）待使用者手動清。
