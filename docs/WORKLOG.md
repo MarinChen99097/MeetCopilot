@@ -355,5 +355,5 @@
   7. **/simplify**：16 候選→**12 套用**（含 SLIDE_DEFAULT_THEME 單一真相、稅率常數化、**設計真相檔複製進 repo `docs/design-handoff/`** 防 scratchpad 消失懸空）＋1 有理跳過；apply agent 收到壞插值時**正確拒跑**（指揮官腳本插值 bug，修後續跑）。
   8. **最終數字**：shared/crm build ✓、crm **88 測**、server **66 檔 456 測**、web tsc ✓＋build **19 路由**、parity **472/472**、零測試斷言被動。
 - **本輪 ROM 共 7 則**（21:17 立項／08:30 W1W2＋四疑義／09:05 W2.5 清單／11:50 mute＋續作／13:05 W3 PASS＋三裁決／15:10 W4 PASS／16:00 review 裁決＋agent 現場裁決一則）；CHANGE_TRACKER 本輪 10+ 筆。
-- **待使用者**：核准 commit＋push；部署另議（**server＋web 都要重建**——動了 shared/server/web；無新 migration；PG 方言債仍在：023/evidence purge 未經真 PG 實跑）。
+- **commit＋push＋部署（2026-07-31 使用者核准「commit + 推上去+部屬」）**：四邏輯 commit `f299ca5` feat(slides)＋`23f7071` feat(server)＋`bdaa4c4` feat(web)＋`8ce4c3c` docs，push origin main（`ea05daf..8ce4c3c`）。部署照 SOP A：build server `50eda524`／web `0284f1b1` 皆 SUCCESS → **server rev `00027-nkz`**（`services update --image` 保 env＋`--no-cpu-throttling`）＋**web rev `00028-qrl`**（`run deploy` 帶 NEXT_PUBLIC_API_BASE）。**migration 023 首次套上 Cloud SQL PG 成功**（`ready:true`＝boot+migrate 過，**PG 方言債關閉**）。冒煙全綠（health 200／ready true／web 六路由 200／unauth 雙 401）；開機 log 無 error。DEPLOY.md 版本節已更新。**線上現為：待講清單全鏈＋C2 匯入抽字＋全站重設計＋新 slide 模板會中自動選用。**
 - **記債**：純話術建議（不 append 的 server 端新型別）；warn 琥珀 tag 族對比併日後 a11y 總議；spend/PersonaPicker 整檔 i18n 化；last-score 索引（org 報告破萬）；home.phase* 剩餘 6 鍵語意複查；殭屍行程（PID 33864/2020/8799）待使用者手動清。
