@@ -126,7 +126,7 @@
 
 ## 7. Train（語音模擬訓練）
 
-| GET | `/api/train/personas?companyId=` | 可對練的 contacts（**只列 persona 欄位過 verified 閘者**）：`{contactId, fullName, title, companyName, readiness:{verifiedFields:number, missing:string[]}}[]` |
+| GET | `/api/train/personas?companyId=` | 可對練的 contacts（**只列 persona 欄位過 verified 閘者**）：`{contactId, fullName, title, companyName, readiness:{verifiedFields:number, missing:string[]}, unlocked:boolean, lastScore?:number, lastPracticedAt?:number}[]`。`lastScore`＝**最近一份**對練報告的總分（0–100，各維度平均四捨五入）、`lastPracticedAt`＝該場 `endedAt`；兩欄由既有 `training_reports`/`training_sessions` 彙總而來，**沒練過（或最近那場沒有可用評分）→ 兩欄皆 undefined**，前端顯示「尚未對練」，**不得補 0** |
 | POST | `/api/train/sessions` | `{contactId, dealId?, difficulty?:'friendly'\|'neutral'\|'hostile'}` → `{sessionId, live:{ephemeralToken, model, expireTime}, persona:{displayName,title}}`（瀏覽器拿 ephemeralToken **直連 Gemini Live**，音訊不經我方 server） |
 | POST | `/api/train/sessions/:id/transcript` | `{turns:{speaker:'rep'\|'ai', text, t}[]}`（前端於對練中/結束時上傳雙向逐字稿） |
 | POST | `/api/train/sessions/:id/finish` | → `{reportId}`（觸發評分） |
@@ -141,3 +141,21 @@
 5. **/present 零 HUD**（I3）：此 surface 只渲染投影片＋頁碼；`deck_update` 靜默 append；絕不出現任何建議/逐字稿/卡片元素。
 6. **/copilot 擷取端**：zero-track 守衛（0 音軌 → 紅色指引重新分享並勾「分享分頁音訊」）、track ended 重試、consent 閘。
 7. **/train 語音**：連線中/AI 說話中/你說話中/被打斷 的視覺狀態；>15 分鐘自動續連（resumption）不可斷對話感。
+8. **首頁（今日議程＋KPI）沒有專屬端點**——一律由既有清單湊（見 §9 尾註）；湊不出來的 KPI 不顯示，不得前端瞎編。
+
+## 9. Org（用量／預算／單場成本）
+
+> 全部 `Bearer` 認證＋**owner/admin only**（現查 memberships 權威角色；member → 403）；org 一律由 JWT 推導。
+> 完整的邀請／成員管理端點見 `docs/M5_CONTRACT.md` §D；本節只列**花費**相關（W4）。
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/api/org/usage?from&to&groupBy=kind\|model\|day` | `{from,to,totalCostUsd,totalCostUsdPosttax,totalInputTokens,totalOutputTokens, rows:{key,events,inputTokens,outputTokens,costUsd,costUsdPosttax}[], budget?}` |
+| GET | `/api/org/usage/events?from&to&kind&limit&offset` | `{total, items:UsageEvent[]}`（明細，分頁） |
+| GET | `/api/org/usage/by-meeting?from&to&limit` | `{items:{meetingId, title?, events, costUsd, costUsdPosttax}[]}`（**單場成本**；依成本由高到低取前 `limit` 場，預設 10、上限 50） |
+
+- **`budget`（可選欄）**：`{monthlyUsd, monthStart, spentUsd, spentUsdPosttax}`。月上限來自 env **`ORG_MONTHLY_BUDGET_USD`**（全平台單一值，無 per-org 設定表）；**env 未設或非法（非數／≤0）→ 整個 `budget` 欄不存在 → 前端不渲染預算條**。`spent*`＝**當月至今**（UTC 月初 → now），與 `from`/`to` 查詢窗**無關**（預算條問的永遠是「這個月燒了多少」）。預算條分子用 `spentUsdPosttax`（使用者看到的是含稅）。
+- **`by-meeting` 的涵蓋範圍（不發明資料）**：只彙總帶 `usage_events.meeting_id` 的**會中**用量（realtime hub／metering-context 於會議脈絡帶入）。**會前**的 deck 生成、研究爬蟲、persona 草擬等呼叫沒有 `meeting_id`，不計入任何一場，也不做歸屬臆測——故 Σ`by-meeting` **小於** `totalCostUsd`，UI 文案須寫「會中成本」而非「該場總成本」。`title` 於會議已刪除／標題空時省略（join 帶 `org_id`，跨 org 標題不外洩）。
+- **查詢窗**：三條共用 `from`/`to`（epoch-ms，預設近 30 天、上限 ~400 天）；非法 → 400。
+
+> **首頁湊法（無新端點）**：「今日議程」＝`GET /api/meetings?page=1&pageSize=50` 後前端依 `createdAt` 落在今日 ＋ `status !== 'completed'` 篩選（會議模型無 `scheduledAt`，`createdAt` 即建會時間）。KPI：**deck 數**＝`GET /api/decks` 的 `total`；**公司數**＝`GET /api/crm/companies?page=1&pageSize=1` 的 `total`；**本週會議數**＝同一份 meetings 清單（`createdAt DESC`）篩本週，第一頁滿頁時顯示「N+」不硬算；**本月花費**＝`GET /api/org/usage?from=<UTC 月初>&to=<now>&groupBy=kind` 的 `totalCostUsdPosttax`（env 有設預算時，同一份回應的 `budget.spentUsdPosttax` 是同一個數字，可直接用來一併畫預算條）——此 KPI **owner/admin 才拿得到**，member 直接不顯示，不得改用其他端點繞過授權。「團隊動態」**不做**：`activities` 表雖存在（005）但全 repo 無任何寫入點，其餘表也沒有跨使用者的事件流可湊。

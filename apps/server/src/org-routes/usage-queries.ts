@@ -7,6 +7,13 @@
  */
 import type { DbPort } from "@meetcopilot/crm";
 
+/**
+ * 019 遷移**之前**寫入、因而沒有 `cost_tax_multiplier` 快照的舊列所採用的固定缺省稅率。
+ * **刻意不接** pricing.ts 的 `DEFAULT_TAX_MULTIPLIER`——那個可被 env `COST_TAX_MULTIPLIER` 覆寫，
+ * 接過去會讓「已凍結的歷史列」隨 env 浮動（改一次 env 就改寫歷史帳）。此值是歷史常數，不該變。
+ */
+const LEGACY_TAX_MULTIPLIER = 1.25;
+
 export const ORG_USAGE_GROUP_BY = ["kind", "model", "day"] as const;
 export type OrgUsageGroupBy = (typeof ORG_USAGE_GROUP_BY)[number];
 
@@ -18,6 +25,19 @@ export interface OrgUsageRow {
   costUsd: number; // 稅前（SUM est_cost_usd）
   costUsdPosttax: number; // 含稅（SUM est_cost_usd × 每列 cost_tax_multiplier，019）
 }
+/**
+ * 月預算（W4）：**只有** env `ORG_MONTHLY_BUDGET_USD` 有設才會出現在回應裡；未設＝整個 `budget` 欄不存在，
+ * 前端不渲染預算條（不發明資料）。全平台單一上限（無 per-org 設定表——不為此開 migration）。
+ * `spent*` 為**當月至今**（UTC 月初 → now），與呼叫端傳入的 from/to 查詢窗**無關**——預算條問的永遠是「這個月燒了多少」。
+ */
+export interface OrgBudget {
+  monthlyUsd: number;
+  /** 當月起點（UTC 月初 00:00）epoch-ms；前端顯示「本月」區間用。 */
+  monthStart: number;
+  spentUsd: number; // 稅前
+  spentUsdPosttax: number; // 含稅（預算條分子用這個——使用者實際看到的是含稅）
+}
+
 export interface OrgUsage {
   from: number;
   to: number;
@@ -26,6 +46,8 @@ export interface OrgUsage {
   totalInputTokens: number;
   totalOutputTokens: number;
   rows: OrgUsageRow[];
+  /** 月預算＋當月至今花費；env 未設 → 不存在（見 OrgBudget）。 */
+  budget?: OrgBudget;
 }
 
 /** 本 org [from,to] 窗內用量，依 kind/model/day 分組加總＋總計。 */
@@ -59,7 +81,7 @@ export async function orgUsage(
       acc.inputTokens += Number(r.input_tokens ?? 0);
       acc.outputTokens += Number(r.output_tokens ?? 0);
       acc.costUsd += pretax;
-      acc.costUsdPosttax += pretax * Number(r.cost_tax_multiplier ?? 1.25);
+      acc.costUsdPosttax += pretax * Number(r.cost_tax_multiplier ?? LEGACY_TAX_MULTIPLIER);
       byDay.set(day, acc);
     }
     rows = [...byDay.values()].sort((a, b) => a.key.localeCompare(b.key));
@@ -101,6 +123,99 @@ export async function orgUsage(
   const totalInputTokens = rows.reduce((s, r) => s + r.inputTokens, 0);
   const totalOutputTokens = rows.reduce((s, r) => s + r.outputTokens, 0);
   return { from, to, totalCostUsd, totalCostUsdPosttax, totalInputTokens, totalOutputTokens, rows };
+}
+
+/**
+ * env `ORG_MONTHLY_BUDGET_USD` → 月上限（USD）。未設／空／非數／≤0 → null（＝沒有預算，回應不帶 budget）。
+ * **每次請求現讀**（不在模組載入期凍結）：Cloud Run 改 env 後重啟即生效，且測試可逐案設定。
+ */
+export function readMonthlyBudgetUsd(): number | null {
+  const raw = (process.env.ORG_MONTHLY_BUDGET_USD ?? "").trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+/** 當月（UTC）起點 epoch-ms。日分桶已是 UTC（見上方註解），此處沿用同一時鐘域，避免兩套月界。 */
+export function utcMonthStart(now: number): number {
+  const d = new Date(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+}
+
+/** 當月至今（UTC 月初 → now）本 org 花費；配合 readMonthlyBudgetUsd 組成 OrgBudget。 */
+export async function orgMonthToDateSpend(
+  db: DbPort,
+  orgId: string,
+  now: number,
+): Promise<{ monthStart: number; spentUsd: number; spentUsdPosttax: number }> {
+  const monthStart = utcMonthStart(now);
+  const row = await db.get<{ pretax: number | null; posttax: number | null }>(
+    `SELECT COALESCE(SUM(est_cost_usd), 0) AS pretax,
+            COALESCE(SUM(est_cost_usd * COALESCE(cost_tax_multiplier, ${LEGACY_TAX_MULTIPLIER})), 0) AS posttax
+       FROM usage_events
+      WHERE org_id = ? AND created_at >= ? AND created_at <= ?`,
+    [orgId, monthStart, now],
+  );
+  return {
+    monthStart,
+    spentUsd: Number(row?.pretax ?? 0),
+    spentUsdPosttax: Number(row?.posttax ?? 0),
+  };
+}
+
+/** 單場會議的成本列（GET /api/org/usage/by-meeting）。 */
+export interface OrgMeetingCostRow {
+  meetingId: string;
+  /** 會議標題；usage_event 指向的會議已被刪除／標題為空 → undefined（前端顯示 meetingId 尾碼即可）。 */
+  title?: string;
+  events: number;
+  costUsd: number; // 稅前
+  costUsdPosttax: number; // 含稅
+}
+
+/**
+ * 「最貴的 N 場會議」——依 usage_events.meeting_id 分組加總。
+ *
+ * **涵蓋範圍（不發明資料）**：只含**會中**產生的用量——meeting_id 由 realtime hub／metering-context 於會議脈絡下
+ * 帶入（hub.ts、metering-context.ts）。會前的 deck 生成、研究爬蟲、persona 草擬等呼叫**沒有** meeting_id，
+ * 因此不計入任何一場；`meeting_id IS NULL` 的列一律排除，不做任何歸屬臆測。
+ * 租戶隔離：usage_events 與 meetings 兩邊都 `org_id = ?`（join 條件亦帶 org_id，跨 org 的會議標題永不外洩）。
+ */
+export async function orgUsageByMeeting(
+  db: DbPort,
+  orgId: string,
+  opts: { from: number; to: number; limit: number },
+): Promise<{ items: OrgMeetingCostRow[] }> {
+  const raw = await db.all<{
+    meeting_id: string;
+    title: string | null;
+    events: number;
+    cost_usd: number;
+    cost_posttax: number;
+  }>(
+    `SELECT u.meeting_id AS meeting_id,
+            m.title AS title,
+            COUNT(*) AS events,
+            COALESCE(SUM(u.est_cost_usd), 0) AS cost_usd,
+            COALESCE(SUM(u.est_cost_usd * COALESCE(u.cost_tax_multiplier, ${LEGACY_TAX_MULTIPLIER})), 0) AS cost_posttax
+       FROM usage_events u
+       LEFT JOIN meetings m ON m.id = u.meeting_id AND m.org_id = u.org_id
+      WHERE u.org_id = ? AND u.created_at >= ? AND u.created_at <= ? AND u.meeting_id IS NOT NULL
+      GROUP BY u.meeting_id, m.title
+      ORDER BY cost_usd DESC
+      LIMIT ?`,
+    [orgId, opts.from, opts.to, opts.limit],
+  );
+  return {
+    items: raw.map((r) => ({
+      meetingId: r.meeting_id,
+      ...(r.title && r.title.trim().length > 0 ? { title: r.title } : {}),
+      events: Number(r.events),
+      costUsd: Number(r.cost_usd),
+      costUsdPosttax: Number(r.cost_posttax),
+    })),
+  };
 }
 
 export interface OrgUsageEvent {
@@ -178,7 +293,7 @@ export async function orgUsageEvents(
       cachedInputTokens: r.cached_input_tokens != null ? Number(r.cached_input_tokens) : null,
       retryCount: Number(r.retry_count ?? 0),
       estCostUsd: Number(r.est_cost_usd),
-      costTaxMultiplier: Number(r.cost_tax_multiplier ?? 1.25),
+      costTaxMultiplier: Number(r.cost_tax_multiplier ?? LEGACY_TAX_MULTIPLIER),
       meetingId: r.meeting_id,
       createdAt: Number(r.created_at),
     })),

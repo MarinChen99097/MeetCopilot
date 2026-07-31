@@ -203,6 +203,14 @@ export interface PersonaOption {
    * **不可只看 verifiedFields**，否則 AI 補齊寫的是未驗證草稿（verifiedFields 不增）會誤判成鎖住（#1 直接可對練失效）。
    */
   unlocked: boolean;
+  /**
+   * W4「上次分數」：**最近一份**對練報告的總分（0–100，各維度平均四捨五入）。
+   * 從既有 training_reports/training_sessions 帶出；**從未練過（或練過但沒評分報告）→ undefined**，
+   * 前端顯示「尚未對練」，不得補 0（0 分和沒練過是兩件事）。
+   */
+  lastScore?: number;
+  /** 上次對練時間 epoch-ms（session.ended_at，缺則取報告產生時間）。無報告 → undefined。 */
+  lastPracticedAt?: number;
 }
 
 // ─────────────────────────────────────────────────────────────

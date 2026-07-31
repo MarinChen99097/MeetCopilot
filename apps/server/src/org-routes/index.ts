@@ -20,7 +20,15 @@ import type { CrmCore, Role } from "@meetcopilot/crm";
 import { LastOwnerError, MemberNotFoundError } from "@meetcopilot/crm";
 import { INVITE_ROLES, type InviteRole } from "@meetcopilot/shared";
 import { authRequired } from "../auth/jwt.js";
-import { orgUsage, orgUsageEvents, ORG_USAGE_GROUP_BY, type OrgUsageGroupBy } from "./usage-queries.js";
+import {
+  orgUsage,
+  orgUsageEvents,
+  orgUsageByMeeting,
+  orgMonthToDateSpend,
+  readMonthlyBudgetUsd,
+  ORG_USAGE_GROUP_BY,
+  type OrgUsageGroupBy,
+} from "./usage-queries.js";
 
 type Json = Record<string, unknown>;
 
@@ -49,6 +57,29 @@ function parseEpoch(raw: unknown, fallback: number): number | null {
 function intParam(raw: unknown, fallback: number): number {
   const n = Number(raw);
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+/**
+ * `?from&to` 查詢窗解析（三條 /usage* 路由共用；規則完全相同——原本各抄一份，W4 加第三條時抽出）。
+ * 合法 → {from,to}；不合法 → **已送出 400**，呼叫端直接 return（回 null 代表「別再往下做」）。
+ */
+function parseUsageWindow(req: Request, res: Response): { from: number; to: number } | null {
+  const now = Date.now();
+  const to = parseEpoch(req.query.to, now);
+  const from = parseEpoch(req.query.from, now - USAGE_DEFAULT_WINDOW_MS);
+  if (from === null || to === null) {
+    res.status(400).json({ error: "from/to must be epoch-ms numbers" });
+    return null;
+  }
+  if (from > to) {
+    res.status(400).json({ error: "from must be <= to" });
+    return null;
+  }
+  if (to - from > USAGE_MAX_WINDOW_MS) {
+    res.status(400).json({ error: "date range too large (max ~400 days)" });
+    return null;
+  }
+  return { from, to };
 }
 
 export function createOrgRouter(core: CrmCore, jwtSecret: string): Router {
@@ -104,32 +135,28 @@ export function createOrgRouter(core: CrmCore, jwtSecret: string): Router {
   );
 
   // ── GET /org/usage?from&to&groupBy=kind|model|day（owner/admin：本 org AI 花費明細） ──
+  // W4：回應併入 `budget`（月上限 env ORG_MONTHLY_BUDGET_USD ＋當月至今花費）——env 未設則整個欄位不存在，
+  // 前端不渲染預算條。budget 的窗恆為「本月」，與 from/to 無關（見 usage-queries.OrgBudget）。
   router.get(
     "/usage",
     mw(requireManager),
     mw(async (req, res) => {
       const orgId = req.auth!.orgId;
-      const now = Date.now();
-      const to = parseEpoch(req.query.to, now);
-      const from = parseEpoch(req.query.from, now - USAGE_DEFAULT_WINDOW_MS);
-      if (from === null || to === null) {
-        res.status(400).json({ error: "from/to must be epoch-ms numbers" });
-        return;
-      }
-      if (from > to) {
-        res.status(400).json({ error: "from must be <= to" });
-        return;
-      }
-      if (to - from > USAGE_MAX_WINDOW_MS) {
-        res.status(400).json({ error: "date range too large (max ~400 days)" });
-        return;
-      }
+      const win = parseUsageWindow(req, res);
+      if (!win) return;
       const groupByRaw = str(req.query.groupBy) ?? "day";
       if (!isOneOf<OrgUsageGroupBy>(groupByRaw, ORG_USAGE_GROUP_BY)) {
         res.status(400).json({ error: "groupBy must be one of kind|model|day" });
         return;
       }
-      res.json(await orgUsage(core.db, orgId, { from, to, groupBy: groupByRaw }));
+      const usage = await orgUsage(core.db, orgId, { ...win, groupBy: groupByRaw });
+      const monthlyUsd = readMonthlyBudgetUsd();
+      if (monthlyUsd === null) {
+        res.json(usage);
+        return;
+      }
+      const mtd = await orgMonthToDateSpend(core.db, orgId, Date.now());
+      res.json({ ...usage, budget: { monthlyUsd, ...mtd } });
     }),
   );
 
@@ -139,25 +166,26 @@ export function createOrgRouter(core: CrmCore, jwtSecret: string): Router {
     mw(requireManager),
     mw(async (req, res) => {
       const orgId = req.auth!.orgId;
-      const now = Date.now();
-      const to = parseEpoch(req.query.to, now);
-      const from = parseEpoch(req.query.from, now - USAGE_DEFAULT_WINDOW_MS);
-      if (from === null || to === null) {
-        res.status(400).json({ error: "from/to must be epoch-ms numbers" });
-        return;
-      }
-      if (from > to) {
-        res.status(400).json({ error: "from must be <= to" });
-        return;
-      }
-      if (to - from > USAGE_MAX_WINDOW_MS) {
-        res.status(400).json({ error: "date range too large (max ~400 days)" });
-        return;
-      }
+      const win = parseUsageWindow(req, res);
+      if (!win) return;
       const kind = str(req.query.kind) ?? undefined;
       const limit = Math.min(200, Math.max(1, intParam(req.query.limit, 50)));
       const offset = Math.max(0, intParam(req.query.offset, 0));
-      res.json(await orgUsageEvents(core.db, orgId, { from, to, kind, limit, offset }));
+      res.json(await orgUsageEvents(core.db, orgId, { ...win, kind, limit, offset }));
+    }),
+  );
+
+  // ── GET /org/usage/by-meeting?from&to&limit（W4：花費最高的 N 場會議＝「單場成本」） ──
+  // 只涵蓋帶 meeting_id 的會中用量；會前生成/研究不歸屬任何一場（見 usage-queries.orgUsageByMeeting）。
+  router.get(
+    "/usage/by-meeting",
+    mw(requireManager),
+    mw(async (req, res) => {
+      const orgId = req.auth!.orgId;
+      const win = parseUsageWindow(req, res);
+      if (!win) return;
+      const limit = Math.min(50, Math.max(1, intParam(req.query.limit, 10)));
+      res.json(await orgUsageByMeeting(core.db, orgId, { ...win, limit }));
     }),
   );
 

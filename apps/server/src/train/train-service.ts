@@ -29,6 +29,7 @@ import type { Meter } from "../ops/meter.js";
 import type { GeminiClient } from "../gemini.js";
 import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { buildPersonaPrompt, personaReadiness, trustedFieldSet, canTrain, pickPersonaVoice } from "./persona.js";
+import { lastPracticeByContact } from "./last-score.js";
 import {
   draftPersonaForContact,
   designSyntheticPersona,
@@ -136,6 +137,19 @@ export function createTrainService(deps: TrainServiceDeps): TrainService {
             readiness,
             unlocked: c.trainingUnlocked === 1, // 手動解鎖／AI 補齊／虛擬人物 → client isReady 應 OR 此旗標
           });
+        }
+      }
+
+      // W4「上次分數」：一次查完本 org 的最近對練報告再回貼（避免 per-contact N+1）。
+      // 沒練過的 contact 不在 Map 裡 → 兩欄維持 undefined（＝「尚未對練」，不是 0 分）。
+      if (out.length > 0) {
+        const lastByContact = await lastPracticeByContact(core.db, orgId);
+        for (const p of out) {
+          const last = lastByContact.get(p.contactId);
+          if (last) {
+            p.lastScore = last.score;
+            p.lastPracticedAt = last.at;
+          }
         }
       }
       return out;
