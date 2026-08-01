@@ -136,6 +136,16 @@ export function SlideEditor({ deckId }: { deckId: string }) {
     setLocked409(false);
   }, [slides, selected]);
 
+  /**
+   * 縮圖列現在是自己捲動的一欄（CSS：grid row 定高 ＋ overflow-y:auto）。選頁若來自鍵盤/程式
+   * （或選到捲出視野的頁），縮圖要自動帶進視野；`block:"nearest"` 只在需要時捲最短距離，
+   * 且因為唯一可捲祖先就是縮圖列本身，不會連動整頁。
+   */
+  const thumbRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  useEffect(() => {
+    thumbRefs.current[selected]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selected, slides.length]);
+
   const committedIndex = deck?.committedIndex ?? -1;
   const originalCount = deck?.originalCount ?? 0;
   const isPlayed = selected <= committedIndex; // I1：已播頁不可改（server 也會回 409）
@@ -384,6 +394,9 @@ export function SlideEditor({ deckId }: { deckId: string }) {
                   <button
                     key={s.id || i}
                     type="button"
+                    ref={(el) => {
+                      thumbRefs.current[i] = el;
+                    }}
                     // is-played 沿用既有「鎖定/淡化」樣式；is-original 為語義標記。
                     className={`mc-thumb ${i === selected ? "is-sel" : ""} ${locked ? "is-played" : ""} ${orig ? "is-original" : ""}`}
                     onClick={() => setSelected(i)}

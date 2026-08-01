@@ -527,21 +527,43 @@
 .mc-filebtn { cursor: pointer; }
 
 /* ── slide editor ───────────────────────────────────────────── */
+/* 2026-08-01 版面修正（使用者實測回報三症狀，同一個根因）：
+   編輯器原本只是 `.mc-shell__body`（max-width 1160px＋上下留白、**高度隨內容長**）裡的一塊內容，
+   `.mc-editor__grid` 又沒指定 grid-template-rows → 隱含 row ＝ auto ＝ 三欄裡最高者的 max-content，
+   而最高者永遠是右側屬性面板。於是：
+     (1) 中間舞台被面板高度撐長 → slide 垂直位置隨「選到哪一頁」跳動（修前實測第 1 頁 top=365.2px、
+         第 4 頁（比較表）top=588.2px，位移 223px），上下多出來的空白就是舞台底色；
+     (2) 縮圖列高度永遠等於 row 高 → `overflow:auto` 永不觸發（修前 scrollHeight==clientHeight==849），
+         滾輪只好帶動整頁；
+     (3) 舞台底色還寫死重設計前的深藍 `#0a1120`（深/淺主題都一樣），成了大片深藍黑邊。
+   解法：只在「本頁有編輯器」時把 shell 主欄改成 100dvh 定高（`:has()` 精準限縮，不影響其他頁），
+   grid 明確給單一 `minmax(0, 1fr)` row，三欄各自 overflow 捲動；舞台底色改吃 `--mc-sunk` token。 */
+.mc-shell__main:has(.mc-editor) { height: 100dvh; }
+.mc-shell__body:has(.mc-editor) { max-width: none; width: 100%; padding: 0; flex: 1 1 auto; min-height: 0; }
+
 .mc-editor { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .mc-editor__bar { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--mc-border); }
 .mc-editor__title { margin: 0; font-size: 17px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-editor__baractions { display: flex; gap: 8px; }
-.mc-editor__grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px 1fr 360px; gap: 0; }
-.mc-editor__thumbs { border-right: 1px solid var(--mc-border); overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-.mc-thumb { position: relative; width: 100%; padding: 0; background: none; border: 2px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+/* grid-template-rows 是本次修正的關鍵：明確一列 minmax(0,1fr)＝吃滿定高、且允許欄內容縮到 0，
+   三欄才會各自捲動而不是互相撐高。右欄加寬（表單欄位可讀）＋隨視窗彈性。 */
+.mc-editor__grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 184px minmax(0, 1fr) clamp(340px, 27vw, 440px); grid-template-rows: minmax(0, 1fr); gap: 0; }
+.mc-editor__thumbs { border-right: 1px solid var(--mc-border); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.mc-thumb { position: relative; width: 100%; padding: 0; background: none; border: 2px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; flex: none; }
 .mc-thumb.is-sel { border-color: var(--mc-accent); }
 .mc-thumb__no { flex: none; width: 20px; color: var(--mc-text-muted); font-size: 12px; text-align: right; }
 .mc-thumb__frame { flex: 1; min-width: 0; border-radius: 6px; overflow: hidden; }
 .mc-thumb.is-played { opacity: 0.7; }
 .mc-thumb__lock { position: absolute; top: 4px; right: 4px; font-size: 12px; }
-.mc-editor__preview { display: flex; align-items: center; justify-content: center; padding: 24px; overflow: auto; background: #0a1120; }
-.mc-editor__stage { width: 100%; max-width: 900px; }
-.mc-editor__panel { border-left: 1px solid var(--mc-border); overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+/* 舞台：沉底色（token，雙主題各自對）＋ 定高容器。stage 用 `margin:auto` 置中（不是
+   align-items:center——後者在內容超高時會裁掉上緣）；container-type:size 讓 stage 能以 cqh
+   把 16:9 盒鎖進可用高度內，切頁不再有任何高度變動。 */
+.mc-editor__preview { display: flex; padding: 20px 24px; overflow: auto; background: var(--mc-sunk); container-type: size; }
+.mc-editor__stage { margin: auto; width: min(100%, 1040px); }
+@supports (container-type: size) {
+  .mc-editor__stage { width: min(100%, 1040px, calc(100cqh * 16 / 9)); }
+}
+.mc-editor__panel { border-left: 1px solid var(--mc-border); overflow-y: auto; overscroll-behavior: contain; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .mc-editor__locked { padding: 10px 12px; background: rgba(251, 191, 36, 0.14); border: 1px solid var(--mc-warn); border-radius: var(--mc-radius); color: #fde68a; font-size: 13px; }
 .mc-editor__fields { border: none; margin: 0; padding: 0; min-width: 0; }
 .mc-editor__fields[disabled] { opacity: 0.6; }
@@ -558,7 +580,9 @@
 .mc-blocks { display: flex; flex-direction: column; gap: 12px; }
 .mc-blocks__list { display: flex; flex-direction: column; gap: 10px; }
 .mc-blocks__empty { color: var(--mc-text-muted); font-size: 13px; margin: 0; }
-.mc-blk { border: 1px solid var(--mc-border); border-radius: var(--mc-radius); padding: 10px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+/* min-width:0 是必要的：`.mc-blk` 是 <fieldset>，瀏覽器給它的內建 `min-width: min-content` 會讓它
+   拒絕縮到內容寬以下——比較表網格一橫寬，整個區塊就撐破右欄漂出視窗（2026-08-01 實測到）。 */
+.mc-blk { border: 1px solid var(--mc-border); border-radius: var(--mc-radius); padding: 10px; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .mc-blk--nested { padding: 8px; }
 .mc-blk__legend { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0 2px; }
 .mc-blk__type { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mc-accent); font-weight: 700; }
@@ -570,6 +594,29 @@
 .mc-blocks__add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 8px; border-top: 1px solid var(--mc-border); }
 .mc-blocks__addlabel { font-size: 12px; color: var(--mc-text-muted); margin-right: 4px; }
 .mc-feat-edit { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px; align-items: center; }
+/* 比較表表單（2026-08-01 修）：原本「表頭 N 欄各佔一整列 ＋ 內容列每列擠 N 個輸入框」，
+   在 360px 面板裡每格只剩 62.6px（實測 20 格有 13 格文字被截），整組又高達 576px 要一直上下捲。
+   改成一張真的 2D 網格：表頭與內容列同格對齊、欄寬下限 132px（≥8 個全形字），欄多時**本區塊自己**
+   橫捲（不牽動面板/整頁）；表頭不再各佔一列 → 整組高度顯著收斂。行為完全不變（增刪欄列、
+   canRemoveCol≥2、值綁定都走原本那幾個 handler）。 */
+.mc-tbl {
+  display: grid;
+  grid-template-columns: repeat(var(--mc-tbl-cols, 2), minmax(132px, 1fr)) 26px;
+  gap: 6px;
+  align-items: center;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin; /* 欄多時給得出「可左右捲」的視覺提示，又不吃掉一整條粗捲軸的高度 */
+  padding-bottom: 4px;
+}
+.mc-tbl .mc-input { padding: 6px 8px; font-size: 13px; min-width: 0; }
+.mc-tbl__head { display: flex; align-items: center; gap: 4px; min-width: 0; }
+/* 刪列鈕與表頭右上角固定落在最後一軌（資料若異常短也不會錯位）。 */
+.mc-tbl > .mc-iconbtn, .mc-tbl__corner { grid-column: -2 / -1; }
+.mc-tbl__corner { display: block; }
+.mc-tbl__cap { font-size: 12px; line-height: 1.5; color: var(--mc-text-muted); }
+.mc-tbl__acts { display: flex; gap: 6px; }
+.mc-iconbtn--sm { width: 24px; height: 24px; font-size: 13px; flex: none; }
 .mc-twocol-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .mc-twocol-edit__h { margin: 0 0 6px; font-size: 12px; color: var(--mc-text-muted); }
 .mc-textarea { min-height: 60px; resize: vertical; font-family: inherit; }
@@ -596,10 +643,16 @@
    全域載入，本檔的消費者 hud/copilot 兩頁都在其下）。 */
 
 /* responsive: collapse editor to single column on narrow viewports */
+/* 窄視窗維持既有「單欄堆疊、整頁捲」的行為 → 把上面那組定高/尺寸容器全部退回 auto，
+   否則 100dvh 定高會把三段擠成一團、`container-type:size` 也會讓舞台塌成 0 高。 */
 @media (max-width: 960px) {
+  .mc-shell__main:has(.mc-editor) { height: auto; }
+  .mc-editor { height: auto; }
   .mc-editor__grid { grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
-  .mc-editor__thumbs { flex-direction: row; border-right: none; border-bottom: 1px solid var(--mc-border); }
+  .mc-editor__thumbs { flex-direction: row; overflow-x: auto; overflow-y: hidden; border-right: none; border-bottom: 1px solid var(--mc-border); }
   .mc-editor__thumbs .mc-thumb { flex: 0 0 140px; flex-direction: column; }
+  .mc-editor__preview { container-type: normal; }
+  .mc-editor__stage { width: min(100%, 1040px); }
   .mc-editor__panel { border-left: none; border-top: 1px solid var(--mc-border); }
   .mc-feat-edit { grid-template-columns: 1fr 1fr; }
 }

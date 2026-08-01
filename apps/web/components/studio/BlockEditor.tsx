@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { Fragment, type CSSProperties, type ReactNode } from "react";
 import {
   BULLET_MARKERS,
   SLIDE_ICONS,
@@ -511,6 +511,11 @@ function patchStep(
 /**
  * 比較表表單：表頭一列 ＋ 每列 N 格（欄數由表頭決定，新增/移除欄同步所有列，
  * 不可能產生列長不等於表頭長度的資料——與 server sanitize 的守門同一條規則）。
+ *
+ * 2026-08-01 版面重排（使用者實測：右欄表單過長、每格文字擠成「單次運」「極高（」）：
+ * 版面從「表頭 N 欄各佔一整列 ＋ 內容列橫排 N 個窄格」改成**一張 2D 網格**（`.mc-tbl`），
+ * 表頭與內容格同軌對齊、欄寬下限 132px，欄多時網格自己橫捲。**行為零變更**：
+ * setHeader/setCell/addCol/removeCol/刪列 都還是同一組 handler，canRemoveCol≥2 的守門也原封不動。
  */
 function TableFields({
   block,
@@ -543,25 +548,75 @@ function TableFields({
     });
   return (
     <div className="mc-field">
-      <span>表頭（第一格通常留空＝列標題欄）</span>
-      {block.headers.map((h, i) => (
-        <div key={i} className="mc-blk__row">
-          <input className="mc-input" placeholder={i === 0 ? "（留空）" : "欄名"} value={h} onChange={(e) => setHeader(i, e.target.value)} />
-          <button
-            type="button"
-            className="mc-iconbtn mc-iconbtn--danger"
-            aria-label="移除欄"
-            disabled={!canRemoveCol}
-            title={canRemoveCol ? "移除這一欄" : "比較表至少要 2 欄"}
-            onClick={() => removeCol(i)}
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={addCol}>
-        + 欄
-      </button>
+      <span className="mc-tbl__cap">
+        比較表 {cols} 欄 × {block.rows.length} 列：第一欄是列標題，其餘是要比較的方案。欄較多時本表可左右捲動。
+      </span>
+      <div className="mc-tbl" style={{ "--mc-tbl-cols": cols } as CSSProperties}>
+        {/* 表頭列：欄名 ＋ 移除該欄（最少 2 欄，同 canRemoveCol 守門） */}
+        {block.headers.map((h, i) => (
+          <div key={`h${i}`} className="mc-tbl__head">
+            <input
+              className="mc-input"
+              placeholder={i === 0 ? "（留空）" : "欄名"}
+              aria-label={i === 0 ? "列標題欄的欄名（通常留空）" : `第 ${i + 1} 欄欄名`}
+              value={h}
+              onChange={(e) => setHeader(i, e.target.value)}
+            />
+            <button
+              type="button"
+              className="mc-iconbtn mc-iconbtn--sm mc-iconbtn--danger"
+              aria-label="移除欄"
+              disabled={!canRemoveCol}
+              title={canRemoveCol ? "移除這一欄" : "比較表至少要 2 欄"}
+              onClick={() => removeCol(i)}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <span className="mc-tbl__corner" aria-hidden="true" />
+
+        {/* 內容列：每格垂直對齊上方欄名，列尾是移除該列 */}
+        {block.rows.map((row, r) => (
+          <Fragment key={`r${r}`}>
+            {row.map((cell, c) => {
+              // 提示字與無障礙標籤共用同一個欄名，改一個不會漏另一個。
+              const colName = c === 0 ? "列標題" : block.headers[c] || `第 ${c + 1} 欄`;
+              return (
+                <input
+                  key={c}
+                  className="mc-input"
+                  placeholder={colName}
+                  aria-label={`第 ${r + 1} 列・${colName}`}
+                  value={cell}
+                  onChange={(e) => setCell(r, c, e.target.value)}
+                />
+              );
+            })}
+            <button
+              type="button"
+              className="mc-iconbtn mc-iconbtn--sm mc-iconbtn--danger"
+              aria-label="移除列"
+              onClick={() => onChange({ ...block, rows: block.rows.filter((_, j) => j !== r) })}
+            >
+              ×
+            </button>
+          </Fragment>
+        ))}
+      </div>
+
+      <div className="mc-tbl__acts">
+        <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={addCol}>
+          + 欄
+        </button>
+        <button
+          type="button"
+          className="mc-btn mc-btn--ghost mc-btn--sm"
+          onClick={() => onChange({ ...block, rows: [...block.rows, Array.from({ length: cols }, () => "")] })}
+        >
+          + 列
+        </button>
+      </div>
 
       <label className="mc-field">
         <span>要強調哪一欄（自家方案）</span>
@@ -580,30 +635,6 @@ function TableFields({
           )}
         </select>
       </label>
-
-      <span>內容列</span>
-      {block.rows.map((row, r) => (
-        <div key={r} className="mc-blk__row">
-          {row.map((cell, c) => (
-            <input key={c} className="mc-input" placeholder={c === 0 ? "列標題" : "內容"} value={cell} onChange={(e) => setCell(r, c, e.target.value)} />
-          ))}
-          <button
-            type="button"
-            className="mc-iconbtn mc-iconbtn--danger"
-            aria-label="移除列"
-            onClick={() => onChange({ ...block, rows: block.rows.filter((_, j) => j !== r) })}
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <button
-        type="button"
-        className="mc-btn mc-btn--ghost mc-btn--sm"
-        onClick={() => onChange({ ...block, rows: [...block.rows, Array.from({ length: cols }, () => "")] })}
-      >
-        + 列
-      </button>
     </div>
   );
 }
