@@ -355,5 +355,15 @@
   7. **/simplify**：16 候選→**12 套用**（含 SLIDE_DEFAULT_THEME 單一真相、稅率常數化、**設計真相檔複製進 repo `docs/design-handoff/`** 防 scratchpad 消失懸空）＋1 有理跳過；apply agent 收到壞插值時**正確拒跑**（指揮官腳本插值 bug，修後續跑）。
   8. **最終數字**：shared/crm build ✓、crm **88 測**、server **66 檔 456 測**、web tsc ✓＋build **19 路由**、parity **472/472**、零測試斷言被動。
 - **本輪 ROM 共 7 則**（21:17 立項／08:30 W1W2＋四疑義／09:05 W2.5 清單／11:50 mute＋續作／13:05 W3 PASS＋三裁決／15:10 W4 PASS／16:00 review 裁決＋agent 現場裁決一則）；CHANGE_TRACKER 本輪 10+ 筆。
-- **commit＋push＋部署（2026-07-31 使用者核准「commit + 推上去+部屬」）**：四邏輯 commit `f299ca5` feat(slides)＋`23f7071` feat(server)＋`bdaa4c4` feat(web)＋`8ce4c3c` docs，push origin main（`ea05daf..8ce4c3c`）。部署照 SOP A：build server `50eda524`／web `0284f1b1` 皆 SUCCESS → **server rev `00027-nkz`**（`services update --image` 保 env＋`--no-cpu-throttling`）＋**web rev `00028-qrl`**（`run deploy` 帶 NEXT_PUBLIC_API_BASE）。**migration 023 首次套上 Cloud SQL PG 成功**（`ready:true`＝boot+migrate 過，**PG 方言債關閉**）。冒煙全綠（health 200／ready true／web 六路由 200／unauth 雙 401）；開機 log 無 error。DEPLOY.md 版本節已更新。**線上現為：待講清單全鏈＋C2 匯入抽字＋全站重設計＋新 slide 模板會中自動選用。**
-- **記債**：純話術建議（不 append 的 server 端新型別）；warn 琥珀 tag 族對比併日後 a11y 總議；spend/PersonaPicker 整檔 i18n 化；last-score 索引（org 報告破萬）；home.phase* 剩餘 6 鍵語意複查；殭屍行程（PID 33864/2020/8799）待使用者手動清。
+- **commit＋push＋部署（2026-07-31 使用者核准「commit + 推上去+部屬」）**：四邏輯 commit `f299ca5` feat(slides)＋`23f7071` feat(server)＋`bdaa4c4` feat(web)＋`8ce4c3c` docs，push origin main（`ea05daf..8ce4c3c`）。部署照 SOP A：build server `50eda524`／web `0284f1b1` 皆 SUCCESS → **server rev `00027-nkz`**（`services update --image` 保 env＋`--no-cpu-throttling`）＋**web rev `00028-qrl`**（`run deploy` 帶 NEXT_PUBLIC_API_BASE）。**migration 023 首次套上 Cloud SQL PG 成功**（`ready:true`＝boot+migrate 過，**PG 方言債關閉**）。冒煙全綠；開機 log 無 error。DEPLOY.md 版本節已更新（後續 docs commit `a6960e0` push）。**線上現為：待講清單全鏈＋C2 匯入抽字＋全站重設計＋新 slide 模板會中自動選用。**
+- **記債（重設計輪）**：純話術建議（不 append 的 server 端新型別）；warn 琥珀 tag 族對比併日後 a11y 總議；spend/PersonaPicker 整檔 i18n 化；last-score 索引（org 報告破萬）；home.phase* 剩餘 6 鍵語意複查；殭屍行程（PID 33864/2020/8799）待使用者手動清。
+
+## 2026-08-01 session（上線首日實測回饋：生成誤報安全限制＋Studio 編輯器三修＋review/simplify）
+
+- **輪 1（使用者實測「介紹MeetCopilot給Troy」被拒「安全性限制」）**：prod log 實證真因＝**RECITATION 被誤標 SAFETY＋一律不可重試**（使用者 31 秒重按即成功＝根因佐證）。修＝RECITATION 可重試＋錯誤誠實分流＋非 STOP 印 token 四數；連帶挖出 MAX_TOKENS 退化迴圈（6 跑 3 失敗；**實測「加大上限無效只變貴」**）→ deck 生成/revise 開 resampleOnMaxTokens＋預算依頁數線性。修後 8 連跑 7 成功。
+- **輪 2（使用者回報 Studio 三 UI 問題）**：共同根因＝`.mc-editor__grid` 沒設 rows（舞台高度隨右欄變→切頁跳 223px＋縮圖列不能捲）＋畫布背板寫死重設計前深藍 `#0a1120`（W1/W2 檔案接縫漏網）。修後切五頁 slide 頂邊全等、TABLE 表單 0/20 截字（−34.5% 高）、縮圖列獨立捲；`slide-legacy-lock` 20/20 綠。
+- **/code-review（使用者指示）＋L20 第三度生效**：confirmed 0，但 killed 中**三鏡頭 refuted:false 交叉命中同一條**——RECITATION 升溫＋「改寫勿照抄」指示**無條件打進 CRM 抽取端**（任務恰是逐字取值）＝污染抽取忠實度。且出現新形態：**verifier 拿指揮官 ROM 當反駁證據**（17:15 裁決沒寫明只涵蓋 deck 脈絡）→ 決策紀錄必須寫明涵蓋範圍（入 ROM 17:54 方法論節）。
+- **修（拆兩層）＋復驗 PASS**：RECITATION 全域維持可重試但預設**原溫原 prompt 純重抽**；升溫＋hint 改 `resampleOnRecitation` opt-in、僅 deck 生成/revise 兩處開。復驗關鍵證據＝**未開旗標呼叫端重試 config 與首次逐位元相同**（16 個 generateJson 呼叫端全清查）。
+- **/simplify（使用者指示）**：9 候選去重 6 → 套 5 跳 1（跳＝mapGenerateError 換 helper 會把防禦性寬鬆 regex 收窄＝行為變更，正確拒套、記另輪）。
+- **最終數字**：server **68 檔 475 測**、web tsc ✓＋build 19 路由、legacy-lock＋error-mapping 34/34。**未 commit 待核准**（server＋web 都要重建）。
+- **記債**：~12% 生成殘留失敗率（治本＝W2 版型 prompt/schema 瘦身另輪）；重取樣失敗 attempt 不計費（併 07-30 既有 meter 系統債）；dev hydration 警告 5 筆（`suppressHydrationWarning` 候選）；4 欄比較表面板內橫捲（接受的取捨）；mapGenerateError 判定單一真相化（需補測另輪）。

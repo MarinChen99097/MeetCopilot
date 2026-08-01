@@ -35,6 +35,82 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-08-01 18:20 | /simplify 清理：重試 hint 組裝壓平、token 預算共用夾頂公式、表格欄名去重、CSS no-op 刪除
+- **工作區**: apps/server, apps/web
+- **類型**: refactor
+- **檔案**: `apps/server/src/gemini.ts`, `apps/server/src/generation/slide-gen.ts`, `apps/web/components/studio/BlockEditor.tsx`, `apps/web/app/studio-present.css`
+- **改了什麼**（四項，皆行為不變）：
+  1. `gemini.ts` systemInstruction 巢狀三元壓平。Before：外層 `escalateRecitation || maxTokensHits > 0` 三元，內層兩個模板字串各再嵌一個三元（同組條件判兩次）。After：`const retryHints = (escalateRecitation ? RECITATION_REWRITE_HINT : "") + (maxTokensHits > 0 ? MAX_TOKENS_CONCISE_HINT : "");` ＋ `const systemInstruction = retryHints ? \`${opts.system ?? ""}${retryHints}\` : opts.system;`。兩個 hint 常數皆非空字串 → `retryHints` 為空 ⇔ 原外層條件為 false，無 hint 時仍原封回傳 `opts.system`（含 undefined，維持「連鍵的有無都一樣」與 `toBe` 同參照）。
+  2. `gemini.ts` `usageMetadata` 的 `UsageMetadataLoose` cast 由兩處（非 STOP 觀測 log／正常路徑 `readUsage`）上提為一份 `const u`，兩處共用；純型別斷言、零副作用。
+  3. `slide-gen.ts` `deckOutputTokenBudget`／`reviseOutputTokenBudget` 兩份逐字相同公式抽出私有 `clampedOutputBudget(floor, perUnit, count)`＝`Math.min(floor + Math.max(1, count) * perUnit, GEMINI_MAX_OUTPUT_TOKENS)`；兩個 export 名稱、簽名、常數與事故實測 doc comment 全保留，改為一行委派。
+  4. `BlockEditor.tsx` TableFields 內容格：`c === 0 ? "列標題" : block.headers[c] || \`第 ${c + 1} 欄\`` 原本在 placeholder 與 aria-label 逐字重複兩次 → 提為區域變數 `colName` 共用（渲染出的 DOM 屬性不變）。
+  5. `studio-present.css` 刪除 `@media (max-width: 960px)` 內的 `.mc-shell__body:has(.mc-editor) { min-height: 0; }`——第 542 行同選擇器同特異度（0,2,0）已無條件宣告同值，MQ 內這條是純 no-op 死碼（globals.css 的 `.mc-shell__body` 為 0,1,0，任何順序都輸給 542）。
+- **未套**：`decks-routes/index.ts` 的 `mapGenerateError` 改用 `isRecitationError`／`isMaxTokensError` helper——現有 regex 是 `/…|recitation/i`、`/MAX_TOKENS/i`（大小寫不敏感）且吃非 Error 值（`String(err)`），helper 為 `instanceof Error` ＋大小寫敏感，對「上游原始訊息用小寫」或「丟非 Error」的邊界輸入判定會收窄 → 非「行為完全不變」，跳過。
+- **為什麼**: `/simplify` 候選裁決；只套可逐位元證明等價者，且一律不動測試斷言。
+- **回歸**: apps/server `tsc --noEmit` 乾淨、`vitest run` 68 檔 475 測全綠；單獨再跑 slide-legacy-lock（20）＋generate-error-mapping（14）＝34 全綠；apps/web `tsc --noEmit` 乾淨、`next build` 19 路由成功；i18n key parity zh-TW/en 各 472 鍵、零缺漏。測試檔一行未動。
+
+### 2026-08-01 18:05 | RECITATION 重取樣拆兩層：全域維持純重抽、升溫＋改寫 hint 改 opt-in（`resampleOnRecitation`）
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/gemini.ts`, `apps/server/src/generation/slide-gen.ts`, `apps/server/src/gemini-recitation-resample.test.ts`（新增）, `apps/server/src/generation/generate-error-mapping.test.ts`
+- **為什麼（ROM 2026-08-01 17:54 決策 1／/code-review 三鏡頭交叉命中）**: 17:15 的修法讓 RECITATION 可重試（prod 事故的根修，正確且保留），但把「每撞一次升溫 +0.2（夾 1.4）＋在 systemInstruction 追加『用自己的話改寫、不要照抄』」**無條件**套到所有 `generateJson` 呼叫端。問題在於 CRM 抽取端（`research/extractor.ts`、`research/deep-extractor.ts`）的 SYSTEM 明令「逐字取值、嚴禁捏造」，且 `temperature` 0.3/0.4 是實測釘死的（同一頁在預設溫度下產品數 1 vs 33）。一旦那條路徑撞到 RECITATION 觸發重取樣，抽出的值會被升溫＋被指示「改寫」，而 provenance 仍指著原頁 ＝ **假的可稽核性**。17:15 的裁決只涵蓋 deck 生成脈絡（同輪對 MAX_TOKENS 已做 per-caller 裁決、對 RECITATION 沒做，不對稱本身即漏洞證據）。
+- **改了什麼**:
+  1. `gemini.ts:70` `GenerateJsonOptions` 新增 `resampleOnRecitation?: boolean`（命名／位置比照既有 `resampleOnMaxTokens`），預設 false，附「何時該開／何時不要開」的判準註解。
+  2. `gemini.ts:392` `generateJsonMetered` 內的重取樣升級改為受旗標守門：**Before** `const temperature = recitationHits > 0 ? Math.min(...) : opts.temperature;` ＋ `systemInstruction = recitationHits > 0 || maxTokensHits > 0 ? ... : opts.system;` → **After** 先算 `const escalateRecitation = opts.resampleOnRecitation === true && recitationHits > 0;`，`temperature` 與 `systemInstruction` 一律改判 `escalateRecitation`。未開旗標時重試的 `config.temperature` 與 `config.systemInstruction` **逐位元等同首次呼叫**（未指定 temperature 時連鍵都不會憑空出現）。
+  3. **未動**：`finishReasonError` 對 RECITATION 的 `retryable` 語意（仍全域無條件不短路）、`recitationHits` 計數與非 STOP 的觀測 log、happy path。亦即「可重試」與「升級重取樣」被拆成兩件獨立的事。
+  4. `slide-gen.ts:659`（`reviseSlides`）與 `slide-gen.ts:731`（`generateDeckSlides`）各補 `resampleOnRecitation: true`，與該處既有的 `resampleOnMaxTokens: true` 同位——只有這兩處輸出本來就該是原創簡報文案，「換句話說」正是需求。
+  5. 新測 `gemini-recitation-resample.test.ts`（5 測，`vi.mock("@google/genai")` 錄下每次 request）：(a) RECITATION 不短路、attempts 用滿；(b) 模擬抽取端（temperature 0.3 ＋逐字取值 SYSTEM）三次呼叫 config 逐位元相同、且未指定溫度時不塞 temperature 鍵；(c) 開旗標時 0.3→0.5→0.7 升溫＋注入 hint，未指定溫度時 1.2→1.4→夾住。`generate-error-mapping.test.ts` 補一測鎖「RECITATION 的 retryable 與任何旗標無關」＋檔頭交叉引用。
+- **驗收**: `apps/server` `tsc --noEmit` EXIT=0；`vitest run` 68 檔 475 測全綠（基準 67 檔 469 測，只增不減）。全庫 grep `resampleOnRecitation`：生產程式碼僅 `gemini.ts` 定義處 ＋ `slide-gen.ts` 兩處啟用，其餘 14 個 `generateJson` 呼叫端零人拿到旗標——12 個在 slide-gen 之外（text-extract:243／checklist-gen:174,304／gemini-analysis:183／scoring:146／persona-gen:129,174／orchestrator:372／extractor:698,875／deep-extractor:769,821），另 2 個在 slide-gen 內但**刻意不開**（`generateSupplementSlide:789`、`regenerateOneSlide:859`——它們原本也沒開 `resampleOnMaxTokens`，本次嚴格照 ROM「只在 deck 生成＋revise 兩處、與 resampleOnMaxTokens 同位」不擴大範圍）。
+
+### 2026-08-01 17:20 | Studio 編輯器實測三症狀修復——舞台深藍殘色/切頁位移、TABLE 表單擠爆、縮圖列無法獨立捲
+- **工作區**: apps/web
+- **類型**: fix
+- **檔案**: `apps/web/app/studio-present.css`, `apps/web/components/studio/BlockEditor.tsx`, `apps/web/components/studio/SlideEditor.tsx`
+- **使用者回報（新版 Studio 編輯器實測）**: ①中間畫布上下大片深藍黑邊、切不同 slide 時畫布上下位移；②右側 TABLE 表單太長、內容列欄位文字擠成「單次運」「極高（」；③左側縮圖列無法獨立上下捲。
+- **根因（① ② ③ 有共同的一個結構根因）**: `.mc-editor` 掛在 `.mc-shell__body`（`max-width:1160px` ＋上下留白、**高度隨內容**）裡，而 `.mc-editor__grid` 沒指定 `grid-template-rows` → 隱含 row ＝ `auto` ＝ 三欄中最高者的 max-content，最高者永遠是右側屬性面板。於是舞台高度＝面板高度：選到 blocks 多的頁（比較表）面板變高 → 舞台跟著變高 → 置中的 slide 垂直位置跳動（Playwright 修前實測：第 1 頁 slideTop=365.2px、第 3 頁 520.2、第 4 頁 588.2、第 6 頁 511.2 → 位移 223px；previewH 848.6/1158.6/1294.6/1140.6）；縮圖列高度也永遠等於 row 高 → `overflow:auto` 永不觸發（修前 scrollHeight==clientHeight==849）、滾輪打到整頁（修前滾輪 → `window.scrollY=363`、縮圖列 scrollTop=0）。另有一條獨立的殘留：`.mc-editor__preview` 背景寫死重設計前的深藍 `#0a1120`（雙主題同色），撐高後就是「大片深藍黑邊」。
+- **改了什麼**:
+  1. `studio-present.css` 編輯器區段：新增 `.mc-shell__main:has(.mc-editor){height:100dvh}` ＋ `.mc-shell__body:has(.mc-editor){max-width:none;padding:0;flex:1 1 auto;min-height:0}`——用 `:has()` 精準限縮在「本頁有編輯器」時才讓 shell 主欄變定高滿版工作台，其他頁零影響。
+  2. `.mc-editor__grid`：**Before** `grid-template-columns:180px 1fr 360px`（無 rows）→ **After** `grid-template-columns:184px minmax(0,1fr) clamp(340px,27vw,440px); grid-template-rows:minmax(0,1fr)`。明確單列 `minmax(0,1fr)` 是本次關鍵：吃滿定高、且允許欄內容縮到 0，三欄才各自捲動而非互相撐高。
+  3. `.mc-editor__preview`：`background:#0a1120` → `var(--mc-sunk)`（雙主題各自對）；`align-items:center` 改為 stage 的 `margin:auto`（前者在內容超高時會裁掉上緣）；加 `container-type:size`，配合 `.mc-editor__stage{width:min(100%,1040px,calc(100cqh*16/9))}`（`@supports` 內）把 16:9 盒鎖進可用高度。
+  4. `.mc-editor__thumbs` / `__panel`：`overflow:auto` → `overflow-y:auto` ＋ `overscroll-behavior:contain`（捲到底不牽動整頁）；`.mc-thumb` 加 `flex:none`（定高容器下不被壓扁）。
+  5. **TABLE 表單重排**（`BlockEditor.tsx` TableFields ＋ 新 CSS `.mc-tbl` 家族）：**Before** 表頭 N 欄各佔一整列、內容列每列橫排 N 個窄輸入框（360px 面板裡每格 62.6px，20 格有 13 格文字被截）→ **After** 表頭與內容格合成**一張 2D 網格**（`grid-template-columns: repeat(var(--mc-tbl-cols), minmax(132px,1fr)) 26px`，`--mc-tbl-cols` 由 inline style 帶入），欄寬下限 132px（≥8 個全形字）、欄多時**本區塊自己**橫捲（`overflow-x:auto; overscroll-behavior-x:contain; scrollbar-width:thin`），內容格 placeholder/aria-label 改用該欄欄名。**行為零變更**：setHeader/setCell/addCol/removeCol/刪列 都是同一組 handler，`canRemoveCol = cols > 2` 守門原封不動。
+  6. `.mc-blk` 加 `min-width:0`：它是 `<fieldset>`，瀏覽器內建 `min-width:min-content` 會讓比較表網格一橫寬就撐破右欄漂出視窗（第一版改完實測到，截圖佐證）。
+  7. `SlideEditor.tsx`：加 `thumbRefs` ＋ `useEffect([selected, slides.length])` → `scrollIntoView({block:"nearest",inline:"nearest"})`，選到捲出視野的頁時縮圖自動進視野（唯一可捲祖先＝縮圖列，不連動整頁）。
+  8. ≤960px media query 補上退回規則（`height:auto`、`container-type:normal`、stage 寬度復原、縮圖列改橫捲），維持既有「單欄堆疊、整頁捲」行為，避免定高把三段擠成一團／尺寸容器讓舞台塌成 0 高。
+  9. **未動**：`renderSlideBlock`／SlideRenderer 輸出與 `.slide` 內容域樣式一行未改（`apps/server` `slide-legacy-lock.test.ts` 20/20 綠佐證）；wire/server 零改動。
+- **驗收（真實輸出）**: web `tsc --noEmit` EXIT=0；`next build` EXIT=0（19 路由）；server `vitest run slide-legacy-lock` 20/20 passed。Playwright 實測（本機 dev + mock deck 8 頁含 comparison-matrix/timeline-gantt，1440×820）：舞台底色 `rgb(10,17,32)` → light `rgb(235,231,224)`／dark `rgb(21,23,23)`；切 5 頁 slideTop `365.2/520.2/588.2/511.2/365.2` → **全為 275.5**（previewH 恆 762）；TABLE 群組高 576px → **377px**（−34.5%），內容格最小寬 62.6 → **132px**，文字截斷 **13/20 → 0/20**，面板 `scrollWidth==clientWidth==388`（不再溢出）；縮圖列 `scrollHeight/clientHeight` 849/849（不可捲）→ 698/562（可捲），滾輪 `window.scrollY 363→0`、縮圖列 `scrollTop 0→136`，選第 8 頁 `inView:true`；整頁 `scrollHeight 983>820` → `820==820`；console error 修前修後同為 5 筆（皆為既有 `data-theme` hydration 警告，與本次改動無關）。行為回歸：+列/-列/+欄/刪欄到 2 欄後移除鈕 `disabled:[true,true]`、改格值同步進預覽並亮「尚未儲存」，pageErrors 0。
+- **為什麼**: 使用者實測回報的三個 UI 缺陷。前兩項若不修，比較表這種「會中最常被追問細節」的頁反而最難編（表單最長、字最不可讀），且切頁畫面跳動會讓人以為簡報壞了。修法一律只動編輯器 chrome（shell 定高、grid 軌道、表單版面、縮圖列捲動），不碰渲染輸出——這條界線由 legacy-lock 測試自動把關。
+
+### 2026-08-01 16:05 | prod 事故修復——RECITATION 誤標「安全性限制」＋deck 生成 MAX_TOKENS 撞頂
+- **工作區**: apps/server
+- **類型**: fix
+- **檔案**: `apps/server/src/gemini.ts`, `apps/server/src/decks-routes/index.ts`, `apps/server/src/generation/slide-gen.ts`, `apps/server/src/generation/generate-error-mapping.test.ts`（新）
+- **事故**: 使用者於 prod（rev `meetcopilot-server-00027-nkz`）用 DeckWizard 生成「介紹MeetCopilot給Troy」8 頁繁中 → 紅框「內容可能觸發安全性限制，請調整主題或用語後再試」。內容完全無害。
+- **prod log 逐字證據**（`2026-08-01T07:39:03` 收件、latency 51.87s、HTTP 422）：
+  - `07:39:55.341602Z [gemini:generateJson] attempt 1/3 failed: Gemini 生成未正常結束（finishReason=RECITATION）：內容可能涉及 recitation 限制，請調整輸入後再試。`
+  - `07:39:55.341986Z [decks/generate] generation failed: Error: ...（finishReason=RECITATION）...` ＋ `retryable: false`
+  - `07:40:26.365049Z` 使用者同輸入重按 → **HTTP 201 成功**（證明是抽樣性、非內容問題）
+  - `07:40:53.578395Z [gemini:generateJson] attempt 1/2 failed: ...（finishReason=MAX_TOKENS）...` ＋ `[generation] QA revise skipped:`（QA 修訂被靜默跳過）
+- **改了什麼**:
+  1. `gemini.ts` 新增純函式 `finishReasonError(finishReason)`（原本內嵌在 generateJsonMetered 的 hint 三元式抽出，可單測）。**Before**：所有 `finishReason!=="STOP"` 一律 `e.retryable = false` → withRetry 在 attempt 1/3 直接短路。**After**：只有 RECITATION 不設 `retryable=false`，交回 withRetry 重試；MAX_TOKENS／SAFETY／PROHIBITED_CONTENT／BLOCKLIST／其餘維持短路（行為不變）。RECITATION 的 hint 文字也不再含「安全性」。
+  2. `gemini.ts` generateJsonMetered 加 **RECITATION 獨立重取樣**：以 closure 計數 `recitationHits`，每撞一次就把 temperature 拉高（`(opts.temperature ?? 1.0) + 0.2×hits`，夾在 1.4）並在 systemInstruction 追加改寫指示 `RECITATION_REWRITE_HINT`。首次呼叫完全不受影響（happy path 零變更）。借 deep-extractor MAX_TOKENS v3「退化循環→獨立重取樣」教訓：同溫度重打會複製出同一段疑似背誦的輸出。
+  3. `gemini.ts` 新增 `isRecitationError`（比照既有 `isMaxTokensError`，字串真相住本檔）＋匯出 `RetryableError` 型別＋新增 `GEMINI_MAX_OUTPUT_TOKENS = 65536`（2026-08-01 以 `GET v1beta/models/gemini-3.5-flash` 實查：`outputTokenLimit=65536`，非臆測）。
+  4. `gemini.ts` 觀測性：finishReason!==STOP 時 `console.warn` 印出 `promptTokens/outputTokens/thoughtTokens/maxOutputTokens/recitationHits`——本次診斷正是卡在「log 只有 finishReason、沒有 token 數」。
+  5. `decks-routes/index.ts` 抽出純函式 `mapGenerateError(err)`（route handler 改為 4 行委派）。**Before**：`/finishReason=(?:SAFETY|RECITATION)|安全性|recitation/i` 把 RECITATION 併進 SAFETY 分支 → 回「內容可能觸發安全性限制」。**After**：RECITATION 獨立成一支且排在 SAFETY 之前（其 hint 含 "recitation"），回「生成內容與既有素材過度相似（recitation），自動改寫重試後仍未通過…」；SAFETY 分支改為 `finishReason=(?:SAFETY|PROHIBITED_CONTENT|BLOCKLIST)|安全性`。狀態碼一律不變（皆 422）。
+  6. `slide-gen.ts` 新增 `deckOutputTokenBudget(pages)`／`reviseOutputTokenBudget(slideCount)`。**Before**：deck 生成寫死 `maxOutputTokens: 16384`、reviseSlides 寫死 `4096`。**After**：依頁數線性給預算（deck＝8192＋2600/頁、revise＝4096＋4600/頁），夾在模型上限 65536。
+  7. **MAX_TOKENS 退化迴圈 → 獨立重取樣**（新增 `GenerateJsonOptions.resampleOnMaxTokens`，預設 false）。中途實測推翻了「加大上限就好」的假設：上限拉到 28992 後，失敗樣本照樣灌到 `26215+2761=28976` 撞頂——模型是**有多少預算吃多少**地重複繞圈，而同一份輸入的成功樣本 18～20 秒就寫完。故 deck 生成與 reviseSlides 兩處 `resampleOnMaxTokens: true`，撞頂時換一個 sample 並在 systemInstruction 追加 `MAX_TOKENS_CONCISE_HINT`（要求收斂長度、把 JSON 完整收尾）。**刻意不改全域預設**：checklist-gen（砍半大綱）與 deep-extractor（減半頁面）靠 `isMaxTokensError` 立刻取得控制權做「縮小輸入再重試」，內部先重試只會拖慢並多燒 token。
+- **為什麼**:
+  - **RECITATION 是輸出端的抽樣旗標**（這一筆 sample 被判太像既有素材），不是輸入內容違規——把它說成「安全性限制」既錯又不可行動（叫使用者改主題，但真正有效的動作是重試，使用者自己 31 秒後重按就成功了）。且 `retryable=false` 讓已設定的 `attempts:3` 形同虛設，一次抽樣不順就整份失敗。
+  - **MAX_TOKENS**：昨日 rev 00027-nkz 的 W2 版型全鏈改動（BLOCK_SCHEMA 加 table/timeline/steps、SLIDE_TEMPLATES 6→8）讓每頁 JSON 變胖，寫死的 16384 對 8 頁已不夠——真 API 實測 `outputTokens=14218 + thoughtTokens=2150 = 16368 ≈ 16384` 撞頂（thinking 與 JSON 共用同一份預算），同輸入 6 連跑失敗 3 次（50%）。reviseSlides 更誇張：單頁重做就用掉 `3061+1018=4079 ≈ 4096`，而 QA 一次最多送 3 頁 → 幾乎必然 MAX_TOKENS，又因該路徑 try/catch 靜默 skip，症狀是「QA 修訂長期沒作用」而非報錯。
+  - **但撞頂的真根因是退化迴圈、不是「真的需要那麼多 token」**（中途實測推翻第一版假設，故兩手都要）：只加大上限＝失敗成本變貴（44s→74s）而失敗率不變；只有換一個 sample 才有效。加大上限仍保留，因為它獨立解掉「長 deck（MAX_DECK_PAGES=40）在 16384 下必然截斷」這個真實的容量問題。
+- **真 API 驗證（同輸入「介紹MeetCopilot給Troy」8 頁繁中，本機直打 generateDeckSlides）**:
+  - **修前**：6 連跑 **3 成功／3 失敗**（失敗全 MAX_TOKENS，各 ~44s）。
+  - **中途（只加大上限、還沒加重取樣）**：8 連跑 **6 成功／2 失敗**——失敗樣本在 28992 的新上限下照樣灌到 `26215+2761=28976`，證明加大上限無效、失敗只是變貴（44s→74s）。此結果推翻第一版假設，才補上重取樣。
+  - **修後（重取樣就位）**：8 連跑 **7 成功／1 失敗**。兩次 RECITATION 全部自動救回（run 6、run 8：`finishReason=RECITATION` → 重取樣 → OK）；MAX_TOKENS 亦多次於第 2 次嘗試救回（run 3：attempt 1、2 撞頂，attempt 3 成功）。
+- **已知代價／殘留**: 重取樣把「快速失敗」換成「慢一點但會成功」——成功案例最長 172s、唯一失敗案例耗 224s（3 次嘗試全撞頂）。使用者要的是簡報而非快速的錯誤，故判定為淨賺，但**尚存 ~12% 失敗率**。真正的下一步是替 W2 版型瘦身 prompt/schema（降低模型繞圈空間），屬產品取捨，需使用者決定——**本輪刻意未動 SLIDE_TEMPLATES／BLOCK 型別**。
+- **回歸**: server tsc ✓（`tsconfig.json` 與 `tsconfig.build.json` 皆綠）＋vitest **67 檔 469 測全綠**（基準 66 檔 456 測，+1 檔 +13 測，無既有測試被改動或移除）；crm 11 檔 88 測綠（未受影響）。
+- **未動凍結契約**: `SLIDE_TEMPLATES`／`BLOCK_SCHEMA`／block 型別一個都沒砍；HTTP 狀態碼對映不變（RECITATION 仍 422）。
+
 ### 2026-07-31 17:20 | /simplify 套用（13 項）——去重／死碼／單一真相來源
 - **工作區**: packages/shared, apps/server, apps/web
 - **類型**: refactor

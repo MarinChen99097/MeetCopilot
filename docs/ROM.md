@@ -36,6 +36,25 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-08-01 17:54 | /code-review 裁決：RECITATION 重取樣拆兩層（升溫＋改寫指示改 opt-in）——L20 第三度生效
+- **誰決定**: Fable（10 agents：5 鏡頭＋逐 finding 反駁；confirmed 0、killed 5）
+- **決策 1（修）——RECITATION 重取樣誤傷抽取端（三鏡頭 55/68/65 交叉命中、皆 refuted:false）**：17:15 的修法把「升溫 +0.2＋『改寫、勿照抄』指示」**無條件**套到所有 generateJson 呼叫端——但 CRM 抽取（extractor/deep-extractor）的 SYSTEM 明令「逐字取值、嚴禁捏造」、溫度 0.3/0.4 是實測釘死的：重取樣一觸發就**污染抽取忠實度**（provenance 還指著原頁、值卻被改寫）。有 verifier 拿 ROM 17:15 當「明文接受」反駁（40 分 refuted）——**誤讀**：該裁決只涵蓋 deck 生成脈絡；同輪對 MAX_TOKENS 做了 per-caller 裁決、對 RECITATION 沒做，不對稱即漏洞證據。
+  - **修法（拆兩層）**：(a) RECITATION **全域維持可重試**（prod 事故的根修不動）——但預設重試＝**原溫原 prompt 純重抽**（RECITATION 本是抽樣相依，重抽常自解，對逐字抽取零污染）；(b) **升溫＋改寫指示改 opt-in**（`resampleOnRecitation` 風格旗標，比照 resampleOnMaxTokens），只有 deck 生成＋revise 開啟。回歸鎖更新：「RECITATION 不短路」保留、「hint 注入」改綁旗標。
+- **決策 2（記債不擴修）——重取樣失敗 attempt 的 usage 不計費（65 分）**：機制屬實（失敗 attempt usage 丟棄、retryCount 零生產者），但這是 **ROM 2026-07-30 13:42 決策 3 已裁的 meter 系統性行為**（「拋錯即不記，改它影響每條計費路徑，另開一輪」）——重取樣讓頻率上升，記註於該債、維持另開一輪的裁決。
+- **方法論（L20 第三度）**：本輪 confirmed=0，若機械看門檻＝「乾淨可上」；真問題全在 killed 的 refuted:false 交叉帶。**且出現新形態：verifier 拿指揮官的 ROM 當反駁證據——ROM 寫得不夠精確（沒寫明範圍限定）會反過來掩護漏洞**；決策紀錄要寫清楚「本裁決涵蓋／不涵蓋什麼」。
+- **後續**: 修＋單路復驗 → /simplify（使用者指示）→ 全鏈回歸 → commit＋部署提案。
+
+### 2026-08-01 17:15 | 上線首日兩輪修：生成「安全性限制」誤報（實為 RECITATION）＋Studio 編輯器三 UI 問題
+- **誰決定**: 使用者（實測回報兩批問題）＋Fable（裁決修法與取捨）
+- **輪 1——生成誤報安全限制（prod log 實證）**：使用者生成「介紹MeetCopilot給Troy」8 頁被拒「內容可能觸發安全性限制」；31 秒後重按成功。log 揭示真因＝**`finishReason=RECITATION`**（抽樣偶發，非內容安全）。兩層 bug：(a) `gemini.ts` 對所有非 STOP 一律 `retryable=false`——3 次重試形同虛設；(b) decks 錯誤映射把 RECITATION 併進 SAFETY 分支＝給使用者**錯誤的行動建議**（叫人改無害主題，正解是重試）。
+  - **修（agent 實作、Fable 追認）**：RECITATION 改可重試＋獨立重取樣（每撞升溫 +0.2 夾 1.4）；錯誤訊息誠實分流；非 STOP 補印 token 四數。**連帶挖出**：同輸入 6 連跑 3 次 MAX_TOKENS 退化迴圈（實測「加大上限無效只變貴」——16384→28992 照樣灌滿，推翻直覺假設）→ deck 生成＋revise 開 `resampleOnMaxTokens`（**刻意不改全域預設**：checklist-gen/deep-extractor 靠 isMaxTokensError 自行縮輸入）＋token 預算依頁數線性。修後 8 連跑 7 成功、RECITATION 全救回。server 67 檔 469 測。
+  - **記債**：殘留 ~12% 失敗率＋重取樣延遲（最長 224s）——治本＝W2 版型 prompt/schema 瘦身（動剛上線契約，另立一輪）。
+- **輪 2——Studio 編輯器三 UI 問題**：共同根因＝`.mc-editor__grid` 沒設 `grid-template-rows`（row=最高欄＝右面板）→ 舞台高度隨面板變＝切頁 slide 跳 223px＋縮圖列 overflow 永不觸發；黑邊＝`.mc-editor__preview` 寫死重設計前的 `#0a1120`（該檔屬 W2、W1 換膚掃不到＝**兩包接縫再現**）。TABLE 表單每格 62.6px、13/20 截字。
+  - **修**：grid 補 `minmax(0,1fr)`＋editor 頁 `:has()` 全高佈局＋舞台 `--mc-sunk` 置中（slideTop 五頁全等）；TABLE 重排 2D 網格（576→377px、0/20 截字、每格 ≥132px）；縮圖列獨立捲＋scrollIntoView。`slide-legacy-lock` 20/20 綠＝渲染輸出未動。
+  - **裁決取捨（接受）**：4 欄比較表在面板內仍需橫捲 ~244px——「每格可讀」與「面板寬」的必然取捨，優於截字。
+  - **記債**：dev 模式 `<html data-theme>` hydration 警告 5 筆（prod 不出現）——候選 `suppressHydrationWarning`，下輪順手。
+- **影響**: apps/server（gemini/decks-routes/slide-gen＋新測）＋apps/web（studio-present.css/BlockEditor/SlideEditor）。未 commit；commit＋部署提案已備、待使用者核准（server＋web 都要重建）。
+
 ### 2026-07-31 17:20 | /simplify 套用批的四項執行期裁決（跳過 isTalkTrack、常數大小寫、設計稿進 repo、CSS 墓碑）
 - **誰決定**: Fable 指派之清理套用 agent（執行期裁決，據現地查證與回歸結果）
 - **決策**:
