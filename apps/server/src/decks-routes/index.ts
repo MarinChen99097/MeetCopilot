@@ -57,6 +57,45 @@ import { createExportDeckHandler } from "./export-handler.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
+/**
+ * POST /decks/generate 的錯誤 → HTTP 對映（純函式，可單測；C1：絕不外洩上游原始訊息）。
+ *
+ * 2026-08-01 prod 事故：finishReason=RECITATION 被併進 SAFETY 分支，使用者看到「內容可能觸發安全性限制，
+ * 請調整主題或用語後再試」——但內容（「介紹MeetCopilot給Troy」）完全無害，訊息既錯又不可行動
+ *（真正該做的是重試，使用者 31 秒後同輸入重按就成功了）。故 RECITATION 獨立成一支、給誠實訊息；
+ * 上游 gemini.ts 也已改成先自動改寫重取樣，走到這裡代表重取樣仍失敗。
+ */
+export function mapGenerateError(err: unknown): { status: number; error: string } {
+  if (err instanceof GenerationEmptyError) {
+    return { status: 422, error: "生成結果為空，請調整主題或增加頁數後再試" };
+  }
+  // 狀態優先：真正的限流（ApiError 帶數字 .status 429/503，或訊息含 RESOURCE_EXHAUSTED/quota）→ 429。
+  const status = (err as { status?: unknown }).status;
+  const msg = err instanceof Error ? err.message : String(err);
+  if (status === 429 || status === 503 || /RESOURCE_EXHAUSTED|quota/i.test(msg)) {
+    return { status: 429, error: "AI 服務暫時限流，請稍後再試" };
+  }
+  // RECITATION 必須排在 SAFETY 之前：它的 hint 文字含 "recitation"，兩者不可再混為一談。
+  if (/finishReason=RECITATION|recitation/i.test(msg)) {
+    return {
+      status: 422,
+      error: "生成內容與既有素材過度相似（recitation），自動改寫重試後仍未通過；請換個說法或補充更具體的重點後再試",
+    };
+  }
+  if (/finishReason=(?:SAFETY|PROHIBITED_CONTENT|BLOCKLIST)|安全性/i.test(msg)) {
+    return { status: 422, error: "內容可能觸發安全性限制，請調整主題或用語後再試" };
+  }
+  if (/MAX_TOKENS/i.test(msg)) {
+    return { status: 422, error: "輸出過長，請減少頁數或精簡輸入後再試" };
+  }
+  if (/finishReason/i.test(msg)) {
+    // 非 MAX_TOKENS 的異常結束（OTHER / MALFORMED_FUNCTION_CALL 等）：不要誤標「輸出過長」。
+    return { status: 422, error: "生成未正常結束，請調整輸入後再試" };
+  }
+  // 其餘（含解析失敗、空回應、網路類）→ 502 通用 zh-TW，不回傳原始訊息。
+  return { status: 502, error: "AI 服務暫時無法生成簡報，請稍後再試" };
+}
+
 /** /extract-pdf 純文字抽取（供 grounding）的 worker 逾時；輸入較單純，用較短上限。 */
 const PDF_EXTRACT_TIMEOUT_MS = 15_000;
 
@@ -242,26 +281,8 @@ export function createDecksRouter(core: CrmCore, config: AppConfig, meter?: Mete
       } catch (err) {
         // C1：一律 server-side 記錄真實錯誤；回應絕不外洩上游原始訊息（可能含 prompt/內部細節）。
         console.error("[decks/generate] generation failed:", err);
-        if (err instanceof GenerationEmptyError) {
-          res.status(422).json({ error: "生成結果為空，請調整主題或增加頁數後再試" });
-          return;
-        }
-        // 狀態優先：真正的限流（ApiError 帶數字 .status 429/503，或訊息含 RESOURCE_EXHAUSTED/quota）→ 429。
-        const status = (err as { status?: unknown }).status;
-        const msg = err instanceof Error ? err.message : String(err);
-        if (status === 429 || status === 503 || /RESOURCE_EXHAUSTED|quota/i.test(msg)) {
-          res.status(429).json({ error: "AI 服務暫時限流，請稍後再試" });
-        } else if (/finishReason=(?:SAFETY|RECITATION)|安全性|recitation/i.test(msg)) {
-          res.status(422).json({ error: "內容可能觸發安全性限制，請調整主題或用語後再試" });
-        } else if (/MAX_TOKENS/i.test(msg)) {
-          res.status(422).json({ error: "輸出過長，請減少頁數或精簡輸入後再試" });
-        } else if (/finishReason/i.test(msg)) {
-          // 非 MAX_TOKENS 的異常結束（OTHER / MALFORMED_FUNCTION_CALL 等）：不要誤標「輸出過長」。
-          res.status(422).json({ error: "生成未正常結束，請調整輸入後再試" });
-        } else {
-          // 其餘（含解析失敗、空回應、網路類）→ 502 通用 zh-TW，不回傳原始訊息。
-          res.status(502).json({ error: "AI 服務暫時無法生成簡報，請稍後再試" });
-        }
+        const mapped = mapGenerateError(err);
+        res.status(mapped.status).json({ error: mapped.error });
       }
     }),
   );

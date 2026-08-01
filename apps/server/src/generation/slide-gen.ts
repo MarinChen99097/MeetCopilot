@@ -40,7 +40,7 @@ import {
   extractSlideText,
   isRasterImageDataUri,
 } from "@meetcopilot/shared";
-import type { GeminiClient } from "../gemini.js";
+import { GEMINI_MAX_OUTPUT_TOKENS, type GeminiClient } from "../gemini.js";
 
 // ─────────────────────────────────────────────────────────────
 // Gemini responseSchema（聯集超集；see 檔頭）
@@ -652,7 +652,11 @@ async function reviseSlides(
     prompt,
     schema: REVISION_SCHEMA,
     attempts: 2,
-    maxOutputTokens: 4096,
+    maxOutputTokens: reviseOutputTokenBudget(flagged.length),
+    // 同上：單頁重做灌爆 7.5K 顯然是退化，而非真的需要那麼多。
+    resampleOnMaxTokens: true,
+    // 同上：本路徑輸出是原創簡報文案（非逐字抽取），撞 RECITATION 時「升溫＋要求改寫」正是我們要的。
+    resampleOnRecitation: true,
   });
   const map = new Map<number, SlideSpec>();
   for (const r of raw.revisions ?? []) {
@@ -666,6 +670,40 @@ async function reviseSlides(
 /** 套 deck 主題（deckTheme 為底、slide 自己的 theme 覆蓋其上）。 */
 function withDeckTheme(slide: SlideSpec, deckTheme: SlideTheme | undefined): SlideSpec {
   return deckTheme ? { ...slide, theme: { ...deckTheme, ...slide.theme } } : slide;
+}
+
+/**
+ * 輸出 token 預算（2026-08-01 事故實測定調；thinking tokens 與 JSON 輸出**共用同一份預算**）。
+ *
+ * 舊值是寫死的 16384，W2 版型全鏈擴充（BLOCK_SCHEMA 加 table/timeline/steps、SLIDE_TEMPLATES 6→8）後每頁 JSON 變胖，
+ * 8 頁就撞頂：真 API 實測 `outputTokens=14218 + thoughtTokens=2150 = 16368 ≈ 16384` → finishReason=MAX_TOKENS，
+ * 同輸入 6 連跑 3 次失敗（50%）。故改為**依頁數線性給預算**：每頁 PER_PAGE ＋ 一份 FLOOR（涵蓋 thinking 與固定開銷），
+ * 夾在模型上限 GEMINI_MAX_OUTPUT_TOKENS（65536）內。
+ * 取值依據：實測 8 頁 ≈ 1.8K output tokens/頁，PER_PAGE 取 2600 留約 40% 餘裕。
+ * 已知限制：MAX_DECK_PAGES=40，40 頁的理論需求 (~112K) 超過模型 65536 天花板，極長 deck 仍可能截斷（屬模型硬限）。
+ */
+const DECK_OUTPUT_TOKENS_PER_PAGE = 2_600;
+const DECK_OUTPUT_TOKENS_FLOOR = 8_192;
+
+/** 線性給預算（FLOOR ＋ 每單位 × 數量）再夾模型天花板——deck／revise 兩端共用同一條公式。 */
+function clampedOutputBudget(floor: number, perUnit: number, count: number): number {
+  return Math.min(floor + Math.max(1, count) * perUnit, GEMINI_MAX_OUTPUT_TOKENS);
+}
+
+export function deckOutputTokenBudget(pages: number): number {
+  return clampedOutputBudget(DECK_OUTPUT_TOKENS_FLOOR, DECK_OUTPUT_TOKENS_PER_PAGE, pages);
+}
+
+/**
+ * reviseSlides 的預算：同一個撞頂問題的小號版本——實測「重做 1 頁」就用掉 `3061 + 1018 = 4079 ≈ 4096`（舊寫死值），
+ * 而 QA 一次最多送 3 頁 → 舊值幾乎必然 MAX_TOKENS，且該路徑是 try/catch 靜默 skip，
+ * 症狀是「QA 修訂長期沒作用」而非報錯（prod 2026-08-01T07:40:53 即為此）。故改為依待修頁數給預算。
+ */
+const REVISE_OUTPUT_TOKENS_PER_SLIDE = 4_600;
+const REVISE_OUTPUT_TOKENS_FLOOR = 4_096;
+
+export function reviseOutputTokenBudget(slideCount: number): number {
+  return clampedOutputBudget(REVISE_OUTPUT_TOKENS_FLOOR, REVISE_OUTPUT_TOKENS_PER_SLIDE, slideCount);
 }
 
 /**
@@ -688,7 +726,12 @@ export async function generateDeckSlides(
     schema: GENERATED_DECK_SCHEMA,
     images: images.length ? images : undefined,
     attempts: 3,
-    maxOutputTokens: 16384,
+    maxOutputTokens: deckOutputTokenBudget(input.pages),
+    // 撞頂＝退化迴圈（實測：加大上限照樣被吃滿，換一個 sample 才有用）→ 重取樣而非直接失敗。
+    resampleOnMaxTokens: true,
+    // deck 文案本來就該是原創敘述 → RECITATION 時開啟升級重取樣（升溫＋改寫指示）。
+    // 刻意只開在生成端：CRM 抽取端要逐字忠實，升溫/改寫會污染（ROM 2026-08-01 17:54 決策 1）。
+    resampleOnRecitation: true,
   });
 
   const deckTheme = buildDeckTheme(input.logoDataUri);
