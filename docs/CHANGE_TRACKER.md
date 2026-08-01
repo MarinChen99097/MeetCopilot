@@ -35,6 +35,21 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-08-01 20:10 | deck 生成「版型 prompt/schema 瘦身」——治 MAX_TOKENS 退化迴圈
+- **工作區**: apps/server
+- **類型**: refactor（prompt/schema），行為面：失敗率／頁數達標率改善
+- **檔案**: `apps/server/src/generation/slide-gen.ts`（唯一檔；`SLIDE_TEMPLATES`／shared block 型別／renderer／pptx／EditableSlide 全未動）
+- **改了什麼**（四項；基準線報告見 scratchpad `diet-baseline.md`）：
+  1. **自由文字全面加 `maxLength`、能負擔的葉層陣列加 `maxItems`**（`str(n)` helper＝`{type:STRING,maxLength:"n"}`）。Before：整份 schema 只有 `blocks.minItems:"2"`，**沒有任何上界**——constrained decoding 進入重複迴圈後沒有力量迫使收尾，只能撞 `maxOutputTokens` 才停（實測 14 筆 MAX_TOKENS 的 outputTokens 全落在 cap 下緣 26K–32K，而真實需求僅 ~1.2K）。After：`text≤180`／bullets 每條 ≤60／`value≤16`／`label≤40`／`desc≤60`／`caption≤80`／`attribution≤40`／`eyebrow≤12`／`notes≤200`／features 的 title≤24 desc≤60／steps 的 title≤24 desc≤60 owner≤24／table cell≤36／tick name≤16 title≤32／track label≤24；`maxItems`：`features≤4`／`items≤5`／`steps≤MAX_STEPS`／`headers≤MAX_TABLE_COLUMNS`／`rows≤MAX_TABLE_ROWS`／`cells≤MAX_TABLE_COLUMNS`／`tracks≤MAX_TIMELINE_TRACKS`。
+  2. **`propertyOrdering` 讓判別欄位先出**。Before 未指定 → Gemini 按預設序輸出，`type` 排在 text/items/label… 之後，等於「還沒決定是哪種 block 就先寫欄位」。After `BLOCK_SCHEMA.propertyOrdering` 以 `type` 開頭、`SLIDE_SCHEMA` 以 `template` 開頭，巢狀物件同辦。
+  3. **⚠️ 新發現的硬限制「GRAMMAR BUDGET」（已寫進檔內註解）**：Gemini 把每個 `min/maxItems` 展開成文法重複，展開量有預算上限，超過 → 整份 request 回 `400 INVALID_ARGUMENT`（訊息只有 "Request contains an invalid argument."，不指出欄位）。真 API 逐項探測結論——**通過**：`blocks.maxItems≤4`、`slides.maxItems≤2`、上列葉層 7 個上界同時加、全欄 `maxLength`、全層 `propertyOrdering`；**400**：`blocks.maxItems="8"`、`slides` 綁頁數（連 min=max=2 都敗）、葉層再加 `ticks`／`series`／`left`／`right`。`maxLength` 不吃這份預算（有無 maxLength 都不改變 `blocks.maxItems` 的成敗）。故 `blocks`／`slides`／`revisions`／`ticks`／`series`／`left`／`right` **維持無上界**，上限改由 `sanitizeBlock` 端切齊；原先做過的「頁數綁進 schema」（`slides.minItems=maxItems=pages`，本欲治頁數達標率 8/15）因此**回退**。探測腳本留在 scratchpad `schema-probe.mts`／`schema-bisect{,2,3,4,5}.mts`。
+  4. **生成端不再邀請低值欄位**：`series2`／`seriesNames`／`centerValue`／`centerLabel`／`ticks[].emphasis`／`tracks[].emphasis` 移出 responseSchema（實測 107 頁零使用，卻讓每個 block 多 5 個 optional 分支要解）。⚠️ **只從 responseSchema 移除**——TS 型別、`sanitizeBlock`、renderer、pptx 全部照舊支援，手工編輯／匯入資料仍可帶這些欄位。BLOCK_SCHEMA property 24→20。
+  5. prompt 前綴微調：deck user prompt 加「（不多不少）」補回頁數壓力（schema 綁不了）。
+  6. **prompt 去重**：`BLOCK_SHAPE_PROMPT_ZH` 904→419 字（319→169 tok；刪掉 22 個 icon 關鍵字清單——schema enum 已硬約束）、`TEMPLATE_INTENT_ZH` 988→606 字（473→281 tok；刪掉零產出的 series2／centerValue 散文，改加一句「沾到時程就用 timeline-gantt、沾到比較就用 comparison-matrix，不要退回 content」強化新版式選用）、`DESIGN_PRINCIPLES_ZH` 309→206 字（204→110 tok；四條合一並改為硬字數上限）、`DECK_STRUCTURE_CONTRACT_ZH` 改「只有確有具體數字才放 stats 頁」（原「主題涉及數據就至少 1 頁 stats」造成 100% 觸發 `stats-no-numbers`→每次生成必進 `reviseSlides`）、supplement 專屬規則 (1)(2) 壓縮，**(3) 事實紀律段逐字保留**（防幻覺紅線）。
+- **量測**（真 API `countTokens`；schema token 不計入 promptTokenCount，故 schema 變胖不影響輸入計費）：deck system **1,142→700 tok（−38.7%）**、supplement **1,573→1,030（−34.5%）**、revise 1,036→600、regenerate 1,066→630；deck 首次 attempt promptTokens 1,189→750（A）／1,202→763（B）。
+- **A/B 復測**（真 API，與基準線同輸入同條件，各 8 連跑）：一次過率 **6/16 → 16/16**；attempt 級壞率 **15/30 → 0/16**（MAX_TOKENS 14→0、RECITATION 1→0）；最終失敗 **1/16 → 0/16**；耗時中位 **85.7／98.4 s → 14.2／16.9 s**；頁數達標 **8/15 → 15/16**（唯一偏差是 B#2 多給 1 頁，非不足）；新版式命中率 **57% → 100%**（timeline-gantt 8/8、comparison-matrix 8/8，A、B 皆是）；`slideQaIssues` 觸發率 **15/15(100%) → 1/16(6%)**；`stat` block 產出 **0/107 頁 → 52 個**、`chart` 0→1。驗收：server `tsc --noEmit` EXIT=0、vitest **68 檔 475 測全綠**（與基準同數）。
+- **為什麼**: 基準線量測顯示 attempt 級壞率 50%（MAX_TOKENS 14／30）、使用者可見失敗率 6.3%、一次過率僅 38%，且「加大 maxOutputTokens」已證實走到底（現值已是實際需求的 24 倍、壞樣本一律吃到貼齊 cap）。根因是**解碼搜尋空間無上界**而非預算不足 → 對症下藥＝給 schema 上界＋判別欄位先出＋prompt 去重，而不是再擴預算。
+
 ### 2026-08-01 18:20 | /simplify 清理：重試 hint 組裝壓平、token 預算共用夾頂公式、表格欄名去重、CSS no-op 刪除
 - **工作區**: apps/server, apps/web
 - **類型**: refactor

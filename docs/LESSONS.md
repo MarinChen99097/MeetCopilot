@@ -143,3 +143,13 @@
 - 踩了什麼：非踩雷，是校準。原 MODEL_DISPATCH 調度表標「未實測、信心中低」。
 - 正確做法：本 session 實測約 14 個 sonnet subagent（6 實作＋2 修正＋2 簡化＋審查群）在 high effort 下勝任全端實作/重構/審查，主對話 context 保持乾淨。故 MODEL_DISPATCH 調度表的 sonnet 列可視為「已實測可行」，實作/重構/研究/審查交 sonnet/high 是驗證過的預設；難題除錯與設計取捨仍留主線或升 opus。
 - 影響檔案：`MODEL_DISPATCH.md` 第三節（移除「未實測」caveat）。
+
+## L22 Gemini responseSchema 的 `min/maxItems` 有「文法展開預算」，超過就整份 400（2026-08-01，實踩）
+- 情境：deck 生成瘦身，想用 schema 上界治 MAX_TOKENS 退化迴圈——給每個陣列 `maxItems`、把頁數綁進 `slides.minItems=maxItems=pages`。
+- 踩了什麼：**16/16 次呼叫全 `400 INVALID_ARGUMENT`**，訊息只有 `"Request contains an invalid argument."`，**不指出是哪個欄位、也不說是 schema 的問題**。單獨探測時 `maxItems`／`minItems`／`maxLength`／`propertyOrdering` **每一個都被接受**（用小 schema 測全 OK），所以「逐特性探測」第一輪完全誤導——問題不在特性本身，在**組合的總量**。
+- 正確做法：
+  1. Gemini 會把每個 `min/maxItems` **展開成文法重複**，展開量 ≈ Σ(maxItems × 該子 schema 文法大小)，有預算上限。本專案實測（`gemini-3.5-flash`，`BLOCK_SCHEMA` 20 個 property 的聯集超集）：**通過** `blocks.maxItems≤4`、`slides.maxItems≤2`、葉層 7 個小陣列（features/items/steps/headers/rows/cells/tracks）同時加、全欄 `maxLength`、全層 `propertyOrdering`；**400** `blocks.maxItems="8"`、`slides` 綁頁數（連 2 都敗）、葉層再多加 `ticks`／`series`／`left`／`right` 任一組。
+  2. **`maxLength` 不吃這份預算**（有無 maxLength 都不改變 `blocks.maxItems` 的成敗）→ 想壓縮輸出長度，優先用 `maxLength` 而不是 `maxItems`。
+  3. **除錯法**：不要用小 schema 逐特性測（會全綠），要拿**真實 schema 逐項剝除**（strip 一個 key 重打）＋**逐項加回**兩個方向夾擊。腳本樣板留在 scratchpad `schema-bisect{,2,3,4,5}.mts`。
+  4. **上線守門**：任何 responseSchema 改動都要先用真 API 打一次四個呼叫點（`schema-accept.mts`），否則 400 只會在 prod 出現（unit test 用 stub client，永遠測不到）。
+- 影響檔案：`apps/server/src/generation/slide-gen.ts`（檔內已寫 `GRAMMAR BUDGET` 註解區塊，改 schema 前必讀）、`docs/research/API_FINDINGS.md`（可補一節）。

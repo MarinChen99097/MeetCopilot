@@ -36,6 +36,15 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-08-01 20:00 | 版型 prompt/schema 瘦身（使用者指示）——一次過率 38%→100%、耗時中位 -83%；兩項語意裁決追認
+- **誰決定**: 使用者（「瘦身版型 prompt 用一下」）＋Fable（約束凍結：契約形狀不動、真 API A/B 實證、事實紀律段不碰）＋agent 兩項執行期裁決（本則追認）
+- **基準線（先量再動，全真 API）**：deck system 1,142 tok（三個共用片段佔 87%、四呼叫點各原封送一次、deck↔supplement 2,303 字元逐字重複）；動態 16 連跑——最終成功 94% 但**一次過僅 38%**、attempt 壞率 50%（MAX_TOKENS 14 次）、靠重試把 14.5s 拖到 85–98s；**退化迴圈鐵證**＝壞樣本 output 26K–32K tok vs 好樣本中位 1.2K（「有多少吃多少」）；**頁數達標僅 53%**（concise hint 靜默砍頁）；**stat/chart 產出 0**＝「涉及數據就放 stats 頁」規則 100% 造空殼頁、每次生成必進 reviseSlides。附帶實測發現：**responseSchema 不計入 promptTokenCount**（瘦 schema 省的是解碼繞圈空間非錢）。
+- **瘦身結果（同輸入同條件 16 連跑 A/B）**：deck system **-38.7%**、supplement **-34.5%**；**一次過 16/16=100%**（原 38%）、attempt 壞率 **0%**、重取樣觸發 **0 次**（原 14）、耗時中位 **14.2/16.9s**（原 85.7/98.4）、頁數達標 94%（原 53%）、**新版式命中 100%/100%**（原 57%——瘦身反而加了直白選版指示）、stat 0→52、QA 觸發 100%→6%。server 68 檔 475 測全綠、**唯一改動檔＝slide-gen.ts**（契約形狀零改動經復驗 grep 證實）。
+- **追認 1——stats 頁規則語意修正**：「主題涉及數據就至少 1 頁 stats」→「只有確有具體數字才放」——原規則是 100% 空殼頁＋必進 revise 的元兇，屬修 bug 級語意修正。
+- **追認 2——「schema 綁頁數」被 API 硬限制否決、改 prompt 補**：實測發現 **Gemini responseSchema 的 min/maxItems 有「文法展開預算」，超過整份 request 400**（單測每特性都過、組合才爆——入 **L22** 含雙向夾擊除錯法＋邊界註解＋400 守門腳本）。`slides` 綁頁數等三項回退，頁數改 user prompt 補（15/16 達標）。
+- **統計註**：16 樣本下 38%→100% 為強訊號非嚴格顯著性檢定；上線後以 usage log 的 finishReason 分佈持續驗證。
+- **影響**: slide-gen.ts＋L22＋CHANGE_TRACKER。~12% 殘留失敗率之債**視為已清**（重取樣降級為保險絲）。使用者核准 commit＋push＋部署（只動 server → 只重建 server）。
+
 ### 2026-08-01 17:54 | /code-review 裁決：RECITATION 重取樣拆兩層（升溫＋改寫指示改 opt-in）——L20 第三度生效
 - **誰決定**: Fable（10 agents：5 鏡頭＋逐 finding 反駁；confirmed 0、killed 5）
 - **決策 1（修）——RECITATION 重取樣誤傷抽取端（三鏡頭 55/68/65 交叉命中、皆 refuted:false）**：17:15 的修法把「升溫 +0.2＋『改寫、勿照抄』指示」**無條件**套到所有 generateJson 呼叫端——但 CRM 抽取（extractor/deep-extractor）的 SYSTEM 明令「逐字取值、嚴禁捏造」、溫度 0.3/0.4 是實測釘死的：重取樣一觸發就**污染抽取忠實度**（provenance 還指著原頁、值卻被改寫）。有 verifier 拿 ROM 17:15 當「明文接受」反駁（40 分 refuted）——**誤讀**：該裁決只涵蓋 deck 生成脈絡；同輪對 MAX_TOKENS 做了 per-caller 裁決、對 RECITATION 沒做，不對稱即漏洞證據。

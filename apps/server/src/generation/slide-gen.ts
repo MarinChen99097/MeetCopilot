@@ -44,27 +44,58 @@ import { GEMINI_MAX_OUTPUT_TOKENS, type GeminiClient } from "../gemini.js";
 
 // ─────────────────────────────────────────────────────────────
 // Gemini responseSchema（聯集超集；see 檔頭）
+//
+// 2026-08-01「版型 prompt/schema 瘦身」三項改動（基準線量測：attempt 級壞率 50%、
+// 14 筆 MAX_TOKENS 的 outputTokens 全落在 cap 下緣 26K–32K，而真實需求僅 ~1.2K）：
+//  D1 **每個自由文字給 maxLength、能負擔的陣列給 maxItems**——原本只有 `blocks.minItems`，
+//     沒有任何上界；constrained decoding 一旦進入重複迴圈，沒有任何力量迫使它收尾，
+//     只能撞 maxOutputTokens 才停（＝退化迴圈的機制解釋）。上界＝把「有多少吃多少」變成有限狀態。
+//     ⚠️ **實測的硬限制（2026-08-01 真 API 探測，見下方 GRAMMAR BUDGET）**：Gemini 會把每個
+//     `min/maxItems` 展開成文法重複，展開量有預算上限，超過就整份 request 回 400 INVALID_ARGUMENT。
+//     實測：`blocks.maxItems="8"`／`slides` 綁頁數／`ticks`+`series`+`left`+`right` 一起加 → 全 400。
+//     故 maxItems 只加在「單位 schema 小、上限也小」的葉層陣列；`blocks`／`slides` 只能維持無上界。
+//     `maxLength` 不吃這份預算（實測有無 maxLength 都不改變 blocks.maxItems 的成敗），故全面採用。
+//  D2 **propertyOrdering 讓判別欄位先出**——Gemini 未指定順序時按欄位定義/字母序輸出，
+//     `type` 會排在 text/items/label… 之後，模型等於「還沒決定是哪種 block 就先寫欄位」。
+//     把 type/template 提到最前，讓判別欄位先定調再填內容。
+//  D3 **生成端不再邀請模型填低值欄位**（series2/seriesNames/centerValue/centerLabel、
+//     ticks/tracks 的 emphasis）——實測 107 頁零使用，卻讓每個 block 多 5 個 optional 分支要解。
+//     ⚠️ 只從 responseSchema 移除：TS 型別、sanitizeBlock、renderer、pptx 全部照舊支援，
+//     手工編輯／匯入資料仍可帶這些欄位（EditableSlide 走的是型別，不是這份 schema）。
 // ─────────────────────────────────────────────────────────────
+/**
+ * GRAMMAR BUDGET（2026-08-01 真 API 逐項探測結論；改 schema 前先讀）
+ * 通過：`blocks.maxItems<=4`／`slides.maxItems<=2`／葉層 {items,features,steps,headers,rows,cells,tracks}
+ *       同時加上界／全欄 `maxLength`／全層 `propertyOrdering`。
+ * 400：`blocks.maxItems=8`／`slides` 綁頁數（min=max=2 以上皆敗）／上列葉層再加 `ticks`（或 `series`、`left`/`right`）。
+ * ⇒ 預算 ≈ Σ(maxItems × 該子 schema 文法大小)。要新增上界時，請先跑 scratchpad 的 schema-bisect 探測再合入。
+ */
+
+/** 自由文字欄位（帶硬長度上界；Gemini Schema 的 maxLength/maxItems 皆為字串型別）。 */
+const str = (maxLength: number) => ({ type: Type.STRING, maxLength: String(maxLength) });
+
 const SCALAR_BLOCK_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     type: { type: Type.STRING, enum: ["heading", "subheading", "paragraph", "quote", "bullets", "stat"] },
-    text: { type: Type.STRING },
-    items: { type: Type.ARRAY, items: { type: Type.STRING } },
-    value: { type: Type.STRING },
-    label: { type: Type.STRING },
-    attribution: { type: Type.STRING },
+    text: str(180),
+    items: { type: Type.ARRAY, items: str(60) }, // 文法預算：left/right 內層不再加 maxItems
+    value: str(16),
+    label: str(40),
+    attribution: str(40),
   },
   required: ["type"],
+  propertyOrdering: ["type", "text", "items", "value", "label", "attribution"],
 };
 
 const CHART_POINT_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    label: { type: Type.STRING },
+    label: str(24),
     value: { type: Type.NUMBER },
   },
   required: ["label", "value"],
+  propertyOrdering: ["label", "value"],
 };
 
 export const BLOCK_SCHEMA = {
@@ -87,43 +118,44 @@ export const BLOCK_SCHEMA = {
         "steps",
       ],
     },
-    text: { type: Type.STRING },
-    items: { type: Type.ARRAY, items: { type: Type.STRING } },
-    value: { type: Type.STRING },
-    label: { type: Type.STRING },
-    // stat 的第三行說明；與 features[].desc 同名不衝突（不同層級）。
-    desc: { type: Type.STRING },
+    text: str(180),
+    items: { type: Type.ARRAY, items: str(60), maxItems: "5" },
     marker: { type: Type.STRING, enum: [...BULLET_MARKERS] },
-    attribution: { type: Type.STRING },
+    value: str(16),
+    label: str(40),
+    // stat 的第三行說明；與 features[].desc 同名不衝突（不同層級）。
+    desc: str(60),
+    attribution: str(40),
+    // left/right/series/ticks 刻意「不」加 maxItems——文法預算不夠（實測加了整份 400），
+    // 這三者的上限改由 sanitize 端切齊（MAX_TIMELINE_TICKS 等）。
     left: { type: Type.ARRAY, items: SCALAR_BLOCK_SCHEMA },
     right: { type: Type.ARRAY, items: SCALAR_BLOCK_SCHEMA },
     features: {
       type: Type.ARRAY,
+      maxItems: "4",
       items: {
         type: Type.OBJECT,
         properties: {
           icon: { type: Type.STRING, enum: [...SLIDE_ICONS] },
-          title: { type: Type.STRING },
-          desc: { type: Type.STRING },
+          title: str(24),
+          desc: str(60),
         },
         required: ["title"],
+        propertyOrdering: ["icon", "title", "desc"],
       },
     },
     chartType: { type: Type.STRING, enum: [...CHART_TYPES] },
     series: { type: Type.ARRAY, items: CHART_POINT_SCHEMA },
-    series2: { type: Type.ARRAY, items: CHART_POINT_SCHEMA },
-    seriesNames: { type: Type.ARRAY, items: { type: Type.STRING } },
-    centerValue: { type: Type.STRING },
-    centerLabel: { type: Type.STRING },
-    caption: { type: Type.STRING },
+    caption: str(80),
     // table：headers 一維、rows 每列包成 {cells:[]}（巢狀陣列在結構化輸出較不穩，故走物件包裝；
     // sanitize 兩種形狀都收，手工/匯入資料仍可直接給 string[][]）。
-    headers: { type: Type.ARRAY, items: { type: Type.STRING } },
+    headers: { type: Type.ARRAY, items: str(24), maxItems: String(MAX_TABLE_COLUMNS) },
     rows: {
       type: Type.ARRAY,
+      maxItems: String(MAX_TABLE_ROWS),
       items: {
         type: Type.OBJECT,
-        properties: { cells: { type: Type.ARRAY, items: { type: Type.STRING } } },
+        properties: { cells: { type: Type.ARRAY, items: str(36), maxItems: String(MAX_TABLE_COLUMNS) } },
         required: ["cells"],
       },
     },
@@ -132,52 +164,73 @@ export const BLOCK_SCHEMA = {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
-        properties: {
-          name: { type: Type.STRING },
-          title: { type: Type.STRING },
-          emphasis: { type: Type.STRING, enum: [...TIMELINE_EMPHASIS] },
-        },
+        properties: { name: str(16), title: str(32) },
         required: ["name"],
+        propertyOrdering: ["name", "title"],
       },
     },
     tracks: {
       type: Type.ARRAY,
+      maxItems: String(MAX_TIMELINE_TRACKS),
       items: {
         type: Type.OBJECT,
         properties: {
-          label: { type: Type.STRING },
+          label: str(24),
           startPct: { type: Type.NUMBER },
           widthPct: { type: Type.NUMBER },
-          emphasis: { type: Type.STRING, enum: [...TIMELINE_EMPHASIS] },
         },
         required: ["label", "startPct", "widthPct"],
+        propertyOrdering: ["label", "startPct", "widthPct"],
       },
     },
     steps: {
       type: Type.ARRAY,
+      maxItems: String(MAX_STEPS),
       items: {
         type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          desc: { type: Type.STRING },
-          owner: { type: Type.STRING },
-        },
+        properties: { title: str(24), desc: str(60), owner: str(24) },
         required: ["title"],
+        propertyOrdering: ["title", "desc", "owner"],
       },
     },
   },
   required: ["type"],
+  // D2：判別欄位先出，其餘照「同一種 block 會一起用到」的順序排。
+  propertyOrdering: [
+    "type",
+    "text",
+    "items",
+    "marker",
+    "value",
+    "label",
+    "desc",
+    "attribution",
+    "left",
+    "right",
+    "features",
+    "chartType",
+    "series",
+    "caption",
+    "headers",
+    "rows",
+    "highlightColumn",
+    "ticks",
+    "tracks",
+    "steps",
+  ],
 };
 
 export const SLIDE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     template: { type: Type.STRING, enum: [...AI_GENERATION_TEMPLATES] },
+    eyebrow: str(12),
+    // blocks／slides／revisions 都不加 maxItems：文法預算不夠（實測 blocks.maxItems="8" 即 400）。
     blocks: { type: Type.ARRAY, items: BLOCK_SCHEMA, minItems: "2" },
-    notes: { type: Type.STRING },
-    eyebrow: { type: Type.STRING },
+    notes: str(200),
   },
   required: ["template", "blocks"],
+  propertyOrdering: ["template", "eyebrow", "blocks", "notes"],
 };
 
 const GENERATED_DECK_SCHEMA = {
@@ -198,10 +251,11 @@ const REVISION_SCHEMA = {
         properties: {
           index: { type: Type.NUMBER },
           template: { type: Type.STRING, enum: [...AI_GENERATION_TEMPLATES] },
+          eyebrow: str(12),
           blocks: { type: Type.ARRAY, items: BLOCK_SCHEMA, minItems: "2" },
-          eyebrow: { type: Type.STRING },
         },
         required: ["index", "template", "blocks"],
+        propertyOrdering: ["index", "template", "eyebrow", "blocks"],
       },
     },
   },
@@ -211,49 +265,41 @@ const REVISION_SCHEMA = {
 // ─────────────────────────────────────────────────────────────
 // 共用 prompt 片段（zh）——deck 生成與單頁重生共用，避免漂移（L5）
 // ─────────────────────────────────────────────────────────────
+/**
+ * 2026-08-01 diet：三個共用片段原本 2,201 字 / 996 tokens，且被 deck／revise／supplement／regenerate
+ * 四個呼叫點各送一次。瘦身原則——**schema 已硬約束的事不要在 prompt 再講一次**
+ * （欄位型別、icon 白名單、數量上限都已進 responseSchema），prompt 只留 schema 表達不了的
+ * 「什麼題材該挑哪個版型」與「一頁一重點」的篇幅紀律。
+ */
 export const TEMPLATE_INTENT_ZH =
-  `每種 template 的內容意圖：` +
-  `title＝只放 heading＋subheading（開場頁，不放 bullets/paragraph）；` +
-  `section＝單一大 heading 的分節頁（最多再加一句 subheading，勿放 bullets/paragraph）；` +
-  `content＝heading＋2-4 個 bullets 或 paragraph，也可用 two-col 做對比；內容頁應優先使用單一 features block，` +
-  `放 3-4 個 {icon,title,desc} 項目來填滿版面（bullets 仍可作為次要輔助）；` +
-  `stats＝3-6 個 stat block 呈現關鍵數字；每個 stat block 必須同時填 value（數字或百分比，如 "40%"、"3.2x"）與 label（說明文字），兩者缺一不可；` +
-  `content 或 stats 頁若主題涉及量化數據，可改用一個 chart block（此時該頁不要再放 features，二選一）來視覺化 3-6 個資料點` +
-  `（長條圖 bar＝比較、圓環圖 donut＝占比、折線圖 line＝趨勢，依資料性質擇一；` +
-  `bar 要做「換之前 vs 換之後」的成對比較時再填 series2＋seriesNames（兩序列長度必須相同）；` +
-  `donut 想在圓心放一個總結數字時填 centerValue＋centerLabel）；` +
-  `timeline-gantt＝時程／里程碑／導入排程頁：heading ＋ 一個 timeline block（ticks＝時間刻度、tracks＝各條工作的起點與長度百分比）；` +
-  `comparison-matrix＝方案／競品比較頁：heading ＋ 一個 table block（headers 第一格留空當列標題欄、其餘為方案名，` +
-  `highlightColumn 指向我方那一欄；最多 ${MAX_TABLE_COLUMNS} 欄 ${MAX_TABLE_ROWS} 列，每列 cells 長度必須等於 headers 長度）；` +
-  `closing＝heading＋一段 CTA/感謝 paragraph。` +
-  `另有 steps block（流程/下一步，最多 ${MAX_STEPS} 步，序號由系統自動編，不要自己寫「1.」）可放在 content 頁。` +
-  `title／section／closing 頁可額外加一個簡短 eyebrow（如分節編號「01」或主題標籤），非必填。`;
+  `template 選用（每頁挑一個最貼題材的，別一律用 content）：` +
+  `title＝開場（heading＋subheading）；section＝分節大標（可加一句 subheading）；` +
+  `content＝heading＋「一個 features（3-4 張，優先）」或 bullets／paragraph／two-col／steps 其中一種；` +
+  `stats＝heading＋3-6 個 stat（value 必須是數字或百分比如 "40%"、"3.2x"，label 為說明，兩者缺一不可）；` +
+  `timeline-gantt＝時程／里程碑／導入排程：heading＋一個 timeline（ticks＝時間刻度、tracks＝各工作的起點與長度百分比）；` +
+  `comparison-matrix＝方案／競品比較：heading＋一個 table（headers 首格留空當列標題欄、其餘為方案名，highlightColumn 指我方那欄）；` +
+  `closing＝heading＋一段 CTA／感謝 paragraph。` +
+  `**題材只要沾到時程／排程／里程碑就用 timeline-gantt，沾到比較／競品／方案取捨就用 comparison-matrix，不要退回 content 用文字描述。**` +
+  `有量化資料時，content／stats 頁可改放一個 chart（bar＝比較、donut＝占比、line＝趨勢）當該頁主角。`;
 
 export const BLOCK_SHAPE_PROMPT_ZH =
-  `blocks 陣列中每個元素為以下其中一種形狀（type 為判別欄位）：` +
-  `{type:"heading",text}｜{type:"subheading",text}｜{type:"bullets",items:string[],marker?:"check"|"cross"|"dash"}｜` +
-  `{type:"paragraph",text}｜{type:"quote",text,attribution?}｜{type:"stat",value,label,desc?}｜` +
-  `{type:"two-col",left:Block[],right:Block[]}` +
-  `｜{type:"features",features:[{icon,title,desc}]}（icon 只能從這些關鍵字選：` +
-  SLIDE_ICONS.join(", ") +
-  `）｜{type:"chart",chartType:"bar"|"donut"|"line",series:[{label,value}],caption?,series2?,seriesNames?,centerValue?,centerLabel?}` +
-  `｜{type:"table",headers:string[],rows:[{cells:string[]}],highlightColumn?}` +
-  `｜{type:"timeline",ticks:[{name,title?}],tracks:[{label,startPct,widthPct}]}（startPct/widthPct 為 0-100 的百分比，兩者相加不得超過 100）` +
-  `｜{type:"steps",steps:[{title,desc?,owner?}]}` +
-  `。禁止使用 image 區塊。`;
+  `blocks 每個元素以 type 判別，欄位形狀與數量上限一律照 schema（勿自創欄位、禁止 image）：` +
+  `heading／subheading／paragraph→text；quote→text＋attribution；bullets→items（可加 marker "check"／"cross"）；` +
+  `stat→value＋label；two-col→left／right；features→features[{icon,title,desc}]；chart→chartType＋series；` +
+  `table→headers＋rows[{cells}]（每列 cells 長度必須等於 headers 長度）；` +
+  `timeline→ticks＋tracks（startPct／widthPct 為 0-100，兩者相加不得超過 100）；` +
+  `steps→steps[{title,desc,owner}]（序號系統自動編，別自己寫「1.」）。`;
 
 export const DESIGN_PRINCIPLES_ZH =
-  `設計原則：` +
-  `(1) 版面配合內容數量——剛好 2 個對照概念用 two-col，3-4 個並列重點用 features 卡格，勿把 2 點硬塞成多欄、也勿把 6 點擠成一頁。` +
-  `(2) 一頁只聚焦一個重點，寧可拆成多頁也不要塞滿；標題精煉、內文精簡（大標配少字）。` +
-  `(3) 有量化數據就做成 chart 或 stat 大數字，別只用文字描述；一頁最多一個 chart，且有 chart 或多個 stat 的頁面不要再放 features 卡格或大量文字（讓圖表／指標獨占版面當主角，否則會與卡片上下擠壓、標籤與卡標題重疊）。` +
-  `(4) bullets 每頁至多 5 條、每條精簡一行；features 每張 desc 一句話即可。`;
+  `設計原則：一頁只講一個重點，寧可拆頁也不要塞滿；` +
+  `2 個對照概念用 two-col、3-4 個並列重點用 features；` +
+  `有數字就讓 chart 或 stat 獨占版面當主角（同頁不再放 features 或大量文字，一頁最多一個 chart）；` +
+  `字數紀律：heading ≤20 全形字、bullets ≤5 條每條一行、features／steps 的 desc ≤20 全形字、paragraph ≤3 句。`;
 
 const DECK_STRUCTURE_CONTRACT_ZH =
-  `整份簡報結構規範：第 1 頁必須是 title；最後一頁必須是 closing；中間至少要有 1 頁 section；` +
-  `若主題涉及數據／指標，中間至少要有 1 頁 stats；不得連續 3 頁以上使用同一個 template；` +
-  `每頁 blocks 數量下限：template 為 title 或 section 時至少 2 個 block，` +
-  `template 為 content 或 stats 時至少 3 個 block——避免只有單一 heading 的空洞頁面。`;
+  `整份結構：第 1 頁 title、最後 1 頁 closing、中間至少 1 頁 section；不得連續 3 頁用同一 template；` +
+  `每頁 2-6 個 block（content／stats 頁至少 3 個），不要只有一個 heading 的空頁；` +
+  `只有在確實有具體數字可寫時才放 stats 頁，湊不出數字就改用 content，不要生出沒有數字的 stats 頁。`;
 
 // ─────────────────────────────────────────────────────────────
 // sanitize（最後防線；對齊 packages/shared 的 SlideBlock union）
@@ -722,7 +768,7 @@ export async function generateDeckSlides(
       `你是簡報生成器。template 欄位只能是以下 enum 值之一：${AI_GENERATION_TEMPLATES.join(", ")}。` +
       `${BLOCK_SHAPE_PROMPT_ZH}${TEMPLATE_INTENT_ZH}${DESIGN_PRINCIPLES_ZH}${DECK_STRUCTURE_CONTRACT_ZH}` +
       `全部輸出語言：${input.language}。`,
-    prompt: `請針對主題「${input.topic}」產生 ${input.pages} 頁簡報，回傳符合 schema 的 JSON。${context}`,
+    prompt: `請針對主題「${input.topic}」產生 ${input.pages} 頁簡報（不多不少），回傳符合 schema 的 JSON。${context}`,
     schema: GENERATED_DECK_SCHEMA,
     images: images.length ? images : undefined,
     attempts: 3,
@@ -796,19 +842,15 @@ export async function generateSupplementSlide(
         `template 欄位只能是以下 enum 值之一：${AI_GENERATION_TEMPLATES.join(", ")}。` +
         `${BLOCK_SHAPE_PROMPT_ZH}${TEMPLATE_INTENT_ZH}${DESIGN_PRINCIPLES_ZH}` +
         `【補充頁專屬規則，優先於上述通則】` +
-        `(1) 依「當下對話訊號」的性質挑版型，切勿每張都用 features 卡格——` +
-        `數據/成效/ROI/百分比→stats（3-4 個大數字 stat；只有一個關鍵數字時就只放 1 個 stat，會自動變成整頁大數字）或 content＋一個 chart；` +
-        `時程/什麼時候能上線/導入排程/里程碑→timeline-gantt（heading＋一個 timeline block）；` +
-        `我方 vs 競品、對方說在比較誰、方案比一比→comparison-matrix（heading＋一個 table block，highlightColumn 指向我方那欄）；` +
-        `接下來怎麼做/導入流程/下一步分幾步→content＋一個 steps block（≤4 步）；` +
-        `兩案對比、現況 vs 導入後→content＋two-col（左欄 bullets 用 marker:"cross"、右欄用 marker:"check"）；` +
-        `步驟以外的條件/清單→content＋bullets（≤5 條、每條一行）；` +
-        `單一要點/定義/報價→section（大標＋一句 subheading）或 content＋一段短 paragraph；` +
-        `客戶原話/見證→section＋一個 quote（附 attribution）；` +
-        `唯有並列 3-4 個各自獨立的重點時才用 features。` +
-        `(2) 版面預算（固定 16:9 版面、內容過多會被裁掉，務必放得下）：用 features 時「不要」再放 subheading（讓大標直接帶重點）、features 至多 3 張、每張 desc 一句話（約 20 全形字內）；` +
-        `timeline 至多 ${MAX_TIMELINE_TICKS} 個刻度、${MAX_TIMELINE_TRACKS} 條軌道；table 至多 ${MAX_TABLE_COLUMNS} 欄 ${MAX_TABLE_ROWS} 列、每格 12 個全形字內；` +
-        `一頁只聚焦一個重點、寧可少而精；不要放 eyebrow。` +
+        `(1) 依「當下對話訊號」挑版型，切勿每張都用 features：` +
+        `數據／成效／ROI／百分比→stats（1-4 個 stat；只有一個關鍵數字就只放 1 個，會自動變整頁大數字）或 content＋一個 chart；` +
+        `時程／何時上線／導入排程／里程碑→timeline-gantt；` +
+        `我方 vs 競品、對方在比較誰、方案比一比→comparison-matrix（highlightColumn 指我方那欄）；` +
+        `下一步／導入流程→content＋steps（≤4 步）；現況 vs 導入後→content＋two-col（左欄 marker:"cross"、右欄 "check"）；` +
+        `條件／清單→content＋bullets（≤5 條）；單一要點／定義／報價→section 或 content＋一段短 paragraph；` +
+        `客戶原話／見證→section＋quote（附 attribution）。唯有並列 3-4 個各自獨立的重點才用 features。` +
+        `(2) 版面預算（16:9 固定版面，塞不下會被裁掉）：用 features 時不要再放 subheading、至多 3 張、每張 desc ≤20 全形字；` +
+        `table 每格 ≤12 全形字；一頁只聚焦一個重點、寧可少而精；不要放 eyebrow。` +
         `(3) 事實紀律（會中說錯的代價極高）：table 的競品欄、chart/stat 的數值、timeline 的時間，只能引用上面「對話訊號」與逐字稿中已出現、或我方已驗證的資訊；` +
         `任何一格湊不出可靠內容，就改用純文字版型（content＋paragraph 或 bullets），**不要自己編數字或競品規格**。` +
         `視覺主題不由你決定（系統會沿用鄰頁）。全部輸出語言：${language}。`,
