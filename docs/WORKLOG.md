@@ -365,5 +365,6 @@
 - **/code-review（使用者指示）＋L20 第三度生效**：confirmed 0，但 killed 中**三鏡頭 refuted:false 交叉命中同一條**——RECITATION 升溫＋「改寫勿照抄」指示**無條件打進 CRM 抽取端**（任務恰是逐字取值）＝污染抽取忠實度。且出現新形態：**verifier 拿指揮官 ROM 當反駁證據**（17:15 裁決沒寫明只涵蓋 deck 脈絡）→ 決策紀錄必須寫明涵蓋範圍（入 ROM 17:54 方法論節）。
 - **修（拆兩層）＋復驗 PASS**：RECITATION 全域維持可重試但預設**原溫原 prompt 純重抽**；升溫＋hint 改 `resampleOnRecitation` opt-in、僅 deck 生成/revise 兩處開。復驗關鍵證據＝**未開旗標呼叫端重試 config 與首次逐位元相同**（16 個 generateJson 呼叫端全清查）。
 - **/simplify（使用者指示）**：9 候選去重 6 → 套 5 跳 1（跳＝mapGenerateError 換 helper 會把防禦性寬鬆 regex 收窄＝行為變更，正確拒套、記另輪）。
-- **最終數字**：server **68 檔 475 測**、web tsc ✓＋build 19 路由、legacy-lock＋error-mapping 34/34。**未 commit 待核准**（server＋web 都要重建）。
+- **最終數字**：server **68 檔 475 測**、web tsc ✓＋build 19 路由、legacy-lock＋error-mapping 34/34。
+- **commit＋push＋部署（2026-08-01 使用者核准「commit + push + 部屬」）**：三 commit `a0282f1` fix(server)＋`0faa870` fix(web)＋`7e298d5` docs，push（`a6960e0..7e298d5`）。build server `67b4df1b`／web `a3ad6f99` 皆 SUCCESS → **server rev `00028-tfg`**（保 env）＋**web rev `00029-qwh`**。無 migration。冒煙全綠（health/ready＋zh-TW/studio/copilot/train 200）。DEPLOY.md 已更新。
 - **記債**：~12% 生成殘留失敗率（治本＝W2 版型 prompt/schema 瘦身另輪）；重取樣失敗 attempt 不計費（併 07-30 既有 meter 系統債）；dev hydration 警告 5 筆（`suppressHydrationWarning` 候選）；4 欄比較表面板內橫捲（接受的取捨）；mapGenerateError 判定單一真相化（需補測另輪）。
