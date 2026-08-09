@@ -379,4 +379,5 @@
 - **制度候選**：dead-class 靜態檢查（秒級）收進驗收慣例／搬 `tools/`（backlog）。
 - **最終數字**：web tsc ✓＋build 19 路由＋parity **476/476**；slide-legacy-lock 20/20。**三批未 commit 待核准**（按鈕修＋掃蕩 31＋polish 6，全 web → 只需重建 web）。
 - 殭屍行程清單更新：33864／2020／8799／**3111**（新增）／8787 bun。
+- **commit＋push＋部署（2026-08-09 使用者核准「Commit+部署」）**：兩 commit `1ab2e8d` fix(web) 37 項＋`8f9d2bb` docs，push（`51e2c2f..8f9d2bb`）。build web `7ce0c2c3` SUCCESS → **web rev `00030-pjw`**（server 不動）。冒煙五路由全 200。DEPLOY.md 已更新。
 
