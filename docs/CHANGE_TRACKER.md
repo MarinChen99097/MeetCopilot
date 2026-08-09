@@ -35,6 +35,66 @@
 
 <!-- TRACKER_BELOW -->
 
+### 2026-08-09 18:40 | 接縫掃蕩「跳過清單」裁決 6 項——邀請逾期誤標／PRICING__ 外洩／登入錯誤露 env 名／studio kicker／B8 逐元素對比／死 CSS 25 條
+- **工作區**: apps/web
+- **類型**: fix（1 則真 bug ＋ 3 則文案洩漏／缺漏 ＋ 1 則可存取性 ＋ 1 則死碼清理；零行為變更）
+- **檔案**: `apps/web/components/settings/TeamSettingsView.tsx`, `apps/web/components/spend/SpendDashboard.tsx`, `apps/web/components/auth/AuthForm.tsx`, `apps/web/components/studio/StudioView.tsx`, `apps/web/app/globals.css`, `apps/web/app/studio-present.css`, `apps/web/messages/zh-TW.json`, `apps/web/messages/en.json`
+- **背景**: 承 ROM 2026-08-09 14:35 的跳過清單裁決（修 6／記債 4）。前一批（17:20）只修「明確項」，本批處理需要語意判斷的 6 項。
+- **改了什麼**:
+  1. **邀請「逾期」誤標（真 bug）** `TeamSettingsView.tsx:215-224`。Before `{inv.expiresAt ? \`逾期 ${fmtDate(inv.expiresAt)}\` : ""}`——`expiresAt` 是「有效到什麼時候」，**未到期的邀請一律被標成已逾期**（最常見的狀態反而被寫成失效）。After 依 `inv.expiresAt < Date.now()` 分兩態：過期 → `org.team.inviteExpired`（「已逾期 {date}」／"Expired {date}"）、未到期 → `org.team.inviteValidUntil`（「有效至 {date}」／"Valid until {date}"）。無 SSR hydration 風險（invites 由 client effect 取得，rows 只在 fetch 後才存在）。
+  2. **`PRICING__` 佔位外洩** `SpendDashboard.tsx`。兩處：(a) 頁尾註腳字面印出 env 變數名——Before「依伺服器定價 PRICING__… 計」→ After「依伺服器端的模型定價表計算」；(b) 新增 `humanizeKey()`（`SpendDashboard.tsx:55-69`）作為 `rowLabel` 與明細表 kind 欄的 fallback：鍵形如 `PRICING__<MODEL>__*_PER_*` 時剝殼取 model 段（底線→連字號、小寫），剝不出東西退「其他」；**非 `PRICING__` 前綴的鍵一律原樣顯示**（正常 model id 如 `gemini-3.1-flash-lite` 不受影響，最小干預）。
+  3. **登入錯誤露 env 變數名** `AuthForm.tsx:39-45`。Before「Google 登入尚未設定，請設定 NEXT_PUBLIC_GOOGLE_CLIENT_ID。」→ After `t("auth.googleNotConfigured")`＝「目前無法使用 Google 登入，這個網站的登入設定還沒完成。請聯絡你的系統管理員。」／英文對應。使用者這端做不了任何事，給 env 名只是洩漏部署細節。AuthForm 因此首次接上 `useTranslations()`。
+  4. **/studio 頁首補 kicker** `StudioView.tsx:66-71`。`.mc-pagehead` 家族的第一列（/crm、/train、/present/start、/settings/team 都有），/studio 先前漏補。文案入 messages：`studio.kicker` ＝「會前準備簡報」／"Prep your slides"（對齊 /crm「客戶資料」、/train「練習對話」的短語慣例，非 "A · B" 式）。
+  5. **B8 逐元素對比修（token 值一律不動）** `globals.css`。muted 是為 kicker 那類 10–11px uppercase 裝飾標籤校準的；以下五處不屬該家族，逐元素改吃 `--mc-text-2`：`.mc-detail__back`（可點的返回鈕）、`.mc-tabpane__title`（15px 區段標題）、`.mc-field-row__label`（表單欄位名）、`.mc-counts__item dt`（11px 計數 label）、`.mc-ckl__item.is-covered/.is-skipped .mc-ckl__titletext`（待講清單正文）。量測（Playwright、真 stylesheet／真 class／真 token、雙主題）：Before muted 淺 bg 3.92／card 4.50／warn-soft **3.92**、深 bg 5.04／card 4.50／warn-soft **4.43**——「正在講」（`.is-now` ＝ `--mc-warn-soft` 底）**雙主題都不過**；After text-2 淺 6.33／7.27／6.33、深 7.22／6.44／6.34，**六個受測元素 × 兩主題最差 6.33 ≥ 4.5**。
+  6. **死 CSS 清理 25 條**（`globals.css` 24 ＋ `studio-present.css` 1），逐條 grep tsx/ts/json（排除 `.next`／`node_modules`）零引用才刪，各留墓碑註解：
+     - 登入頁改純 Google 殘骸 5：`.mc-authform`、`.mc-authdivider`（含 `::before/::after`）、`.mc-authcard__submit`、`.mc-authcard__switch`、`.mc-authcard__alt`。**同區的 `.mc-auth-checking`（AuthGuard）／`.mc-google*`（GoogleSignInButton）／`.mc-authcard__actions`（InviteAcceptView）活著，未動**。
+     - 團隊設定改表格版殘骸 13：`.mc-teamsec/__h2/__empty`、`.mc-memberlist`、`.mc-invitelist`、`.mc-memberrow(+__id/__name/__meta/__actions)`、`.mc-inviterow(+__email/__meta)`。其中 `memberlist`／`invitelist` 屬稽核「疑似」名單，逐條 grep 後確認同為死碼。**`.mc-invitelink*` 仍在用，未動**。
+     - 其他 6：`.mc-enrich__modes`／`.mc-enrich__mode`（含 `.is-on`、後代 `small`，屬「疑似」——查證 EnrichPanel className 全為字面值、無動態組合可能）、`.mc-train__intro/__h1/__lead`（先前註解寫「保留以防其他引用」，本次確認零引用後刪）、`.mc-scorecell__hint`、`.mc-stage`（「疑似」——`mc-stage3` 字面含 `mc-stage` 但 class token 不同、規則不會命中，bare token 零引用）。
+     - `studio-present.css` `.mc-deckcard.is-selected`：PresentStart 的選取改用 `.mc-deckrow.is-selected`（globals.css:907），`.mc-deckcard` 只剩 /studio 清單在用且從不加 `is-selected`。此條同時是稽核 4A 最後一處舊紫 `rgba(139,92,246,.45)`，隨規則消失。
+  - **刻意不做**（維持範圍）：`.mc-authcard__hint` 已在前批補上規則，本批不再動；記債 4 項（fmtUsd 小數、`emphasis:"on"`、/train 鎖定卡 CTA、純版面 hook 死 class）照 ROM 裁決不碰。
+- **為什麼**: 這 6 項需要語意判斷（哪個是 bug、哪個文案該怎麼寫、哪條 CSS 真的死了），不能靠機械規則自動套，故從前一批分離、由指揮官裁決後單獨執行。
+- **驗收**: web `tsc --noEmit` EXIT=0；`next build` EXIT=0（19 路由，與修前相同）；i18n parity **476 = 476**（新增 4 鍵 × 2 檔，零單邊）。Playwright 實測（`next start` ＋ API mock）：邀請兩態 zh「有效至 2026/08/16」「已逾期 2026/08/06」、en "Valid until …"／"Expired …"，全頁無裸「逾期 」；/spend 三列標籤「文字生成（會中/簡報/評分）」「gemini-3-1-flash-lite」「gpt-image-2」，全頁 `PRICING` 零出現；/studio kicker zh「會前準備簡報」、en "Prep your slides"；對比數字見上第 5 點。
+
+### 2026-08-09 17:20 | 全站換皮接縫收尾——孤兒 class 補規則／舊色板換 token／flex stretch 對齊（兩路稽核清單）
+- **工作區**: apps/web
+- **類型**: fix（UI 接縫／樣式；零行為變更）
+- **檔案**: `apps/web/app/globals.css`, `apps/web/app/studio-present.css`, `apps/web/components/studio/StudioView.tsx`, `apps/web/components/studio/SlideEditor.tsx`, `apps/web/components/spend/SpendDashboard.tsx`, `apps/web/components/sim/MeetingSimulator.tsx`
+- **背景**: 承 2026-08-01 的 `.mc-editor__launchlabel` 修正，兩路稽核（機械窮舉 `scratchpad/seam-audit.md` ＋ 量測式實機走查 `scratchpad/seam-visual.md`）證實那不是孤例，而是**簇狀**——三個未跟上 2026-07-30 重設計的區域：CRM 子頁籤／登入頁＋團隊設定／DeckWizard。本輪只修「明確項」（孤兒 class、舊設計殘色、flex 對齊），語意/產品取捨與 kicker 家族對比留給指揮官裁決。
+- **改了什麼**（**行為面全零**：無任何 `onClick`／`href`／`disabled` 條件／表單流／狀態機／API 呼叫改動；`renderSlideBlock` 與 slide 內容域未碰；測試斷言未動；i18n messages 未動，parity 472/472）：
+  1. **P0 三則「淺色主題下看不見的文字」**（全是換皮漏改的 tailwind 深底盤硬編色）。
+     - `studio-present.css` `.mc-editor__locked`（**I1 鎖頁提示**，`role="alert"`，三大不變量的唯一 UI 解釋）：Before `background:rgba(251,191,36,.14); color:#fde68a` → 實測 **1.03:1**（整段字消失）。After 改吃 globals.css `.mc-enrich__warn` 已在用的同一組警示原語 `background:var(--mc-warn-soft); border:1px solid var(--mc-warn); color:var(--mc-text)` → 實測 **淺 16.16:1 / 深 12.21:1**。（不用 `--mc-warn` 當字色是因為 warn on warn-soft 只有 3.98–4.30；語意由邊框＋底色承載。）
+     - `.mc-wizard__err`（DeckWizard 生成失敗）：`#fecaca` → `color:var(--mc-danger-on-sunk)`、底 `color-mix(danger 12%, var(--mc-card))`。
+     - `.mc-imgjob__err`（生圖失敗）：`#fecaca` → `var(--mc-danger)`。
+  2. **DeckWizard 舊色板整段換 token**（全站最後一塊舊深藍＋舊紫 `#8b5cf6`）：`.mc-wizard` 遮罩 `rgba(6,10,22,.7)`→`var(--mc-scrim)`；`.mc-wizard__preview` `#0e1728`→`var(--mc-sunk)`；`.mc-stepper__num` `rgba(139,92,246,.18)`→`var(--mc-accent-soft)`＋`color:var(--mc-accent)`；`.mc-wizard__gen` `rgba(139,92,246,.1)`→`var(--mc-accent-soft)`；`.mc-deckcard.is-selected` box-shadow 舊紫→`color-mix(var(--mc-accent) 45%, transparent)`。另 `.mc-enrich__warn` 的 `var(--mc-warn, #d97706)` fallback 刪除（token 恆存在）、`MeetingSimulator.tsx:494/497` 兩條進度槽 `rgba(255,255,255,.08)`（深底白膜，淺色下等於不存在）→`var(--mc-sunk)`。
+     - **刻意不動**：`studio-present.css:75` `.slide--bgimg::after` 的 `rgba(6,10,22,.35/.72)` —— 那是 AI 背景圖上的暗色 scrim（保住投影片文字對比），屬 slide 渲染域；`.mc-stage3*` 12 處硬編色（globals.css:2136 明文註解「舞台不吃主題」，I3／DESIGN_INVENTORY §A9）。
+  3. **孤兒 class 補規則／改用既有原語**（class 掛在 tsx、CSS 零規則，與 launchlabel 同型）：
+     - `globals.css`：`.mc-authcard__hint`（登入頁 `role="alert"`；Google 未設定時**這句就是整頁全部內容**，原本是 15px body 裸文字＋UA `<p>` margin 29px）→ 比照 `__err` 給 `margin:0; font-size:13px; line-height:1.5; color:var(--mc-danger)`；`.mc-empty__action`（共用空狀態 CTA 容器）；`.mc-persona__unlock`（`margin-left:auto`）；`.mc-noteitem__tag` ＋ `.mc-noteitem.is-narrative`（AI 敘事筆記原本與手寫筆記同貌、標籤裸文字）；`.mc-dp--muted .mc-dp__label`（DP_META 7 種決策權有 2 種 tone:"muted"，家族獨缺）；`.mc-job--queued`（併入 running 群組——JobProgressCard:35 明確把 queued 當 active）。
+     - `studio-present.css`：`.mc-imgjob--queued`（併入 running；`status ?? "queued"` 是**每張生圖卡的初始狀態**）；`.mc-stepper__label`（`white-space:nowrap`）；`.mc-editor__importstate`（規則從 tsx 的 inline style 搬進 CSS，像素等價）。
+     - `.mc-seg`：Before 全庫零規則、/spend 版面靠 inline style 撐、三顆鈕是各自獨立的 `.mc-btn` 圓角膠囊，而設計好的 `.mc-seg__btn` **零消費端**。After 抽出共用容器 `.mc-seg, .mc-train__modes { display:inline-flex; gap:4px; padding:4px; background:var(--mc-field); border:1px solid var(--mc-border); border-radius:var(--mc-radius) }`（`.mc-train__modes` 保留自己的 margin），SpendDashboard 三顆鈕改 `.mc-seg__btn` ＋ `is-on`（`aria-pressed`／`onClick`／`groupBy` 狀態機逐字不變）。
+     - `.mc-card`：Before 11 處消費端、CSS 只有 `--mc-card` **變數**而 `.mc-card` **規則從不存在**（典型「以為有」），外觀全由各檔的 JS `cardStyle` 物件決定（radius 硬寫 14／12 不吃 token）。After 在共用原語區補 `.mc-card{padding:16px;border:1px solid var(--mc-border);border-radius:var(--mc-r-lg);background:var(--mc-card)}`，SpendDashboard 的 `cardStyle` 整個刪除、5 處只留自己的 margin 增量（實測 radius 14px／padding 16px／bg 不變＝像素等價）；`/sim`（內部測試台）維持自己的 inline 覆寫。
+  4. **flex stretch 對齊**（比照 launchlabel 修法，補 `align-items`）：
+     - `.mc-tabpane__bar` 加 `margin-bottom:12px` ＋ `.mc-tabpane__bar > .mc-tabpane__title{margin-bottom:0}`。根因：`__bar` 是 `align-items:center` 但 center 算的是 **margin box**，`__title` 自帶的 12px 下邊距把可見標題往上推 → **固定歪 6.0px**、CRM 8 個子分頁全中。實測 Δ **6.0 → 0.0px**（單獨出現的 `__title` 仍保有 12px 下留白，已複驗 `margin:0px 0px 12px`）。
+     - `.mc-enrich__buttons` 加 `align-items:center`：「➕ 研究更多」**40 → 33px**（被旁邊 40px 的 accent 鈕 stretch 拉高，CRM 9 個分頁全中），兩鈕 midY 同為 145.5。
+     - `.mc-newco__row` 加 `align-items:flex-end`：「建立邀請」**51 → 33px**（`__actions` 含 `margin-top:12px` 被 stretch 撐到 63px），btn/select/actions 底緣同為 199.5（與 repo 既有 `.mc-noteform` 的 flex-end 慣例一致）。
+     - `.mc-social__accounts` 加 `align-items:center`（任一顆膠囊換行會拉高同列其餘）。
+     - `.mc-deckcard` / `.mc-personacard` 加 `height:100%`：卡片撐滿 grid 列高。/studio **134/147/113 → 147/147/147**（底緣全 260）、/train **104/120/120 → 161/161/161**（底緣全 402）。
+  5. **/studio 頁首接回共用 `.mc-pagehead`**：Before `.mc-studio__header/__h1/__lead/__actions` 是 /studio 獨有一套（24px/700/ls-normal、lead 吃 `--mc-text-muted`、`align-items:flex-start`），且 `.mc-studio` 自帶 `padding:24px` 疊在 `.mc-shell__body` 的 28px 上 → h1 左緣 **311px vs 別頁 287px**。After StudioView 改用 `.mc-pagehead/__id/__h1/__lead/__acts`（那四條 CSS 同批刪除），`.mc-studio` 改 `padding:0; display:flex; flex-direction:column; gap:20px`（原 header 的 `margin-bottom:20px` 由 gap 承接）。實測 h1 **29px/600/ls -0.58px、左緣 287 ＝ 與 /crm 逐項相同**，lead 吃 `--mc-text-2`。**未加 kicker**——那要新增文案＋i18n，屬產品取捨，留待裁決。
+- **驗收（真實輸出）**: `tsc --noEmit` **EXIT=0**；`next build` **EXIT=0、19 路由**；i18n parity `en.json` vs `zh-TW.json` **472/472，missing 0 / extra 0**。Playwright（prod build `next start -p 3477` ＋ mock REST/WS `scratchpad/mock-r2.js` on 8901，起服務後確認兩份 log 無 EADDRINUSE）**11 個狀態 × 淺/深雙主題 ＝ 22 次載入**：**console error/warning 0 件、pageerror 0 件、`documentElement.scrollWidth` 溢出 0 件**；執行期 dead-class 掃描（走訪 `document.styleSheets` 全部 `cssRules` 比對 DOM）本輪修過的 15 個 class **全部有規則命中**（3 個 studio-scoped class 在非 studio 頁顯示未宣告＝`studio-present.css` 只由該兩頁 import，非缺陷）；`/studio/dk_1` 頂列回歸複驗 midY 仍全 28.5。數據 `scratchpad/verify4.json`、腳本 `verify4.js`／`probe4b.js`、截圖 `scratchpad/shots4/*.png`（22 張）。CSS 靜態複掃：`0e1728`／`139,92,246`／`fde68a`／`fecaca`／`d97706`／`9aa3b8` 在 `globals.css`＋`studio-present.css` 已**零命中**（僅剩註解文字與 slide 域刻意保留的 `rgba(6,10,22,.35/.72)` scrim）。
+- **為什麼**: 使用者回報 `.mc-editor__launchlabel` 裸文字後懷疑「這種接縫不只一處」。兩路稽核證實成立且呈簇狀：孤兒 class 32 組、反向死 CSS 25 條、舊殘色 6 處，成因是三次改版（純 Google 登入、團隊設定改表格、全站淺色重設計）都只改 tsx／只改部分 CSS，接縫兩邊各自留斷面。
+
+### 2026-08-01 23:40 | Studio 編輯器頂列：「開始簡報」裸文字＋整列沒對齊
+- **工作區**: apps/web
+- **類型**: fix（UI 對齊／樣式）
+- **檔案**: `apps/web/components/studio/SlideEditor.tsx`（:317-344）, `apps/web/app/studio-present.css`（:547-561）
+- **改了什麼**（只動 header 動作列的結構與樣式；匯出/靜態預覽/連線會議播放三顆鈕的 `onClick`、`disabled` 條件、`buildStaticPresentUrl`／`buildPresentUrl` URL 流**零變更**；slide 渲染域未碰）：
+  1. **補上從未存在的 CSS**。`.mc-editor__launchlabel` 這個 class 在 `ee2468a`（2026-07-19）隨 tsx 一起加入，但 `studio-present.css`／`globals.css` **從頭到尾沒有任何對應規則**（`git log -S launchlabel` 全庫只有那一筆 commit，且只碰 tsx）→ 該 `<span>` 一直是**裸文字**。After：標籤改吃新設計語言的 mono kicker——tsx 加 `mc-kicker` class，CSS 補 `.mc-editor__launchlabel { flex:none; white-space:nowrap; cursor:help; }`。實測 computed style：`IBM Plex Mono` / `10.5px` / `letter-spacing 1.47px` / 淺色 `rgb(125,118,106)`、深色 `rgb(143,138,129)`（＝`--mc-text-muted`，ROM 2026-07-31 已校 4.5:1）。
+  2. **修垂直對齊**。Before：`.mc-editor__baractions { display:flex; gap:8px; }` — **少 `align-items`**，flex 預設 `stretch` 把那顆 `<span>` 拉成和按鈕等高（33px）、文字卻貼在被拉高盒子的**頂端** → 就是使用者看到的「偏高」。After：`display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:8px 12px;`。
+  3. **視覺分組**。把「開始簡報」標籤＋兩顆播放鈕包進新的 `.mc-editor__launch`（`display:flex; align-items:center; gap:8px; padding-left:12px; border-left:1px solid var(--mc-border)`）——組內 8px、組間 12px，加一條細分隔線與前面的「匯出 .pptx」切開。窄視窗（`max-width:720px`）換行時分隔線會落在行首變成多餘裝飾，故該斷點收掉 `border-left`／`padding-left`。
+  - **保留標籤而非拿掉的理由**：兩顆鈕的差異（「靜態預覽」＝本機翻頁 vs「連線會議播放」＝建 meeting session、HUD 批准頁即時接尾）不是自明的，鈕名本身讀不出來；標籤是這組唯一說明語。改成 kicker 後它讀起來是「區段眉標」而不是壞掉的按鈕，問題即解，不必犧牲語意。
+- **驗收（真實輸出）**: web `tsc --noEmit` EXIT=0；`next build` EXIT=0、19 路由。Playwright（`next start` 生產 build，API 以 `page.route` 攔截）雙主題 × 兩寬度（1440/900）共 4 情境**全 PASS**：動作列 4 個元素（3 鈕＋標籤）`boundingBox` midY **全部 28.5，spread = 0px**（門檻 ±1px）、按鈕高度 spread 0px（皆 33px）、`docScrollW == clientW`（1440/1440、900/900）且 `bar.scrollWidth <= clientWidth` → 900px 不破版、**console 0 error**。截圖：`…/scratchpad/shots/bar-{light,dark}-{1440,900}.png`＋`page-*.png`。
+- **為什麼**: 使用者截圖回報頂列「開始簡報」是裸文字、卡在按鈕之間很突兀且垂直偏高，整列間距不一致。根因是上述兩條——孤兒 class（樣式從未寫過）＋容器缺 `align-items:center`（stretch 導致純文字節點頂端對齊）。
+- **踩坑筆記（驗證環境）**: port 3111 上有前一個 session 遺留的 `next start`，我的 `next start` 因 `EADDRINUSE` 靜默失敗，而那個舊 process 的記憶體內 build manifest 指向已被我重建覆蓋掉的 chunk → 所有 `/_next/static/*` 回 400 `text/html`、頁面 hydration 失敗。改用空閒 port（3123）即正常。教訓：起 dev/prod server 前先確認 port 真的空、且要檢查 server log 有沒有 EADDRINUSE，別只看 HTTP 200。
+
 ### 2026-08-01 20:10 | deck 生成「版型 prompt/schema 瘦身」——治 MAX_TOKENS 退化迴圈
 - **工作區**: apps/server
 - **類型**: refactor（prompt/schema），行為面：失敗率／頁數達標率改善

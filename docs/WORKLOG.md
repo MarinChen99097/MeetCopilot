@@ -369,3 +369,14 @@
 - **commit＋push＋部署（2026-08-01 使用者核准「commit + push + 部屬」）**：三 commit `a0282f1` fix(server)＋`0faa870` fix(web)＋`7e298d5` docs，push（`a6960e0..7e298d5`）。build server `67b4df1b`／web `a3ad6f99` 皆 SUCCESS → **server rev `00028-tfg`**（保 env）＋**web rev `00029-qwh`**。無 migration。冒煙全綠（health/ready＋zh-TW/studio/copilot/train 200）。DEPLOY.md 已更新。
 - **版型 prompt/schema 瘦身（同日晚，使用者指示「瘦身版型 prompt 用一下」＋核准 commit+push+部署）**：三階段（Baseline 真 API 量測→Diet→對抗復驗 PASS）。基準線鐵證：一次過僅 38%、attempt 壞率 50%、壞樣本 output 胖 13–25 倍（「有多少吃多少」）、stats 規則 100% 造空殼頁必進 revise、**responseSchema 不計入 promptTokenCount**（瘦的是解碼繞圈空間非錢）。瘦身後同輸入 16 連跑：**一次過 100%、重取樣 0 次、耗時中位 14.2/16.9s（-83%）、新版式命中 100%、stat 產出 0→52**。唯一改動檔 slide-gen.ts（契約形狀零改動經復驗）。**L22 新教訓**：Gemini responseSchema min/maxItems 有文法展開預算、超過整份 400（單測每特性過、組合才爆；schema 綁頁數等三項被迫回退改 prompt 補）。commit `da44130` push → build `440c8a1c` SUCCESS → **server rev `00029-tj8`**（保 env；web 不動）。冒煙 health 200＋ready true。ROM 20:00；~12% 殘留失敗率之債清償。
 - **記債**：~12% 生成殘留失敗率（治本＝W2 版型 prompt/schema 瘦身另輪）；重取樣失敗 attempt 不計費（併 07-30 既有 meter 系統債）；dev hydration 警告 5 筆（`suppressHydrationWarning` 候選）；4 欄比較表面板內橫捲（接受的取捨）；mapGenerateError 判定單一真相化（需補測另輪）。
+
+## 2026-08-02～09 session（Studio 按鈕修＋全站前端接縫掃蕩）
+
+- **Studio 頂列按鈕（使用者截圖）**：「開始簡報」是**天生孤兒 class**（7/19 出生起就沒人寫 CSS、非換皮弄掉）＋按鈕列缺 `align-items`。修＝mono kicker 組標籤＋分隔線＋置中（midY 差 0px、雙主題×1440/900 全過）。
+- **全站接縫掃蕩（使用者「檢查是否有其他類似的，我覺得不少」——命中）**：機械稽核（CSS 解析器＋className 微型求值器窮舉，排 17 假陽性）∥ 實機走查（44 次載入量測）。結論＝**簇狀**：CRM 子頁籤/詳情、登入頁＋團隊設定、DeckWizard 三區沒跟上重設計。孤兒 class 24+8、死 CSS 21+4、殘色 6、**P0 淺色隱形字 3**（I1 鎖頁提示 1.03:1！）、對齊 6；未定義變數 0、溢出 0、console error 0、深色幾乎乾淨（問題集中淺色）。
+- **修 31 項**（P0×3 鎖頁提示 1.03→16.16、殘色 8、孤兒 13 含 `.mc-card` 成原語、對齊 6 全歸零、/studio 頁首歸位 pagehead）→ 復驗 PASS（稽核腳本重跑清零＋機器 diff＋8 點抽測＋6 行為流）。
+- **跳過清單裁決（ROM 08-09 14:35）修 6**：邀請「逾期」誤標未到期（真 bug，兩態文案）、`PRICING__` 佔位外洩（humanizeKey）、登入錯誤露 env 變數名（人話 i18n）、/studio kicker、B8 逐元素改 `--mc-text-2`（token 值不動；含雙主題都不過的「正在講」→ 修後最差 6.33）、死 CSS 25 條清理（含 `.mc-deckcard.is-selected` 順帶消最後一處舊紫）→ 復驗 PASS（deadclass 對 HEAD 雙跑新孤兒 0/修掉 9；死 CSS 抽查 git grep HEAD 證無誤殺）。**記債 4**：fmtUsd 小數、emphasis:"on"（語意已兌現）、鎖定卡 CTA DOM、純版面 hook。
+- **制度候選**：dead-class 靜態檢查（秒級）收進驗收慣例／搬 `tools/`（backlog）。
+- **最終數字**：web tsc ✓＋build 19 路由＋parity **476/476**；slide-legacy-lock 20/20。**三批未 commit 待核准**（按鈕修＋掃蕩 31＋polish 6，全 web → 只需重建 web）。
+- 殭屍行程清單更新：33864／2020／8799／**3111**（新增）／8787 bun。
+

@@ -36,6 +36,14 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-08-09 14:35 | 前端接縫掃蕩收官：31 修＋復驗 PASS；跳過清單裁決（6 修／4 記債）
+- **誰決定**: 使用者（「檢查是否有其他類似的前端問題，我覺得不少」——直覺獲證實）＋Fable（裁決）
+- **掃蕩結果**：機械稽核（腳本窮舉：CSS 解析器＋className 微型求值器，排掉 17 假陽性）＋實機走查（44 次載入量測）。**簇狀而非零星**——三個沒跟上重設計的區域：CRM 子頁籤/詳情、登入頁＋團隊設定（兩次改版都只改 tsx）、DeckWizard（唯一殘留舊深藍＋舊紫）。修 31 項（P0 淺色隱形字 ×3 含 **I1 鎖頁提示 1.03→16.16:1**、殘色 8、孤兒 13 含 `.mc-card` 正式成原語、對齊 6、/studio 頁首歸位）。復驗 PASS：稽核腳本重跑清零、機器 diff（修前後 JSON 對比）、8 點抽測、6 行為流、slide-legacy-lock 20/20。
+- **跳過清單裁決——修 6**：(1) 邀請「逾期」文案對未到期日期誤標（加 `expiresAt<now` 分支，真 bug）；(2) `PRICING__` 佔位字外洩使用者可見（映射人話或隱藏）；(3) 登入錯誤訊息把 env 變數名露給使用者（改人話文案，i18n 雙語）；(4) /studio 頁首補 kicker（完成 pagehead 統一，i18n）；(5) **B8 逐元素修**：非 kicker 家族踩 muted 者（`.mc-tabpane__title` 15px/700、可點的 `.mc-detail__back`、`.mc-field-row__label`、**雙主題都不過的 `.mc-ckl__titletext`「正在講」**）逐元素改 `--mc-text-2`——**token 值不動**（mute 以 card 校準的裁決不變）；(6) 死 CSS 清理 21+4 條（登入/團隊/train 殘骸；`.mc-deckcard.is-selected` 一併；逐條 grep 再刪）。
+- **記債 4**：fmtUsd 小數對齊（<$1 四位小數屬刻意精度）；`emphasis:"on"` 無效值（兩端一致 fallback accent＝語意已兌現，補顯式規則屬化妝品）；/train 鎖定卡 CTA DOM 重構（行為面）；純版面 hook 死 class（`mc-job__body` 型——量測無視覺缺陷，補規則＝憑空發明設計）。
+- **制度採納**：走查 agent 建議把 **dead-class 靜態檢查（秒級）收進驗收慣例**——同型 bug 否則會一直靠使用者截圖一個一個冒。納入 DESIGN_APPLY 驗收清單精神，後續輪次派工單直接引用 `scratchpad` 腳本已入 repo 化候選（記 backlog：搬進 `tools/`）。
+- **影響**: 修 6 後與 Studio 按鈕修、31 項掃蕩修同批 commit＋部署（純 web）。
+
 ### 2026-08-01 20:00 | 版型 prompt/schema 瘦身（使用者指示）——一次過率 38%→100%、耗時中位 -83%；兩項語意裁決追認
 - **誰決定**: 使用者（「瘦身版型 prompt 用一下」）＋Fable（約束凍結：契約形狀不動、真 API A/B 實證、事實紀律段不碰）＋agent 兩項執行期裁決（本則追認）
 - **基準線（先量再動，全真 API）**：deck system 1,142 tok（三個共用片段佔 87%、四呼叫點各原封送一次、deck↔supplement 2,303 字元逐字重複）；動態 16 連跑——最終成功 94% 但**一次過僅 38%**、attempt 壞率 50%（MAX_TOKENS 14 次）、靠重試把 14.5s 拖到 85–98s；**退化迴圈鐵證**＝壞樣本 output 26K–32K tok vs 好樣本中位 1.2K（「有多少吃多少」）；**頁數達標僅 53%**（concise hint 靜默砍頁）；**stat/chart 產出 0**＝「涉及數據就放 stats 頁」規則 100% 造空殼頁、每次生成必進 reviseSlides。附帶實測發現：**responseSchema 不計入 promptTokenCount**（瘦 schema 省的是解碼繞圈空間非錢）。
