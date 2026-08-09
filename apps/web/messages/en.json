@@ -110,6 +110,7 @@
   "studio": {
     "title": "DynamicSlide Studio",
     "desc": "Three-step deck generation wizard, slide editing, pptx export, pre-meeting AI image generation.",
+    "kicker": "Prep your slides",
     "launchTitle": "Start presenting",
     "launchHint": "Static preview just flips slides locally; live meeting playback creates a session so HUD-approved pages append to the deck in real time.",
     "launchStaticPreview": "Static preview",
@@ -487,6 +488,7 @@
     "errFallbackGen": "Generation failed"
   },
   "auth": {
+    "googleNotConfigured": "Google sign-in isn't available — this site's sign-in setup isn't finished yet. Please contact your administrator.",
     "errors": {
       "invalidCredentials": "Incorrect email or password. Please try again.",
       "emailRegistered": "That email is already registered — please sign in instead.",
@@ -510,7 +512,9 @@
       "colWhen": "Joined / invited",
       "colStatus": "Status",
       "statusActive": "Active",
-      "statusPending": "Pending"
+      "statusPending": "Pending",
+      "inviteExpired": "Expired {date}",
+      "inviteValidUntil": "Valid until {date}"
     },
     "roles": {
       "owner": "Owner",

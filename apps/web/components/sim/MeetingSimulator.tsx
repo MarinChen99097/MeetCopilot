@@ -491,10 +491,10 @@ function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: 
       {/* audio bar */}
       <div className="mc-card" style={{ ...cardStyle, display: "flex", alignItems: "center", gap: "0.8rem" }}>
         <span style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}>🎧 收音（mp3）</span>
-        <div style={{ flex: 1, height: 8, background: "rgba(255,255,255,0.08)", borderRadius: 4, overflow: "hidden" }}>
+        <div style={{ flex: 1, height: 8, background: "var(--mc-sunk)", borderRadius: 4, overflow: "hidden" }}>
           <div style={{ width: `${Math.round(progress * 100)}%`, height: "100%", background: "var(--mc-accent)", transition: "width .2s" }} />
         </div>
-        <div style={{ width: 60, height: 8, background: "rgba(255,255,255,0.08)", borderRadius: 4, overflow: "hidden" }} title="音量">
+        <div style={{ width: 60, height: 8, background: "var(--mc-sunk)", borderRadius: 4, overflow: "hidden" }} title="音量">
           <div style={{ width: `${Math.round(level * 100)}%`, height: "100%", background: "#7ee0a3" }} />
         </div>
         <span style={{ fontSize: "0.78rem", color: "var(--mc-text-2)", whiteSpace: "nowrap" }}>

@@ -52,10 +52,25 @@ function epochToDay(ms: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/**
+ * 沒有人話標籤的鍵 → 可讀 fallback。
+ * 後端的 kind/model 值若是以定價環境變數命名（`PRICING__<MODEL>__INPUT_PER_M` 這種形狀），
+ * 原樣印出等於把 env 變數名端到使用者面前——先剝掉 `PRICING__` 前綴與 `__*_PER_*` 後綴取中間的
+ * model 段、底線換連字號並小寫（讀起來就是 model id）；剝不出東西才退「其他」。
+ */
+function humanizeKey(key: string): string {
+  const raw = key.trim();
+  if (!raw) return "其他";
+  if (!/^PRICING__/i.test(raw)) return raw; // 一般 model id（gemini-3.1-flash-lite…）原樣顯示
+  const core = raw.replace(/^PRICING__/i, "").replace(/__[A-Z0-9_]*PER_[A-Z0-9_]+$/i, "");
+  const pretty = core.replace(/_/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+  return pretty || "其他";
+}
+
 function rowLabel(key: string, groupBy: OrgUsageGroupBy): string {
-  if (groupBy === "kind") return KIND_LABELS[key] ?? key;
+  if (groupBy === "kind") return KIND_LABELS[key] ?? humanizeKey(key);
   if (key === "(none)") return "（未標記）";
-  return key;
+  return humanizeKey(key);
 }
 
 export function SpendDashboard() {
@@ -137,12 +152,15 @@ export function SpendDashboard() {
           <input type="date" className="mc-input" value={toDay} min={fromDay} onChange={(e) => setToDay(e.target.value)} />
         </label>
         <span style={{ flex: 1 }} />
-        <div className="mc-seg" role="group" aria-label="分組" style={{ display: "flex", gap: 2 }}>
+        {/* `.mc-seg` 在 globals.css 原本零規則、版面靠這裡的 inline style 撐，三顆鈕是各自獨立的
+            `.mc-btn` 圓角膠囊；而設計好的 `.mc-seg__btn` 連體分段鈕一個消費端都沒有。改用既有原語，
+            onClick／aria-pressed／groupBy 狀態機零變更。 */}
+        <div className="mc-seg" role="group" aria-label="分組">
           {GROUP_BY_OPTIONS.map((o) => (
             <button
               key={o.value}
               type="button"
-              className={`mc-btn mc-btn--sm ${groupBy === o.value ? "mc-btn--primary" : "mc-btn--ghost"}`}
+              className={`mc-seg__btn ${groupBy === o.value ? "is-on" : ""}`}
               aria-pressed={groupBy === o.value}
               onClick={() => setGroupBy(o.value)}
             >
@@ -167,7 +185,7 @@ export function SpendDashboard() {
       </div>
 
       {/* 明細表 */}
-      <section className="mc-card" style={cardStyle}>
+      <section className="mc-card">
         <h2 style={{ margin: "0 0 0.6rem", fontSize: "1rem" }}>
           花費明細（依{GROUP_BY_OPTIONS.find((o) => o.value === groupBy)?.label}）
         </h2>
@@ -221,7 +239,7 @@ export function SpendDashboard() {
           </div>
         )}
         <p style={{ margin: "0.7rem 0 0", fontSize: "0.76rem", color: "var(--mc-text-2)" }}>
-          花費為寫入時凍結的<strong>估算值</strong>（依伺服器定價 PRICING__… 計，非帳單金額）。含稅欄＝稅前 × {TAX_MULTIPLIER}
+          花費為寫入時凍結的<strong>估算值</strong>（依伺服器端的模型定價表計算，非帳單金額）。含稅欄＝稅前 × {TAX_MULTIPLIER}
           （稅率）。每次 AI 呼叫（文字/研究/生圖/向量/語音/評分）都會於最底層記帳。
         </p>
       </section>
@@ -250,7 +268,7 @@ function MeterBar({ pct }: { pct: number }) {
 
 function Kpi({ label, value, sub, emphasis }: { label: string; value: string; sub?: string; emphasis?: boolean }) {
   return (
-    <div className="mc-card" style={{ ...cardStyle, padding: "0.8rem 0.9rem" }}>
+    <div className="mc-card" style={{ padding: "0.8rem 0.9rem" }}>
       <div style={{ fontSize: "0.76rem", color: "var(--mc-text-2)" }}>{label}</div>
       <div style={{ fontSize: emphasis ? "1.7rem" : "1.4rem", fontWeight: 700, color: emphasis ? "var(--mc-accent)" : undefined }}>
         {value}
@@ -275,7 +293,7 @@ function BudgetBar({ budget }: { budget: OrgBudget }) {
   const monthLabel = new Date(budget.monthStart).toLocaleDateString("zh-TW", { year: "numeric", month: "long" });
 
   return (
-    <section className="mc-card" style={{ ...cardStyle, marginBottom: "0.9rem" }} aria-label="本月預算">
+    <section className="mc-card" style={{ marginBottom: "0.9rem" }} aria-label="本月預算">
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: "0.5rem" }}>
         <strong style={{ fontSize: "0.92rem" }}>{monthLabel}預算</strong>
         <span style={{ fontFamily: "var(--mc-font-mono)", fontSize: "0.86rem" }}>
@@ -328,7 +346,7 @@ function ByMeetingSection({ from, to }: { from: number; to: number }) {
   const max = Math.max(0, ...(rows ?? []).map((r) => r.costUsd));
 
   return (
-    <section className="mc-card" style={{ ...cardStyle, marginTop: "0.9rem" }}>
+    <section className="mc-card" style={{ marginTop: "0.9rem" }}>
       <h2 style={{ margin: "0 0 0.6rem", fontSize: "1rem" }}>單場會議成本（最貴的 {BY_MEETING_LIMIT} 場）</h2>
       <StateBoundary
         loading={rows === null && !err}
@@ -408,7 +426,7 @@ function EventsSection({ from, to }: { from: number; to: number }) {
   }, [open, fetchPage]);
 
   return (
-    <section className="mc-card" style={{ ...cardStyle, marginTop: "0.9rem" }}>
+    <section className="mc-card" style={{ marginTop: "0.9rem" }}>
       <button
         type="button"
         className="mc-btn mc-btn--ghost mc-btn--sm"
@@ -447,7 +465,7 @@ function EventsSection({ from, to }: { from: number; to: number }) {
                   {items.map((e) => (
                     <tr key={e.id}>
                       <td style={tdL}>{fmtDateTime(e.createdAt)}</td>
-                      <td style={tdL}>{KIND_LABELS[e.kind] ?? e.kind}</td>
+                      <td style={tdL}>{KIND_LABELS[e.kind] ?? humanizeKey(e.kind)}</td>
                       <td style={tdL}>{e.model ?? "—"}</td>
                       <td style={tdR}>{fmtCompact(e.inputTokens)}</td>
                       <td style={tdR}>{fmtCompact(e.outputTokens)}</td>
@@ -492,13 +510,10 @@ function EventsSection({ from, to }: { from: number; to: number }) {
 
 /* ── inline style tokens ──
    2026-07-30：原本寫死 rgba(255,255,255,…) 的白色薄膜／`#9aa3b8` fallback 只在深底成立，
-   淺色主題下會變成看不見的線與灰字 → 全部改吃 --mc-* token（雙主題自動翻轉）。 */
-const cardStyle: React.CSSProperties = {
-  border: "1px solid var(--mc-border)",
-  borderRadius: 14,
-  padding: "1rem",
-  background: "var(--mc-card)",
-};
+   淺色主題下會變成看不見的線與灰字 → 全部改吃 --mc-* token（雙主題自動翻轉）。
+   2026-08-09：`cardStyle`（border／radius:14／padding:1rem／background）整個刪除——那四個屬性正是
+   globals.css 新補的 `.mc-card` 原語，本檔 5 處 `<section className="mc-card">` 改由 CSS 供樣式
+   （radius 14 ＝ `--mc-r-lg`、padding 1rem ＝ 16px，像素等價），各處只保留自己的 margin 增量。 */
 const tableStyle: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" };
 const thBase: React.CSSProperties = {
   padding: "6px 8px",

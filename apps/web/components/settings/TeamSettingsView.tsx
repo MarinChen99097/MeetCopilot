@@ -212,8 +212,14 @@ export function TeamSettingsView() {
                   </span>
                   <span className="mc-teamrow__names">
                     <span className="mc-teamrow__name">{inv.email}</span>
+                    {/* 舊版一律印「逾期 <日期>」——但 expiresAt 是「有效到什麼時候」，未到期的邀請
+                        被誤標成已逾期（最常見狀態反而被寫成失效）。依 now 分兩態。 */}
                     <span className="mc-teamrow__mail mc-mono">
-                      {inv.expiresAt ? `逾期 ${fmtDate(inv.expiresAt)}` : ""}
+                      {inv.expiresAt
+                        ? inv.expiresAt < Date.now()
+                          ? t("org.team.inviteExpired", { date: fmtDate(inv.expiresAt) })
+                          : t("org.team.inviteValidUntil", { date: fmtDate(inv.expiresAt) })
+                        : ""}
                     </span>
                   </span>
                 </span>

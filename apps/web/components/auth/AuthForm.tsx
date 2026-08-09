@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { GoogleSignInButton, GOOGLE_CLIENT_ID } from "./GoogleSignInButton";
 
 /**
@@ -12,6 +13,7 @@ import { GoogleSignInButton, GOOGLE_CLIENT_ID } from "./GoogleSignInButton";
  * login/register pages can keep passing it without a compile break.
  */
 export function AuthForm({ mode }: { mode: "login" | "register"; next?: string }) {
+  const t = useTranslations();
   const [error, setError] = useState<string | null>(null);
   const googleOn = Boolean(GOOGLE_CLIENT_ID);
 
@@ -37,7 +39,9 @@ export function AuthForm({ mode }: { mode: "login" | "register"; next?: string }
           </>
         ) : (
           <p className="mc-authcard__hint" role="alert">
-            Google 登入尚未設定，請設定 NEXT_PUBLIC_GOOGLE_CLIENT_ID。
+            {/* 舊文案把 env 變數名（NEXT_PUBLIC_GOOGLE_CLIENT_ID）直接端給使用者——這是伺服器設定問題，
+                使用者這端做不了任何事，只能請他找管理員。 */}
+            {t("auth.googleNotConfigured")}
           </p>
         )}
       </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import type { DeckSummary } from "@meetcopilot/shared";
 import { ApiError, importDeck, listDecks } from "@/lib/api";
 import { fmtRelative } from "@/lib/format";
@@ -13,6 +14,7 @@ import { DeckWizard } from "./DeckWizard";
 
 /** /studio — DynamicSlide 簡報工作室：deck 清單 + 新建（wizard）/ 匯入 → slide 編輯器（/studio/[deckId]）。 */
 export function StudioView() {
+  const t = useTranslations();
   const router = useRouter();
   const toast = useToast();
 
@@ -60,12 +62,19 @@ export function StudioView() {
 
   return (
     <main className="mc-studio">
-      <div className="mc-studio__header">
-        <div>
-          <h1 className="mc-studio__h1">簡報工作室</h1>
-          <p className="mc-studio__lead">會前準備簡報：新建 / 匯入 deck、三段 wizard 生成、逐頁微調、AI 生圖、匯出 pptx。</p>
+      {/* 頁首走 globals.css 的共用 `.mc-pagehead` 版式（同 /crm、/present/start、/spend、
+          /settings/team、/train）。原本自有的 `.mc-studio__header/__h1/__lead/__actions` 是 /studio
+          獨有的一套（24px/700/ls-normal、lead 吃 --mc-text-muted、align-items:flex-start），
+          與別頁 29px/600/-.02em、flex-end 明顯不一致；那四條 CSS 已同批刪除。 */}
+      <header className="mc-pagehead">
+        <div className="mc-pagehead__id">
+          {/* kicker 是 .mc-pagehead 家族的第一列，/crm、/train、/present/start、/settings/team 都有；
+              /studio 先前漏補，頁首少一層。文案走 messages（雙語），與別頁的短語慣例一致。 */}
+          <span className="mc-kicker mc-kicker--page">{t("studio.kicker")}</span>
+          <h1 className="mc-pagehead__h1">簡報工作室</h1>
+          <p className="mc-pagehead__lead">會前準備簡報：新建 / 匯入 deck、三段 wizard 生成、逐頁微調、AI 生圖、匯出 pptx。</p>
         </div>
-        <div className="mc-studio__actions">
+        <div className="mc-pagehead__acts">
           <button type="button" className="mc-btn mc-btn--ghost" onClick={() => fileRef.current?.click()} disabled={importing}>
             {importing ? <Spinner size={14} /> : "📄"} 從檔案匯入
           </button>
@@ -84,7 +93,7 @@ export function StudioView() {
             }}
           />
         </div>
-      </div>
+      </header>
 
       <StateBoundary
         loading={loading}

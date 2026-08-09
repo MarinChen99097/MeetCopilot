@@ -476,13 +476,16 @@
 .mc-eblk__empty { color: var(--slide-muted); font-size: 2.3cqw; text-align: center; padding: 6cqw 0; }
 
 /* ── /studio — deck list ────────────────────────────────────── */
-.mc-studio { max-width: 1120px; margin: 0 auto; padding: 24px; }
-.mc-studio__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-.mc-studio__h1 { margin: 0 0 4px; font-size: 24px; }
-.mc-studio__lead { margin: 0; color: var(--mc-text-muted); max-width: 640px; }
-.mc-studio__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 2026-08-09 接縫修正：`.mc-studio` 原本自帶 `padding:24px`，疊在 `.mc-shell__body` 既有的 28px 上
+   → /studio 的 h1 左緣 311px、其他所有頁 287px（側欄固定，24px 位移一眼可見）。padding 收 0，
+   版心留白統一交給 shell。頁首 `__header/__h1/__lead/__actions` 四條規則同批刪除——StudioView 改用
+   globals.css 的共用 `.mc-pagehead` 家族（29px/600/-.02em、lead 吃 --mc-text-2、align-items:flex-end），
+   與 /crm、/present/start、/spend、/settings/team、/train 完全同版式。 */
+.mc-studio { max-width: 1120px; margin: 0 auto; padding: 0; display: flex; flex-direction: column; gap: 20px; }
 .mc-deckgrid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
-.mc-deckcard { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 8px; padding: 16px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+/* height:100% ＝ 卡片撐滿 grid 列高（li 本來就 stretch，卡片自己不吃就會依內容長短參差：
+   實測同一列 134 / 147 / 113px，底緣三個高度）。 */
+.mc-deckcard { width: 100%; height: 100%; text-align: left; display: flex; flex-direction: column; gap: 8px; padding: 16px; background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: var(--mc-radius); cursor: pointer; transition: background 0.15s, border-color 0.15s; }
 .mc-deckcard:hover { background: var(--mc-card-hover); border-color: var(--mc-accent); }
 .mc-deckcard__title { font-weight: 700; font-size: 15px; }
 .mc-deckcard__meta { display: flex; align-items: center; gap: 8px; color: var(--mc-text-muted); font-size: 13px; }
@@ -490,19 +493,26 @@
 .mc-deckcard--skel { pointer-events: none; gap: 10px; }
 
 /* ── wizard ─────────────────────────────────────────────────── */
-.mc-wizard { position: fixed; inset: 0; z-index: 50; background: rgba(6, 10, 22, 0.7); display: flex; align-items: flex-start; justify-content: center; padding: 24px; overflow: auto; }
+/* 2026-08-09：本區塊（DeckWizard）是全站唯一還留著重設計前深藍＋舊紫 #8b5cf6 色板的地方，
+   遮罩/預覽面板/步驟號/生成面板/選中卡陰影五處硬編色一律改吃 token（雙主題自動翻轉）。 */
+.mc-wizard { position: fixed; inset: 0; z-index: 50; background: var(--mc-scrim); display: flex; align-items: flex-start; justify-content: center; padding: 24px; overflow: auto; }
 .mc-wizard__panel { width: min(760px, 100%); background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: 14px; display: flex; flex-direction: column; gap: 14px; padding: 20px; }
 .mc-wizard__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mc-stepper { list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; flex-wrap: wrap; }
 .mc-stepper__item { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--mc-border); border-radius: 999px; color: var(--mc-text-muted); font-size: 13px; }
 .mc-stepper__item.is-on { border-color: var(--mc-accent); color: var(--mc-text); }
 .mc-stepper__item.is-done { color: var(--mc-ok); }
-.mc-stepper__num { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: rgba(139, 92, 246, 0.18); font-size: 12px; font-weight: 700; }
+.mc-stepper__num { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--mc-accent-soft); color: var(--mc-accent); font-size: 12px; font-weight: 700; }
+/* 孤兒 class 補規則：步驟名不要在膠囊裡折行（`.mc-stepper` 已 flex-wrap，折的是整顆膠囊）。 */
+.mc-stepper__label { white-space: nowrap; }
 .mc-wizard__body { display: flex; flex-direction: column; gap: 12px; }
-.mc-wizard__err { margin: 0; padding: 8px 12px; background: rgba(248, 113, 113, 0.14); border: 1px solid var(--mc-danger); border-radius: var(--mc-radius); color: #fecaca; font-size: 13px; }
+/* 生成失敗訊息（role="alert"）：原本 `color:#fecaca`（tailwind red-200，重設計前的深底盤）疊在
+   已經換成淺色的底上只有 **1.26:1** ＝ 完全讀不到，使用者只看見一塊粉紅。改吃 danger token；
+   字色用 --mc-danger-on-sunk（淺色壓深版）確保淡紅底上 ≥4.5:1。 */
+.mc-wizard__err { margin: 0; padding: 8px 12px; background: color-mix(in srgb, var(--mc-danger) 12%, var(--mc-card)); border: 1px solid var(--mc-danger); border-radius: var(--mc-radius); color: var(--mc-danger-on-sunk); font-size: 13px; }
 .mc-wizard__import { border: 1px dashed var(--mc-border); border-radius: var(--mc-radius); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .mc-wizard__importh { margin: 0; font-size: 12px; color: var(--mc-text-muted); }
-.mc-wizard__preview { border: 1px solid var(--mc-border); border-radius: var(--mc-radius); padding: 10px; display: flex; flex-direction: column; gap: 8px; background: #0e1728; }
+.mc-wizard__preview { border: 1px solid var(--mc-border); border-radius: var(--mc-radius); padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--mc-sunk); }
 .mc-wizard__previewh { margin: 0; font-size: 12px; color: var(--mc-text-muted); }
 .mc-wizard__previewtext { max-height: 180px; overflow: auto; font-size: 13px; white-space: pre-wrap; color: var(--mc-text); }
 .mc-wizard__previewacts { display: flex; justify-content: flex-end; gap: 8px; }
@@ -511,7 +521,7 @@
 .mc-wizard__slabel { flex: 0 0 130px; color: var(--mc-text-muted); font-size: 13px; }
 .mc-wizard__svalue { font-size: 14px; word-break: break-word; }
 .mc-wizard__count { align-self: center; color: var(--mc-text-muted); font-size: 13px; }
-.mc-wizard__gen { display: flex; align-items: flex-start; gap: 14px; padding: 16px; background: rgba(139, 92, 246, 0.1); border-radius: var(--mc-radius); }
+.mc-wizard__gen { display: flex; align-items: flex-start; gap: 14px; padding: 16px; background: var(--mc-accent-soft); border-radius: var(--mc-radius); }
 .mc-wizard__gen p { margin: 0; color: var(--mc-text-muted); font-size: 13px; }
 .mc-wizard__geninfo { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .mc-wizard__genphase { color: var(--mc-text) !important; font-size: 14px !important; font-weight: 600; }
@@ -544,7 +554,21 @@
 .mc-editor { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .mc-editor__bar { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--mc-border); }
 .mc-editor__title { margin: 0; font-size: 17px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mc-editor__baractions { display: flex; gap: 8px; }
+/* 2026-08-01 頂列動作區修正（使用者截圖回報「開始簡報」是裸文字＋整列沒對齊）：
+   根因兩條——(1)`.mc-editor__launchlabel` 這個 class 從 ee2468a 加進 tsx 起就**沒有任何 CSS 規則**
+   （全站換皮時也沒補），所以它一直是裸文字；(2)本容器少了 `align-items:center`，flex 預設 stretch
+   會把那顆 <span> 拉成跟按鈕一樣高、文字卻貼在拉高盒子的頂端 → 看起來「偏高」。
+   解法：標籤改吃新設計語言的 mono kicker（.mc-kicker，10.5px/.14em/mute——mute 在 card 上已校 4.5:1），
+   並把「標籤＋兩顆播放鈕」包成 `.mc-editor__launch` 群組（細分隔線＋較緊 gap）與前面的匯出鈕分群；
+   容器補 `align-items:center` 讓全列垂直置中，`flex-wrap` 保窄視窗不破版。 */
+.mc-editor__baractions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px 12px; }
+/* 群組：標籤與兩鈕用 8px（比群組間的 12px 緊），左側細分隔線把「開始簡報」這組與匯出鈕切開。 */
+.mc-editor__launch { display: flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 1px solid var(--mc-border); }
+.mc-editor__launchlabel { flex: none; white-space: nowrap; cursor: help; }
+/* 換行時（極窄）分隔線會落在行首，反而像多餘裝飾 → 收掉，改回單純間距。 */
+@media (max-width: 720px) {
+  .mc-editor__launch { padding-left: 0; border-left: none; }
+}
 /* grid-template-rows 是本次修正的關鍵：明確一列 minmax(0,1fr)＝吃滿定高、且允許欄內容縮到 0，
    三欄才會各自捲動而不是互相撐高。右欄加寬（表單欄位可讀）＋隨視窗彈性。 */
 .mc-editor__grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 184px minmax(0, 1fr) clamp(340px, 27vw, 440px); grid-template-rows: minmax(0, 1fr); gap: 0; }
@@ -564,7 +588,15 @@
   .mc-editor__stage { width: min(100%, 1040px, calc(100cqh * 16 / 9)); }
 }
 .mc-editor__panel { border-left: 1px solid var(--mc-border); overflow-y: auto; overscroll-behavior: contain; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
-.mc-editor__locked { padding: 10px 12px; background: rgba(251, 191, 36, 0.14); border: 1px solid var(--mc-warn); border-radius: var(--mc-radius); color: #fde68a; font-size: 13px; }
+/* I1 鎖頁提示（role="alert"，「此頁已播出，無法修改」——三大不變量的唯一 UI 解釋）。
+   原本 `color:#fde68a`（tailwind amber-200，重設計前的深底盤）疊在換淺後的琥珀淡底上只有 **1.03:1**，
+   等於整段字消失，使用者只會覺得欄位莫名不能改。改吃 globals.css `.mc-enrich__warn` 已在用的同一組
+   警示原語：warn-soft 底＋warn 邊框＋**--mc-text 字**（語意由邊框/底色承載，字保證可讀，雙主題皆 >10:1）。 */
+.mc-editor__locked { padding: 10px 12px; background: var(--mc-warn-soft); border: 1px solid var(--mc-warn); border-radius: var(--mc-radius); color: var(--mc-text); font-size: 13px; }
+/* 匯入轉檔中／失敗的整頁狀態容器。原本 class 掛著卻**零 CSS 規則**，版面全靠 tsx 的 inline style
+   撐（`maxWidth:560, margin:"48px auto", padding:"0 16px"`）→ 規則搬進來、tsx 的 inline style 移除，
+   像素完全等價，但這條接縫不再是死 class。 */
+.mc-editor__importstate { max-width: 560px; margin: 48px auto; padding: 0 16px; }
 .mc-editor__fields { border: none; margin: 0; padding: 0; min-width: 0; }
 .mc-editor__fields[disabled] { opacity: 0.6; }
 .mc-editor__save { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
@@ -625,6 +657,9 @@
 
 /* image job card */
 .mc-imgjob { position: relative; border: 1px solid var(--mc-border); border-radius: var(--mc-radius); padding: 12px; display: flex; flex-direction: column; gap: 8px; background: var(--mc-card); }
+/* queued 是每張生圖卡的**初始**狀態（tsx `status ?? "queued"`、且 `active = queued || running`），
+   原本整個修飾詞家族獨缺它 → 卡片剛出現時沒有任何狀態框。與 running 同組吃 info 邊框。 */
+.mc-imgjob--queued,
 .mc-imgjob--running { border-color: var(--mc-info); }
 .mc-imgjob--done { border-color: var(--mc-ok); }
 .mc-imgjob--refused { border-color: var(--mc-warn); }
@@ -632,7 +667,8 @@
 .mc-imgjob__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mc-imgjob__title { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
 .mc-imgjob__hint, .mc-imgjob__note, .mc-imgjob__err { margin: 0; font-size: 12px; color: var(--mc-text-muted); }
-.mc-imgjob__err { color: #fecaca; }
+/* 同 `.mc-wizard__err`：#fecaca 是重設計前的深底紅，疊白卡只有 ~1.45:1。 */
+.mc-imgjob__err { color: var(--mc-danger); }
 .mc-imgjob__body { display: flex; align-items: center; gap: 10px; }
 .mc-imgjob__close { position: absolute; top: 8px; right: 10px; background: none; border: none; color: var(--mc-text-muted); font-size: 12px; cursor: pointer; }
 .mc-imgjob__close:hover { color: var(--mc-text); }
@@ -665,12 +701,9 @@
 .mc-pstart { display: flex; flex-direction: column; gap: 22px; }
 /* 2026-07-31：舊版式的 `__head` / `__h1` / `__lead` / `__h2` 已刪——PresentStart 改用 globals.css
    的 `.mc-pagehead` 家族，這幾條零引用（同下方 `__launch*` 家族）。 */
-/* 選中的 deck 卡：加色框＋淡底（顏色不是唯一訊號——同時有 aria-pressed 與 accent badge）。 */
-.mc-deckcard.is-selected {
-  border-color: var(--mc-accent);
-  background: var(--mc-accent-soft);
-  box-shadow: 0 0 22px -10px rgba(139, 92, 246, 0.45);
-}
+/* 2026-08-09 刪：`.mc-deckcard.is-selected` —— PresentStart 的 deck 選取改用 `.mc-decklist` /
+   `.mc-deckrow.is-selected`（globals.css），`.mc-deckcard` 現在只剩 /studio 清單在用、而它從不加
+   `is-selected`。此條同時是稽核 4A 唯一殘留的舊紫 `rgba(139,92,246,.45)`，隨規則一併消失。 */
 /* 2026-07-31：舊 launch 卡（`__launch` / `__launch-id` / `__launch-label` / `__launch-title` /
    `__launch-meta` / `__launch-actions` / `__action` / `__action-hint` / `__tip`）已整批刪除——
    PresentStart 改用 globals.css 的 `.mc-launchcard` 家族，tsx 只剩 `.mc-pstart`、`__grid`、`__pick`、

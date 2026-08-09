@@ -314,34 +314,39 @@ export function SlideEditor({ deckId }: { deckId: string }) {
           >
             {exporting ? <Spinner size={13} /> : "⬇"} {t("export")} .{exportExt}
           </button>
-          {/* 開始簡報 launcher：靜態預覽（本機翻頁）vs 連線會議播放（建 session，HUD 批准頁即時接尾）。 */}
-          <span className="mc-editor__launchlabel" title={tLaunch("launchHint")}>
-            {tLaunch("launchTitle")}
-          </span>
-          <button
-            type="button"
-            className="mc-btn mc-btn--ghost mc-btn--sm"
-            onClick={openStaticPreview}
-            disabled={loading || slides.length === 0}
-            title={tLaunch("launchHint")}
-          >
-            ▶ {tLaunch("launchStaticPreview")}
-          </button>
-          <button
-            type="button"
-            className="mc-btn mc-btn--primary mc-btn--sm"
-            onClick={openLivePlay}
-            disabled={launching || loading || slides.length === 0}
-            title={tLaunch("launchHint")}
-          >
-            {launching ? <Spinner size={13} /> : "🎥"} {launching ? tLaunch("launchOpening") : tLaunch("launchLivePlay")}
-          </button>
+          {/* 開始簡報 launcher：靜態預覽（本機翻頁）vs 連線會議播放（建 session，HUD 批准頁即時接尾）。
+              兩鈕差異細微（本機 vs 建 session），故保留「開始簡報」組標籤，但改用新設計語言的 mono
+              kicker（.mc-kicker）並包進 .mc-editor__launch 群組（細分隔線＋緊湊 gap），與前面的匯出鈕分群。 */}
+          <div className="mc-editor__launch">
+            <span className="mc-editor__launchlabel mc-kicker" title={tLaunch("launchHint")}>
+              {tLaunch("launchTitle")}
+            </span>
+            <button
+              type="button"
+              className="mc-btn mc-btn--ghost mc-btn--sm"
+              onClick={openStaticPreview}
+              disabled={loading || slides.length === 0}
+              title={tLaunch("launchHint")}
+            >
+              ▶ {tLaunch("launchStaticPreview")}
+            </button>
+            <button
+              type="button"
+              className="mc-btn mc-btn--primary mc-btn--sm"
+              onClick={openLivePlay}
+              disabled={launching || loading || slides.length === 0}
+              title={tLaunch("launchHint")}
+            >
+              {launching ? <Spinner size={13} /> : "🎥"}{" "}
+              {launching ? tLaunch("launchOpening") : tLaunch("launchLivePlay")}
+            </button>
+          </div>
         </div>
       </div>
 
       {importStatus === "processing" && !pollTimedOut ? (
         // 轉檔中：重用 JobProgressCard 風格（mc-job）——輪詢進行中，可離開再回來。
-        <div className="mc-editor__importstate" style={{ maxWidth: 560, margin: "48px auto", padding: "0 16px" }}>
+        <div className="mc-editor__importstate">
           <div className="mc-job">
             <div className="mc-job__head">
               <div className="mc-job__title">
@@ -354,7 +359,7 @@ export function SlideEditor({ deckId }: { deckId: string }) {
         </div>
       ) : importStatus === "failed" || (importStatus === "processing" && pollTimedOut) ? (
         // 轉檔失敗（server importError）或前端輪詢逾時 backstop：清楚錯誤＋逃生口（重新匯入／返回 Studio）。
-        <div className="mc-editor__importstate" style={{ maxWidth: 560, margin: "48px auto", padding: "0 16px" }}>
+        <div className="mc-editor__importstate">
           <div className="mc-job mc-job--failed">
             <div className="mc-job__head">
               <div className="mc-job__title">

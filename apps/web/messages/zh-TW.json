@@ -110,6 +110,7 @@
   "studio": {
     "title": "DynamicSlide 編輯",
     "desc": "三段式簡報生成精靈、投影片編輯、pptx 匯出、會前 AI 生圖。",
+    "kicker": "會前準備簡報",
     "launchTitle": "開始簡報",
     "launchHint": "靜態預覽只在本機翻頁；連線會議播放會建立會議 session，讓 HUD 批准的補充頁即時接到簡報尾端。",
     "launchStaticPreview": "靜態預覽",
@@ -487,6 +488,7 @@
     "errFallbackGen": "生成失敗"
   },
   "auth": {
+    "googleNotConfigured": "目前無法使用 Google 登入，這個網站的登入設定還沒完成。請聯絡你的系統管理員。",
     "errors": {
       "invalidCredentials": "Email 或密碼錯誤，請再試一次。",
       "emailRegistered": "這個 Email 已經註冊過了，請直接登入。",
@@ -510,7 +512,9 @@
       "colWhen": "加入／邀請時間",
       "colStatus": "狀態",
       "statusActive": "使用中",
-      "statusPending": "還沒接受"
+      "statusPending": "還沒接受",
+      "inviteExpired": "已逾期 {date}",
+      "inviteValidUntil": "有效至 {date}"
     },
     "roles": {
       "owner": "擁有者",
