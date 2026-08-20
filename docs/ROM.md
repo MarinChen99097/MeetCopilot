@@ -37,3 +37,17 @@
 
 <!-- ROM_BELOW -->
 
+### 2026-08-20 07:05 | 部署順序約束：協定擴充時「server 先上、web 後上」，並在 server `ready:true` 後才動 web
+- **誰決定**: Fable（部署現場發現，未在任何既有 SOP 中）
+- **決策**: 本輪 web build 先 SUCCESS，但**刻意不先部署它**，等 server build 完成、部署、驗到 `ready:true` 之後才部署 web。並把這條寫進 `docs/DEPLOY.md` 成為日後同類改動的通則。
+- **脈絡與理由**: 本輪前後端有協定擴充（WS 握手新增 `channels` query param、音訊 frame 從 mono 8000 bytes 變 stereo 16000 bytes）。兩種部署順序**不對稱**：
+  - **web 先上（危險）**：新 web 在握手帶 `channels=2` 並送**交錯 stereo** PCM，但舊 server 不認得該 param → 走 fail-safe 當 mono 處理 → 交錯資料被當單聲道解讀 → **嚴重混疊噪音 ＋ 音訊時鐘跑兩倍快**（`chunker` 的 `consumedSamples` 會把 L/R 交替樣本全算成同一條時間軸）。而且**這是靜默失敗**：不會 throw、不會有 error log、frame 大小「正確」、音量表照跳，只有逐字稿變成垃圾。
+  - **server 先上（安全）**：新 server ＋ 舊 web ＝ 舊 web 不送該 param → 新 server 的 fail-safe 落 mono → 而它收到的**確實**是 mono 資料 → 完全正確。
+  Cloud Run 兩個 service 是獨立部署的，中間必然有一段兩版不一致的時間窗；順序決定那個窗是安全的還是壞的。
+- **考慮過的替代**:
+  - **兩個 build 好了就一起部署**——否決：`gcloud run` 是逐 service 的，不存在原子性；先跑完的那個必然先生效。
+  - **讓新 server 靠 frame 長度自動偵測 stereo**（不依賴 param）——否決：250ms mono 與 125ms stereo 的 byte 長度相同，**不具唯一性**，這在稍早的 server 調查中已列為不可行的協商機制。
+  - **在 web 端加版本協商握手**——否決：為了一次部署窗口引入常設複雜度，且 `channels` param 的 fail-safe 設計本來就已經讓「server 新 web 舊」安全，只需管住順序即可。
+- **影響**: `docs/DEPLOY.md` 版本節新增此警告（放在「目前版本」段內，與部署指令同屏可見）；`docs/WORKLOG.md` 同步。**通則**：任何「前端送出的資料格式改變、且 server 需靠新旗標才能正確解讀」的改動，一律 server 先上。判準不是「誰改得多」而是「哪一邊的舊版遇到新版資料會靜默誤解」。
+- **附帶記錄的部署陷阱**: `packages/shared/dist/` 在本機需重建才會被 server vitest 吃到（symlink 吃 dist 不吃 src），而 `tsconfig.json` 的 `composite: true` 會讓 incremental build **靜默跳過**——最終回歸 agent 實測發現「build 回 exit 0」不足以證明它真的重建，需刪 `dist/`＋`tsbuildinfo` 做 clean rebuild 才能確認（Cloud Build 走 Docker 從 source 建，不受影響）。
+
