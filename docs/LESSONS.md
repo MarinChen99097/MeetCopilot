@@ -153,3 +153,17 @@
   3. **除錯法**：不要用小 schema 逐特性測（會全綠），要拿**真實 schema 逐項剝除**（strip 一個 key 重打）＋**逐項加回**兩個方向夾擊。腳本樣板留在 scratchpad `schema-bisect{,2,3,4,5}.mts`。
   4. **上線守門**：任何 responseSchema 改動都要先用真 API 打一次四個呼叫點（`schema-accept.mts`），否則 400 只會在 prod 出現（unit test 用 stub client，永遠測不到）。
 - 影響檔案：`apps/server/src/generation/slide-gen.ts`（檔內已寫 `GRAMMAR BUDGET` 註解區塊，改 schema 前必讀）、`docs/research/API_FINDINGS.md`（可補一節）。
+
+## L23 Windows 上 vitest 會因磁碟機代號大小寫把同一檔求值兩次 → `instanceof` 判偽、prototype spy 靜默不觸發（2026-08-19，實踩）
+- 情境：stereo 雙聲道實作期間，agent 發現 `npm test` **約 50% 機率**倒在 `checklist.test.ts` 的 6 個 uncheck 冷卻測試上（`TypeError: emit is not a function`），`packages/crm` 也間歇噴 `to be an instance of I1ViolationError / LastOwnerError`。兩處看似無關，**根因同一個**。
+- 踩了什麼：Windows 上 vitest/vite 偶爾把**同一份檔案**以不同磁碟機代號大小寫解析（同一份 log 內同時出現 `c:\…` 與 `C:\…`），於是同一個模組被求值**兩次**，產生兩份互不相等的 class 物件與 prototype。後果有兩種面貌：
+  1. 測試檔 import 到的 class ≠ 產線 `new` 出來的 class → **`instanceof` 判偽**；
+  2. 測試在 A 份 prototype 上裝 spy，產線跑的是 B 份 → **spy 靜默不觸發**，斷言拿不到呼叫紀錄而失敗。
+  最惡劣的是它**間歇**——一半機率是綠的，極易被歸類成「flaky，重跑就好」而長期忽略，持續侵蝕對測試結果的信任。**這不是產線 bug**，產線碼從頭到尾正確。
+- 正確做法：
+  1. **需要攔截產線物件的方法或回呼時，一律從 live 實例取，不要從 import 進來的 prototype 取**。本次修法：`checklist.test.ts` 改成 attach 之後讀 `runtime.engine.signalsCb`；新測試用 `livePrototype()`／`finalCbOf()` helper 從實例反查。
+  2. **斷言錯誤類型改用不依賴模組身分的判別**（`err.name` 而非 `instanceof`）。嚴格度不可放寬——要驗到的類型仍要驗到，只是換一種判別方式。
+  3. **診斷法**：間歇失敗且訊息是「X is not a function」或「to be an instance of Y」時，先懷疑模組重複求值，而不是先懷疑產線邏輯。驗證方式是在 log 裡搜同一路徑的大小寫變體。
+  4. **連跑五次才算綠**：單次通過完全不能證明間歇問題已消除。本專案的 `npm test` 驗收自此以連跑計。
+  5. 反向風險要記著：本例的表現是「該過的測試失敗」（偽陽性，只消耗信任）。但同一根因**理論上也能讓該失敗的測試通過**（例如 spy 沒觸發卻只斷言「沒被呼叫」），那才是真正危險的方向——設計斷言時避免僅依賴「未被呼叫」。
+- 影響檔案：`apps/server/src/realtime/checklist.test.ts`、`apps/server/src/realtime/stereo-audio.test.ts`、`packages/crm/test/invites-repo.test.ts`、`docs/DIAGNOSIS.md`（環境陷阱可補一條）。

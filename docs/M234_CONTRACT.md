@@ -43,9 +43,14 @@ interface PptxExporter { export(deck, slides): Promise<Buffer>; }   // 借 v1 ex
 
 ### 介面（apps/server/src/realtime/ 與 asr/ analysis/）
 ```ts
+interface AsrFrameContext {          // 2026-08-19 雙聲道追加（hub 隨每個 frame 下傳）
+  tMs: number;                                                   // 這個 frame 起點在**本場共用音訊時鐘**上的位置
+  channels: 1 | 2;                                               // 這個 frame 的擷取模式（stereo 已在 hub 拆成兩條純 mono）
+}
 interface AsrProvider { // 借 v1；Gemini 分段轉寫；藏介面後（S2 未來可換 Google STT v2）
-  pushAudio(sessionId, pcm: Buffer): void;                       // 16k mono PCM binary frame 累積
-  onFinal(cb: (seg:{t;text}) => void): void;                    // final segment → 分析
+  pushAudio(sessionId, pcm: Buffer, ctx: AsrFrameContext): void;  // 16k mono PCM binary frame 累積（ctx 必填）
+  onFinal(cb: (seg:{t;text;channels?:1|2}) => void): void;       // final segment → 分析
+  flushPending?(): void;                                         // 選配：強制把緩衝殘料切段送轉寫
 }
 interface AnalysisEngine { // 借 v1；rolling window 增量分析 → 結構化訊號
   ingest(sessionId, seg): void;
@@ -59,7 +64,12 @@ interface PatchService { // 改造引擎+approval FSM（借 v1 patch-service）
   act(sessionId, suggestionId, action, presenterAuth, editedSlide?): void;  // 只 presenter；ACCEPT/EDIT→append 到 deck 尾端(I1)；FSM
 }
 ```
-- **WS server**（API_CONTRACT §6，型別用 protocol.ts）：三角色 capture/hud/present；音訊 binary frame；`suggestion_action`/`page_commit` 只接受 presenter 連線（server 驗 wsToken 身分，**攻擊者憑證測**）；`consent` 未同意不啟動分析；`session_state` 連線/重連同步；research `remainingQuota`。
+> **`AsrProvider` 的三個雙聲道擴充**（2026-08-19 雙聲道／共用音訊時鐘落地時加入；接縫仍凍結。**既有實作不改也仍符合本介面**——`realtime-authz.test.ts` 的 `fakeAsr()` 至今仍只有 `{pushAudio, onFinal}`（且 `pushAudio` 連參數都不收）且照樣通過，就是相容性的活證明）：
+> - **`pushAudio` 的第三參數 `ctx: AsrFrameContext`（必填）**——**音訊時鐘的所有權因此上移到 session 層**（`LiveSessionRuntime.advanceAudioClock`）。非這樣不可的理由：右聲道那條軌是**會議中途才 lazily 建立**的（mono 場次永遠不建），若讓每個 provider 各自從 0 起算取樣數，兩軌的 `AsrSegment.t` 會相差整個 mono 時段——分析的 90 秒滾動窗會把客戶那一路整批濾光，HUD 時間軸與 DB 的 `t` 也全錯位。**2026-08-19 /simplify 由選配改必填**：留一條「不給 ctx 就自己數樣本」的後路等於在型別上宣告時鐘有第二個擁有者（`Chunker.consumedSamples` 那份 fallback 在產線與整個測試套件都不可達，卻仍每 frame 累加），三個呼叫點（mono 一處、stereo 兩處）本來就無條件帶 ctx。實作端要忽略它仍然完全自由（參數少寫的函式依舊相容）。
+> - **`AsrSegment.channels?`（選配）**——這一段音訊**被擷取當下**的聲道模式快照（切段起點取），不是 final 抵達當下的模式。speaker 判定必須看它：轉寫是非同步的（deadline 20 秒）而 chunker 最多累積 4 秒，模式在段落飛行途中可能已經換過，讀「目前模式」會把客戶講的話貼成 `presenter` 並落庫。**維持選配**：測試與精簡替身會直接注入 `{t, text}` 兩欄位的 segment，缺席＝下游 fallback 到 `runtime.audioChannels`（＝「用目前模式」，mono 場次因此仍走 LLM 推斷，與現行同路）。
+> - **`flushPending?()`（選配）**——hub 在**聲道模式切換點**呼叫，強制把兩軌 chunker 裡屬於舊模式的殘料切出去，保證沒有任何一段音訊橫跨 mono／stereo 兩種語意（mono→stereo 時左軌壓著含客戶聲音的混音；stereo→mono 時右軌壓著客戶語音且之後不會再有資料推進來）。未實作＝維持「只有 4 秒硬切／靜音切」的原行為。
+
+- **WS server**（API_CONTRACT §6，型別用 protocol.ts）：三角色 capture/hud/present；音訊 binary frame；`suggestion_action`/`page_commit` 只接受 presenter 連線（server 驗 wsToken 身分，**攻擊者憑證測**）；`consent` 未同意不啟動分析；`session_state` 連線/重連同步；research `remainingQuota`。**握手閘**（`realtime/ws-handshake-gate.ts`，一次 `db.get`）：帳號停權 **＋ meeting 是否仍在進行**（org-scoped）；已 `completed`／本 org 查不到 → 送 `error{code:'meeting_ended'}` 後 close **1000**（前端 `describeWsClose` 的 `kind:'ended'`）。這一關是殭屍會議的根因防線——前端的終態判定只擋得住重連，`/hud`、`/present` 的憑證就在網址列，會議結束後按 F5 就是全新連線。
 - **I2**：只有 ACCEPT/EDIT 走 append；I3：HUD 內容只發給 hud 角色，`/present` 永不收 info_card/suggestion/transcript。
 - 前端 `/copilot`（PROMPT 4，擷取端）：getDisplayMedia 擷取 Meet 分頁→AudioWorklet 16k PCM→WS binary；zero-track 守衛、consent 閘、track ended 重連。`/hud`（PROMPT 5，第二裝置手機直式）：逐字稿流/資訊卡（trust 徽章）/批准佇列(A/S+倒數)/深查+配額/斷線重連。
 - **建立 session**：POST /api/meetings → {meeting, wsUrl, wsToken}（wsToken 短效、含 role 綁定）。

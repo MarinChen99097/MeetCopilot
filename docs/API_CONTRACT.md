@@ -92,10 +92,37 @@
 > `contact`：`objectionsRaised`／`painPoints`／`knownPriorities`／`hotButtons`（array，append）、`decisionPower`／`communicationStyle`（scalar，set）；
 > `deal`：`riskFlags`（array，append）、`nextStep`／`pain`（scalar，set）。
 
-## 6. WS 協定（`/ws?token=<wsToken>&meetingId=&role=`；role＝`capture`｜`hud`｜`present`）
+## 6. WS 協定（`/ws?token=<wsToken>&meetingId=&role=[&channels=1|2]`；role＝`capture`｜`hud`｜`present`）
 
-**傳輸**：音訊用 **binary frame**——**raw 16-bit little-endian PCM、16kHz、mono、無標頭**（直接丟 ArrayBuffer，~100–250ms/frame）；時間戳由 server 以到達時間標記（每場會議單一 capture 連線，勿多路混傳）。其餘 JSON text frame。`ping` 的回應＝`session_state`（協定無 pong）。`research_status.status`＝`'queued'|'running'|'done'|'failed'`（同 §3）。
+**傳輸**：音訊用 **binary frame**——**raw 16-bit little-endian PCM、16kHz、無標頭**（直接丟 ArrayBuffer，~100–250ms/frame）；時間戳由 server 的音訊取樣時鐘推導（每場會議單一 capture 連線，勿多路混傳）。其餘 JSON text frame。`ping` 的回應＝`session_state`（協定無 pong）。`research_status.status`＝`'queued'|'running'|'done'|'failed'`（同 §3）。
+
+> **音訊時鐘是 session 級、不是 provider 級**（2026-08-19）：`TranscriptSegment.t`／DB 的 `t`／分析 90 秒滾動窗／待講清單的 uncheck 冷卻，全部讀同一條時間軸（`LiveSessionRuntime.advanceAudioClock`，每個進站 frame 前進一次；stereo 的左右兩軌**共用同一份 frame 脈絡**故不會跑兩倍快）。右聲道那條 ASR 軌是會議中途才 lazily 建立的，接上的也是這同一條時間軸——它的第一段 `t` 是「本場已擷取多久」而非 0。
+
+**聲道協商（`channels`）**：握手 query param，值 `"1"` 或 `"2"`。**缺席、空值、或任何無法解析成 `"2"` 的值 → 一律視為 `1`（mono）**，且**永不因此拒絕連線**（向後相容：既有 client／`/sim` 的 `mp3-capture.ts` 不帶此參數，必須繼續運作）。
+
+| `channels` | frame 格式 | 250ms frame 大小 | 說話者來源 |
+|---|---|---|---|
+| `1`（預設） | mono，連續 Int16 LE | 4000 samples ＝ **8000 bytes** | 混音無分軌 → 下游 LLM 依內容/語氣推斷（可能 `unknown`） |
+| `2` | **交錯（interleaved）Int16 LE，左聲道在前** | 4000 sample-pair ＝ 8000 個 Int16 ＝ **16000 bytes** | **由聲道確定**：左＝麥克風＝報告者（`presenter`）／右＝分頁音訊＝對方（`client`），**跳過 LLM 推斷** |
+
+> `channels` 只描述音訊格式，**不是安全邊界**（不取自 wsToken，client 可竄改）：謊報只會讓自己那條連線的音訊被錯拆成垃圾，碰不到別的租戶，也不參與 I2 的 presenter 身分閘。
+> server 端在 `realtime/hub.ts` 的 `pushAudio` 就把交錯資料拆成**兩條純 mono 串流**再各自進 ASR——`Chunker`／`AsrProvider` 以下永遠只看得到 mono（音訊時鐘 `consumedSamples / (SAMPLE_RATE/1000)` 因此不會跑兩倍快）。frame 長度非 4 的倍數時，**尾端不完整的 sample-pair 丟棄且不跨 frame 累積**（保證每個 frame 都從左聲道起算，永不 L/R 對調）。
 **授權**：`suggestion_action`、`page_commit`、`checklist_action` 為 presenter 專屬——依 **wsToken 身分**授權（`userId === presenterUserId`，**純身分判定**），**與連線 role 無關**（role 僅係 server→client 的推播目標，非安全邊界；任何持 token 者本就可自稱任一 role）。會中副駕 cockpit 由 presenter 從 `hud` 連線批准（故 §6 送訊表標 `suggestion_action // hud`）。任何非 presenter 身分的憑證（含跨使用者／跨 org），無論用哪個 role，一律被拒（`forbidden_not_presenter`）；handshake 另擋 token/meeting 不符（`unauthorized`，close 4001）。patch-service 於寫 deck 前再驗一次 presenterAuth（縱深防禦）。
+
+**握手閘＋close code**（2026-08-19；`realtime/ws-handshake-gate.ts`，**一次 `db.get`** 同時判帳號與會議狀態）：
+
+| close code | 何時 | 前端 `describeWsClose` 的 kind | 前端該做的事 |
+|---|---|---|---|
+| `4000` | 缺 token/meetingId/role | `auth` | 終態，不重連 |
+| `4001` | token 無效／過期／與 meetingId 不符 | `auth` | 終態，不重連 |
+| `4003` | 帳號或 org 已停權；或狀態**查不出來**（fail-closed） | `auth` | 終態，不重連 |
+| `1000` | 會議已結束——**兩個發送點**：①`hub.endMeeting` 關掉還連著的 socket；②握手閘拒絕新連線（會議已 `completed`，或該 org 查不到這場） | `ended` | 終態，不重連、**清掉本地憑證**、顯示「這場會議已結束」 |
+| `1001` | server graceful shutdown | `retryable` | 退避重連 |
+| 其他（1006/1012…） | 掉線 | `retryable` | 退避重連 |
+
+> **為什麼握手必須查 `meetings.status`**：前端所有殭屍會議防護（終態判定、`retry()` 封鎖、不渲染重試鈕）都只擋得住**重連**；`/hud`、`/present` 的憑證就在網址列，會議結束後在那個分頁按一次 **F5** 就是一條全新連線，全部繞過 → `hub.ensureRuntime` 會替一場 `completed` 的會議重建 runtime＋ASR＋分析引擎。閘必須在 server。
+> **org-scoped，且不洩漏存在性**：meeting 子查詢一律 `WHERE id = ? AND org_id = ?`（orgId 取自**已驗證的 wsToken**）。「跨 org 的 meetingId」與「meetingId 根本不存在」在該查詢下都是 NULL，回應**逐位元相同**（同一個 `error{code:'meeting_ended'}` ＋同一個 close 1000），故不構成跨租戶的存在性探測側信道。
+> **不誤擋重連**：斷線寬限期（`DISCONNECT_GRACE_MS`＝5 分鐘）內 meeting 仍是 `'scheduled'`，照常放行；只有 `'completed'` 才拒（白名單反著寫＝未來新增中間狀態不必同步改閘）。
 
 ### Client → Server（JSON）
 ```ts
@@ -137,7 +164,7 @@
 1. **空/載入/錯誤三態**每頁必備；錯誤顯示 `{error}` 文案。
 2. **爬蟲/生圖 job**：queued→running→done/failed/refused 的進度呈現；生圖最長 ~80s 要有耐心 UI＋可離開再回來。
 3. **provenance 徽章**：每個爬蟲填的欄位帶「來源＋信心＋已驗證?」徽章；「確認」「細填」兩動作（§2 Provenance）。
-4. **HUD 即時流**：WS 斷線重連（`session_state` 恢復）、建議倒數（expiresAt）、A/S 快捷鍵、研究配額 `remainingQuota` 顯示。
+4. **HUD 即時流**：WS 斷線重連（`session_state` 恢復）、建議倒數（expiresAt）、A/S 快捷鍵、研究配額 `remainingQuota` 顯示。**終態不重連**（見 §6 close code 表）：`auth` 類不給重試鈕（同一組憑證再連幾次都一樣）；`ended` 類除了不重連，還要**清掉本地憑證**並顯示「這場會議已結束」而非「連線失敗」——/copilot 與 /hud 行為一致。例外：`/present` **有投影片在播時，會議結束只把狀態圓點轉紅、不跳覆蓋層**——那個分頁正被分享進 Meet，覆蓋層會讓**所有與會者**看到（I3 的精神）；只有在「沒有任何投影片可播」（本來就沒東西在分享）時才顯示終態說明。
 5. **/present 零 HUD**（I3）：此 surface 只渲染投影片＋頁碼；`deck_update` 靜默 append；絕不出現任何建議/逐字稿/卡片元素。
 6. **/copilot 擷取端**：zero-track 守衛（0 音軌 → 紅色指引重新分享並勾「分享分頁音訊」）、track ended 重試、consent 閘。
 7. **/train 語音**：連線中/AI 說話中/你說話中/被打斷 的視覺狀態；>15 分鐘自動續連（resumption）不可斷對話感。
