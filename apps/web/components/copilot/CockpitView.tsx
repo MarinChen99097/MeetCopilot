@@ -31,6 +31,8 @@ export function CockpitView() {
   const [resolved, setResolved] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  /** 會議已結束、正在導回首頁的過渡旗標（見 `onMeetingEnded`）。creds 已是 null，但**還不能**顯示建會表單。 */
+  const [ended, setEnded] = useState(false);
 
   useEffect(() => {
     const c = readMeetingCreds();
@@ -38,7 +40,21 @@ export function CockpitView() {
     setResolved(true);
   }, []);
 
-  const onCreds = useCallback((c: MeetingCreds) => setCreds(c), []);
+  const onCreds = useCallback((c: MeetingCreds) => {
+    setEnded(false);
+    setCreds(c);
+  }, []);
+
+  // 會議已在 server 端結束 → 清掉本檔擁有的 creds。**必要**：HudInner 那條 socket 的 `enabled: !!creds`
+  // 與 rail 的 phase 無關，只有這裡設 null 才會斷；順帶把交接面板收起來（那條 hudUrl 已失效）。
+  // `ended` 旗標：呼叫端清完 creds 後會 `router.push("/")`，但那個 navigation transition 不是同步的——
+  // 這中間 `!creds` 會讓下面渲染 SetupPanel，剛結束會議的人會看到、甚至能操作一個「建立新會議」表單。
+  // 立旗標讓那一段改成明確的過渡畫面。
+  const onMeetingEnded = useCallback(() => {
+    setEnded(true);
+    setCreds(null);
+    setHandoffOpen(false);
+  }, []);
 
   // Second-device HUD handoff: only exists once a session does (creds != null). buildHudUrl reads window,
   // so it is only ever called on the client after the mount effect populated creds.
@@ -58,6 +74,20 @@ export function CockpitView() {
 
   if (!resolved) return <main className="mc-desk mc-desk--setup" aria-busy="true" />;
 
+  // 剛結束會議、導航還沒完成：只顯示過渡狀態。**不可以**在這裡落到下面的建會表單。
+  if (ended) {
+    return (
+      <main className="mc-desk mc-desk--setup">
+        {/* 文案刻意只講「正在離開」——這個畫面也會由 end-failed 的「離開這場會議」帶出來，那條路上
+            「會議已結束」正是我們**不能**斷言的事（結果如何由 toast 說）。 */}
+        <div className="mc-hudm__note" role="status">
+          <span className="mc-hudm__spinner" aria-hidden="true" />
+          <p className="mc-hudm__notetitle">{t("meetingEndedReturning")}</p>
+        </div>
+      </main>
+    );
+  }
+
   // 還沒有 session：整頁讓給建會表單（三欄舞台在沒有 session 時沒有東西可放）。
   if (!creds) {
     return (
@@ -69,7 +99,15 @@ export function CockpitView() {
 
   return (
     <main className="mc-desk">
-      <CopilotInner embedded rootTag="section" variant="rail" creds={creds} onCreds={onCreds} onHandoff={openHandoff} />
+      <CopilotInner
+        embedded
+        rootTag="section"
+        variant="rail"
+        creds={creds}
+        onCreds={onCreds}
+        onHandoff={openHandoff}
+        onMeetingEnded={onMeetingEnded}
+      />
 
       <HudInner
         embedded

@@ -75,6 +75,18 @@
     background:#3a1414; border:1px solid var(--fail); color:#ffd9d9;
   }
   .warn-box b{color:#ff8a8a}
+  .verdict{
+    display:none; margin:12px 0 4px; padding:14px 16px; border-radius:10px;
+    border:1px solid var(--border); background:var(--card2);
+    font-size:19px; font-weight:700; line-height:1.45;
+  }
+  .verdict .vsub{
+    display:block; margin-top:7px; font-size:13.5px; font-weight:400;
+    line-height:1.65; opacity:.88;
+  }
+  .verdict.ok{background:#0f2a1d; border-color:var(--pass); color:#9ef0c4}
+  .verdict.silent{background:#2a220e; border-color:var(--warn); color:#ffe1a8}
+  .verdict.bad{background:#3a1414; border-color:var(--fail); color:#ffd9d9}
   .note{
     background:#122; border-left:4px solid var(--accent); padding:8px 12px;
     border-radius:6px; font-size:13px; margin:10px 0; color:#bcd;
@@ -184,6 +196,55 @@
       <span class="k">AudioContext@16kHz</span><span class="v" id="env-ctx">-</span>
       <span class="k">MediaRecorder mimeType</span><span class="v" id="env-recorder">-</span>
     </div>
+  </section>
+
+  <!-- 測試 D -->
+  <section class="card">
+    <h2><span class="tag-num">D</span> 系統音訊（原生 app 通話）<span class="chip pending">實驗性</span></h2>
+    <p class="small muted">
+      這一項<strong>不是</strong>主流程。主流程（測試 A）分享的是「會議分頁」，只收得到瀏覽器分頁裡的聲音；
+      而 <strong>LINE、Zoom 桌面版、Teams 桌面版、Discord</strong> 這類是<strong>原生程式、不是分頁</strong>，
+      在分享來源選擇器裡根本找不到它們。唯一可能的路是分享<strong>「整個螢幕」</strong>並勾<strong>「同時分享系統音訊」</strong>，
+      把整台電腦播出來的聲音一起收下來。這條路能不能走通<strong>因作業系統與瀏覽器版本而異</strong>——這個測試就是要把它測出來。
+    </p>
+
+    <h3>操作步驟（照做就好）</h3>
+    <ol>
+      <li>先讓 <strong>LINE（或你要測的那個 app）真的正在發出聲音</strong>——通話中、或播一段語音訊息都行。<strong>先讓它出聲，再按下面的按鈕。</strong></li>
+      <li>按「<strong>開始系統音訊測試</strong>」，在瀏覽器跳出的分享視窗選「<strong>整個螢幕 / Entire Screen</strong>」——<strong>不是</strong>「分頁」，也<strong>不是</strong>「視窗」。</li>
+      <li>勾選左下角「<strong>同時分享系統音訊 / Share system audio</strong>」，再按「分享」。接著的 <strong>10 秒</strong>內讓那個 app 持續有聲音，本頁會自動判定並顯示結論。</li>
+    </ol>
+    <div class="note">
+      <b>這一項只在 Windows／ChromeOS 預期會成功。</b>macOS 需要 Chrome 141 以上＋macOS 14.2 以上才有系統音訊；Firefox／Safari／行動瀏覽器一律沒有。
+      <strong>失敗也是有用的結果</strong>——那就代表「LINE 這條路在這台機器上走不通」，這正是我們要確認的事實，記下來即可。
+      <br>量測期間請讓<strong>本頁保持在前景、不要縮到最小</strong>（瀏覽器會凍結背景分頁的量測；若偵測到有切到背景，判定會附註提醒）。
+    </div>
+
+    <label for="d-app">測的是哪個 app（會寫進結果）</label>
+    <input type="text" id="d-app" value="LINE" placeholder="例：LINE / Zoom 桌面版 / Teams 桌面版 / Discord">
+
+    <div style="margin-top:10px">
+      <button id="btn-d-start">開始系統音訊測試</button>
+      <button id="btn-d-stop" class="sec">停止測試</button>
+      <button id="btn-d-play" class="sec" disabled>▶ 回放這段擷取音訊</button>
+    </div>
+    <div class="status" id="d-status">未開始。</div>
+
+    <div class="verdict" id="d-verdict"></div>
+    <div class="warn-box" id="d-surfwarn"></div>
+
+    <div class="env-grid">
+      <span class="k">你選到的 displaySurface</span><span class="v" id="d-surface">-</span>
+      <span class="k">音訊軌數量</span><span class="v" id="d-audiocount">-</span>
+      <span class="k">音訊軌設定</span><span class="v" id="d-audioset">-</span>
+      <span class="k">10 秒取樣結果</span><span class="v" id="d-sample">-</span>
+    </div>
+
+    <h3>即時音量表（要那個 app 真的在出聲才會動）</h3>
+    <canvas class="meter" id="d-meter" width="900" height="44"></canvas>
+    <div class="readout" id="d-readout">RMS - dB · Peak - dB</div>
+
+    <audio id="d-audio" controls></audio>
   </section>
 
   <!-- 結果摘要 -->
@@ -425,8 +486,8 @@
     else if(name === 'AbortError'){ friendly = '擷取被中止（AbortError）。'; }
     else { friendly = name + '：' + detail; }
     setStatus(which, '失敗：' + friendly);
-    logEvent((which === 'a' ? '測試A' : '測試B') + ' 失敗：' + name + ' ' + detail, which);
-    if(location.protocol === 'file:' && which === 'a'){
+    logEvent('測試' + String(which).toUpperCase() + ' 失敗：' + name + ' ' + detail, which);
+    if(location.protocol === 'file:' && (which === 'a' || which === 'd')){
       logEvent('提示：若在 file:// 被封鎖，改用靜態伺服器（例如 npx serve）後以 http://localhost 開啟本頁', 'a');
     }
   }
@@ -611,6 +672,351 @@
     logEvent('測試B：已停止', 'b');
   }
 
+  // ---------- 測試 D：系統音訊（整個螢幕 / 原生 app） ----------
+  // 為什麼要另外做一套取樣：光看音軌數量會有假陽性——0 軌固然是失敗，但拿到 1 軌也可能整段全靜音
+  // （沒勾「分享系統音訊」、或 app 當下沒出聲）。這裡跑 10 秒取樣視窗，用「峰值 + 超過靜音門檻的取樣佔比」
+  // 判定是不是真的有聲音進來，讓結論無可爭議。
+  var D_WINDOW_MS = 10000;        // 取樣視窗長度
+  var D_TICK_MS = 50;             // 取樣間隔（setInterval 而非 rAF：分頁被切到背景時 rAF 會整個停）
+  var D_SILENCE_DB = -50;         // 低於此視為靜音
+  var D_SUCCESS_PEAK_DB = -40;    // 峰值要高過此值
+  var D_SUCCESS_RATIO = 0.02;     // 且至少 2% 的取樣超過靜音門檻
+  function dbToLin(db){ return Math.pow(10, db / 20); }
+  var D_SILENCE_LIN = dbToLin(D_SILENCE_DB);
+  var D_SUCCESS_PEAK_LIN = dbToLin(D_SUCCESS_PEAK_DB);
+
+  var dStream = null, dAudioStream = null, dMeter = null, dSampler = null, dPending = 0;
+  var sysAudio = null;
+  // 取樣與錄音是兩條非同步線、幾乎同時在第 10 秒結束，誰後到不固定（setInterval 會漂移）。
+  // 各自只寫自己那半句，再由 dSyncStatus 合成，避免後到的倒數 tick 把判定文字蓋掉。
+  var dStatusParts = { verdict:'', rec:'' };
+  function dSyncStatus(){
+    var s = dStatusParts.verdict;
+    if(dStatusParts.rec){ s += (s ? ' ' : '') + dStatusParts.rec; }
+    if(s){ setStatus('d', s); }
+  }
+
+  function resetSysAudioResult(){
+    sysAudio = {
+      ran: false,
+      verdict: 'not_run',            // success | silent | fail | not_run
+      verdictLabel: '未執行',
+      appName: null,
+      displaySurface: null,
+      surfaceMismatch: null,         // true = 使用者選的不是「整個螢幕」
+      audioTrackCount: null,
+      audioSettings: null,
+      windowMs: D_WINDOW_MS,
+      silenceThresholdDb: D_SILENCE_DB,
+      peakDb: null,
+      peakLinear: null,
+      aboveThresholdRatio: null,
+      sampleCount: null,
+      pageHiddenDuringTest: null,
+      recordedBytes: null,
+      error: null
+    };
+  }
+  resetSysAudioResult();
+
+  function currentAppName(){
+    var el = $('d-app');
+    var v = el ? String(el.value || '').trim() : '';
+    return v || 'LINE';
+  }
+  function buildSysAudioResult(){
+    var out = {};
+    for(var k in sysAudio){
+      if(Object.prototype.hasOwnProperty.call(sysAudio, k)){ out[k] = sysAudio[k]; }
+    }
+    if(!out.appName){ out.appName = out.ran ? null : currentAppName(); }
+    return out;
+  }
+
+  function showVerdict(kind, title, sub){
+    var el = $('d-verdict');
+    if(!el){ return; }
+    el.className = 'verdict ' + kind;
+    el.innerHTML = esc(title) + '<span class="vsub">' + esc(sub) + '</span>';
+    el.style.display = 'block';
+  }
+  function hideVerdict(){
+    var el = $('d-verdict');
+    if(el){ el.style.display = 'none'; el.innerHTML = ''; el.className = 'verdict'; }
+  }
+  function showSurfaceWarn(html){
+    var w = $('d-surfwarn');
+    if(w){ w.innerHTML = html; w.style.display = 'block'; }
+  }
+  function hideSurfaceWarn(){
+    var w = $('d-surfwarn');
+    if(w){ w.style.display = 'none'; w.innerHTML = ''; }
+  }
+
+  // 獨立於音量表的取樣器：自己開一個 AudioContext + Analyser，用 setInterval 驅動。
+  function startDSampling(stream, done){
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC){ done({ error: '此瀏覽器無 AudioContext，無法量測音量' }); return null; }
+    var actx, src, an;
+    try{
+      actx = new AC();
+      src = actx.createMediaStreamSource(stream);
+      an = actx.createAnalyser();
+      an.fftSize = 2048;
+      src.connect(an);
+    }catch(e){
+      done({ error: '建立音量分析節點失敗：' + e });
+      return null;
+    }
+    var buf = new Float32Array(an.fftSize);
+    var peak = 0, samples = 0, loud = 0;
+    var hidden = (document.hidden === true);
+    var t0 = Date.now(), iv = 0, finished = false;
+    function onVis(){ if(document.hidden){ hidden = true; } }
+    document.addEventListener('visibilitychange', onVis);
+    function finish(aborted){
+      if(finished){ return; }
+      finished = true;
+      if(iv){ clearInterval(iv); iv = 0; }
+      document.removeEventListener('visibilitychange', onVis);
+      try{ src.disconnect(); }catch(e){}
+      try{ actx.close(); }catch(e){}
+      done({
+        aborted: !!aborted,
+        peakLinear: peak,
+        peakDb: peak > 0 ? 20 * log10(peak) : -Infinity,
+        samples: samples,
+        aboveThreshold: loud,
+        ratio: samples ? (loud / samples) : 0,
+        elapsedMs: Date.now() - t0,
+        pageHidden: hidden
+      });
+    }
+    iv = setInterval(function(){
+      an.getFloatTimeDomainData(buf);
+      var p = 0;
+      for(var i = 0; i < buf.length; i++){
+        var v = buf[i] < 0 ? -buf[i] : buf[i];
+        if(v > p){ p = v; }
+      }
+      samples++;
+      if(p > D_SILENCE_LIN){ loud++; }
+      if(p > peak){ peak = p; }
+      if(Date.now() - t0 >= D_WINDOW_MS){ finish(false); }
+    }, D_TICK_MS);
+    return { abort: function(){ finish(true); } };
+  }
+
+  function stopDTracks(reason){
+    if(dMeter){ dMeter.stop(); }
+    if(dAudioStream){ dAudioStream.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }
+    if(dStream){ dStream.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }
+    if(dStream || dAudioStream){ logEvent('測試D：已停止所有軌道（' + reason + '）', 'd'); }
+    dAudioStream = null;
+    dStream = null;
+  }
+  function dMaybeAutoStop(){
+    if(dPending > 0){ return; }
+    // 分享「整個螢幕」不關掉會一直錄，量完就自動收掉。
+    stopDTracks('量測與錄音都結束，自動停止分享');
+  }
+
+  function resetD(){
+    hideVerdict();
+    hideSurfaceWarn();
+    $('btn-d-play').disabled = true;
+    $('d-surface').textContent = '-';
+    $('d-audiocount').textContent = '-';
+    $('d-audioset').textContent = '-';
+    $('d-sample').textContent = '-';
+    if(dSampler){ try{ dSampler.abort(); }catch(e){} dSampler = null; }
+    dPending = 0;
+    dStatusParts = { verdict:'', rec:'' };
+    resetSysAudioResult();
+  }
+
+  function finishD(r, app){
+    if(!r || r.aborted){
+      logEvent('測試D：取樣中止（使用者停止或重測）', 'd');
+      return;
+    }
+    if(r.error){
+      sysAudio.verdict = 'fail';
+      sysAudio.verdictLabel = '量測失敗';
+      sysAudio.error = r.error;
+      $('d-sample').textContent = r.error;
+      showVerdict('bad', '✕ 無法量測音量', r.error + '。無法判定有沒有聲音，請改用桌面版 Chrome／Edge 再試。');
+      setStatus('d', '量測失敗：' + r.error);
+      logEvent('測試D：量測失敗 ' + r.error, 'd');
+      return;
+    }
+
+    sysAudio.peakLinear = r.peakLinear;
+    sysAudio.peakDb = isFinite(r.peakDb) ? Number(r.peakDb.toFixed(1)) : null;
+    sysAudio.aboveThresholdRatio = Number(r.ratio.toFixed(4));
+    sysAudio.sampleCount = r.samples;
+    sysAudio.pageHiddenDuringTest = r.pageHidden;
+
+    var pct = Math.round(r.ratio * 100);
+    $('d-sample').textContent = '峰值 ' + fmtDb(r.peakDb) + ' dBFS · 超過 ' + D_SILENCE_DB +
+      ' dB 的取樣 ' + pct + '%（' + r.aboveThreshold + '/' + r.samples + ' 次）';
+
+    var mismatch = sysAudio.displaySurface !== 'monitor';
+    sysAudio.surfaceMismatch = mismatch;
+    var mismatchNote = mismatch
+      ? ' ⚠ 但你這次選到的是「' + sysAudio.displaySurface + '」而不是「整個螢幕」，這一輪不能當作系統音訊的結論——請重選「整個螢幕」再測一次。'
+      : '';
+    var hiddenNote = r.pageHidden
+      ? ' ⚠ 量測期間本頁曾切到背景，數值可能被瀏覽器凍結，建議讓本頁保持在前景重測一次。'
+      : '';
+
+    var hasSound = (r.peakLinear >= D_SUCCESS_PEAK_LIN) && (r.ratio >= D_SUCCESS_RATIO);
+    if(hasSound){
+      sysAudio.verdict = 'success';
+      sysAudio.verdictLabel = mismatch ? '有聲音，但 surface 選錯' : '成功';
+      showVerdict(mismatch ? 'silent' : 'ok',
+        mismatch ? '△ 有收到聲音，但你選的不是「整個螢幕」' : '✓ 成功：抓得到系統音訊，' + app + ' 這條路可行',
+        '峰值 ' + fmtDb(r.peakDb) + ' dBFS，10 秒內有 ' + pct + '% 的取樣有聲音。' +
+        '請按「回放這段擷取音訊」親耳確認錄到的是不是 ' + app + ' 的聲音；聽起來對，這條路就成立。' +
+        mismatchNote + hiddenNote);
+      dStatusParts.verdict = '判定：' + sysAudio.verdictLabel + '（峰值 ' + fmtDb(r.peakDb) + ' dBFS）。' +
+        (mismatch ? '請重選「整個螢幕」再測一次。' : '');
+      dSyncStatus();
+      logEvent('測試D：判定 success，峰值 ' + fmtDb(r.peakDb) + ' dBFS，超門檻 ' + pct + '%', 'd');
+    } else {
+      sysAudio.verdict = 'silent';
+      sysAudio.verdictLabel = '靜音';
+      showVerdict('silent', '△ 拿到音軌，但整段幾乎沒有聲音',
+        '峰值只有 ' + fmtDb(r.peakDb) + ' dBFS（超門檻取樣 ' + pct + '%）。可能原因：' +
+        '(1) 分享時沒勾「同時分享系統音訊」；' +
+        '(2) ' + app + ' 當下沒真的出聲（通話靜音中、語音訊息已播完）；' +
+        '(3) 這個平台給了一條空音軌。請讓 ' + app + ' 確實持續出聲、並確認勾選框後重測一次。' +
+        mismatchNote + hiddenNote);
+      dStatusParts.verdict = '判定：靜音（峰值 ' + fmtDb(r.peakDb) + ' dBFS）。請看上方說明重測。';
+      dSyncStatus();
+      logEvent('測試D：判定 silent，峰值 ' + fmtDb(r.peakDb) + ' dBFS，超門檻 ' + pct + '%', 'd');
+    }
+  }
+
+  function startD(){
+    stopDTracks('重新開始測試 D');
+    resetD();
+    var app = currentAppName();
+    sysAudio.appName = app;
+    setStatus('d', '要求擷取權限中…（請選「整個螢幕」並勾「同時分享系統音訊」）');
+    logEvent('測試D：呼叫 getDisplayMedia（目標 app：' + app + '）', 'd');
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
+      sysAudio.ran = true;
+      sysAudio.verdict = 'fail';
+      sysAudio.verdictLabel = '失敗：無 getDisplayMedia';
+      sysAudio.error = 'no getDisplayMedia';
+      setStatus('d', '失敗：此瀏覽器沒有 getDisplayMedia（桌面版 Chrome／Edge 才有）。');
+      showVerdict('bad', '✕ 失敗：這個瀏覽器不支援畫面／系統音訊擷取', '請改用桌面版 Chrome 或 Edge 再測一次。');
+      return;
+    }
+    navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+    }).then(function(stream){
+      dStream = stream;
+      sysAudio.ran = true;
+      logEvent('測試D：已取得串流', 'd');
+
+      var vtracks = stream.getVideoTracks();
+      var surface = '(未提供)';
+      if(vtracks.length){
+        var vs = vtracks[0].getSettings ? vtracks[0].getSettings() : {};
+        surface = vs.displaySurface || '(未提供)';
+        for(var i = 0; i < vtracks.length; i++){ try{ vtracks[i].stop(); }catch(e){} }
+        logEvent('測試D：displaySurface=' + surface + '，已即時停用視訊軌（不錄畫面）', 'd');
+      }
+      sysAudio.displaySurface = surface;
+      $('d-surface').textContent = surface;
+      if(surface === 'browser'){
+        showSurfaceWarn('<b>⚠ 你選到的是「分頁」，不是「整個螢幕」。</b><br>' +
+          '分頁只收得到那個網頁的聲音，抓不到 LINE 這類原生程式。請按「停止測試」→ 重新開始 →' +
+          ' 在分享視窗改選<strong>「整個螢幕 / Entire Screen」</strong>。');
+      } else if(surface === 'window'){
+        showSurfaceWarn('<b>⚠ 你選到的是「視窗」，不是「整個螢幕」。</b><br>' +
+          '視窗音訊只有部分作業系統提供，而且不一定是你要測的那個 app 的聲音。' +
+          '要驗系統音訊請重選<strong>「整個螢幕 / Entire Screen」</strong>。');
+      }
+
+      var atracks = stream.getAudioTracks();
+      sysAudio.audioTrackCount = atracks.length;
+      $('d-audiocount').textContent = String(atracks.length);
+      if(atracks.length === 0){
+        sysAudio.verdict = 'fail';
+        sysAudio.verdictLabel = '失敗：0 音軌';
+        sysAudio.surfaceMismatch = (surface !== 'monitor');
+        showVerdict('bad', '✕ 失敗：這個平台／這次的選擇不給系統音訊',
+          '瀏覽器一條音訊軌都沒給。可能是：(1) 分享時沒勾「同時分享系統音訊」；(2) 選成了分頁或視窗；' +
+          '(3) 這個作業系統／瀏覽器版本根本不提供系統音訊（macOS 需 Chrome 141+ 且 macOS 14.2+）。' +
+          '請確認勾選框後重測一次；若已正確勾「整個螢幕 + 系統音訊」仍是 0 軌，就是這台機器走不通這條路，' + app + ' 只能改用其他方式收音。');
+        setStatus('d', '未取得任何音訊軌。');
+        logEvent('測試D：0 音軌 → fail', 'd');
+        stopDTracks('0 音軌，直接收掉分享');
+        return;
+      }
+      var as = atracks[0].getSettings ? atracks[0].getSettings() : {};
+      sysAudio.audioSettings = as;
+      renderAudioSettings('d', as);
+
+      for(var j = 0; j < atracks.length; j++){
+        atracks[j].addEventListener('ended', function(){
+          logEvent('測試D：音訊軌 ended（分享已停止）', 'd');
+        });
+      }
+
+      dAudioStream = new MediaStream(atracks);
+      if(dMeter){ dMeter.start(dAudioStream); }
+      setStatus('d', '擷取中，10 秒量測開始…（請確認 ' + app + ' 正在出聲）');
+      logEvent('測試D：開始 10 秒量測＋錄音', 'd');
+
+      dPending = 2;
+      dSampler = startDSampling(dAudioStream, function(r){
+        dSampler = null;
+        dPending--;
+        finishD(r, app);
+        dMaybeAutoStop();
+      });
+      if(!dSampler){ dPending--; }
+
+      recordAudio(dAudioStream, 10, function(sec){
+        setStatus('d', '量測中… 剩 ' + sec + ' 秒（請確認 ' + app + ' 正在出聲）');
+      }).then(function(blob){
+        $('d-audio').src = URL.createObjectURL(blob);
+        $('btn-d-play').disabled = false;
+        sysAudio.recordedBytes = blob.size;
+        dStatusParts.rec = '錄音完成（' + blob.size + ' bytes），可按「回放」聆聽。';
+        dSyncStatus();
+        logEvent('測試D：錄音完成 ' + blob.size + ' bytes', 'd');
+        dPending--;
+        dMaybeAutoStop();
+      }).catch(function(err){
+        sysAudio.error = String(err);
+        dStatusParts.rec = '（錄音失敗：' + err + '）';
+        dSyncStatus();
+        logEvent('測試D：錄音失敗 ' + err, 'd');
+        dPending--;
+        dMaybeAutoStop();
+      });
+    }).catch(function(err){
+      sysAudio.ran = true;
+      sysAudio.verdict = 'fail';
+      sysAudio.verdictLabel = '失敗：未取得串流';
+      sysAudio.error = ((err && err.name) || 'Error') + ': ' + ((err && err.message) || '');
+      handleGetError('d', err);
+      showVerdict('bad', '✕ 失敗：沒有取得畫面／音訊串流', sysAudio.error + '。若是你自己按取消，重按一次即可；否則代表此瀏覽器／情境不允許擷取。');
+    });
+  }
+  function stopD(){
+    if(dSampler){ try{ dSampler.abort(); }catch(e){} dSampler = null; }
+    dPending = 0;
+    stopDTracks('使用者按停止');
+    setStatus('d', '已停止測試 D（畫面分享已關閉）。');
+  }
+
   // ---------- 測試 C：環境檢查 ----------
   function guessBrowserOS(ua){
     var browser = '未知', os = '未知';
@@ -713,6 +1119,7 @@
       audioSettings: capture.audioSettings || null,
       ctxSampleRate: capture.ctxSampleRate || null,
       recorderMimes: capture.recorderMimes || [],
+      systemAudioTest: buildSysAudioResult(),
       checks: checks
     };
   }
@@ -743,6 +1150,23 @@
     }
     lines.push('AudioContext@16k 實際: ' + (capture.ctxSampleRate || '-'));
     lines.push('MediaRecorder 支援: ' + ((capture.recorderMimes || []).join(', ') || '-'));
+    lines.push('--- 測試D：系統音訊（整個螢幕／原生 app） ---');
+    var sa = buildSysAudioResult();
+    if(!sa.ran){
+      lines.push('未執行（預定測試對象: ' + (sa.appName || '-') + '）');
+    } else {
+      lines.push('測試對象 app: ' + (sa.appName || '-'));
+      lines.push('判定: ' + sa.verdict + '（' + sa.verdictLabel + '）');
+      lines.push('displaySurface: ' + (sa.displaySurface || '-') + (sa.surfaceMismatch ? '（⚠ 不是整個螢幕，此輪不算數）' : ''));
+      lines.push('音訊軌數量: ' + (sa.audioTrackCount != null ? sa.audioTrackCount : '-'));
+      lines.push('峰值: ' + (sa.peakDb != null ? (sa.peakDb + ' dBFS') : '-∞ / 無') +
+        ' · 超過 ' + sa.silenceThresholdDb + ' dB 的取樣: ' +
+        (sa.aboveThresholdRatio != null ? (Math.round(sa.aboveThresholdRatio * 100) + '%') : '-') +
+        '（' + (sa.sampleCount != null ? sa.sampleCount : '-') + ' 次取樣 / ' + sa.windowMs + 'ms）');
+      if(sa.recordedBytes != null){ lines.push('錄音: ' + sa.recordedBytes + ' bytes'); }
+      if(sa.pageHiddenDuringTest){ lines.push('注意: 量測期間本頁曾切到背景，數值可能失真'); }
+      if(sa.error){ lines.push('錯誤: ' + sa.error); }
+    }
     lines.push('--- JSON ---');
     lines.push(JSON.stringify(buildJSON(device, soft)));
     return lines.join('\n');
@@ -780,6 +1204,7 @@
     listMics();
     aMeter = createMeter($('a-meter'), $('a-readout'));
     bMeter = createMeter($('b-meter'), $('b-readout'));
+    dMeter = createMeter($('d-meter'), $('d-readout'));
 
     $('btn-a-start').addEventListener('click', startA);
     $('btn-a-stop').addEventListener('click', stopA);
@@ -787,6 +1212,9 @@
     $('btn-b-start').addEventListener('click', startB);
     $('btn-b-stop').addEventListener('click', stopB);
     $('btn-b-play').addEventListener('click', function(){ var au = $('b-audio'); if(au){ au.play(); } });
+    $('btn-d-start').addEventListener('click', startD);
+    $('btn-d-stop').addEventListener('click', stopD);
+    $('btn-d-play').addEventListener('click', function(){ var au = $('d-audio'); if(au){ au.play(); } });
     $('btn-copy').addEventListener('click', copyResults);
 
     if(location.protocol === 'file:'){

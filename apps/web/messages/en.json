@@ -144,6 +144,7 @@
     "connFailedTitle": "Connection lost",
     "connFailedDesc": "The live connection to the meeting was lost. Reconnect, or try again later.",
     "connRetry": "Reconnect",
+    "endedDesc": "The presenter ended this meeting, so the presentation connection was closed too.",
     "prevSlide": "Previous slide",
     "nextSlide": "Next slide",
     "fsEnter": "Fullscreen",
@@ -176,7 +177,7 @@
     "title": "MeetCopilot",
     "desc": "Start listening, capture the meeting tab audio, and stream it for live analysis.",
     "captureHeading": "MeetCopilot · Capture",
-    "captureLead": "Captures this Meet tab's audio (everyone, mixed) for the live copilot. This browser tab is never shared.",
+    "captureLead": "Captures both this Meet tab's audio (the other side) and your microphone (you) for the live copilot. This browser tab is never shared.",
     "capturePlatform": "Desktop Chrome / Edge only. Account B's Meet tab and this tab must be in the same browser profile.",
     "cockpitKicker": "LIVE COCKPIT",
     "cockpitLead": "Capture the meeting audio and read live suggestions — in one window.",
@@ -189,12 +190,13 @@
     "secondDeviceCopied": "Copied",
     "secondDeviceLinkLabel": "HUD link",
     "secondDeviceEmpty": "The HUD link will appear here once you start a session.",
-    "consentInline": "I have participants' consent to record and transcribe this meeting to generate live suggestions.",
+    "consentInline": "I have participants' consent to record and transcribe this meeting's audio — my own microphone and the other side's voices in the tab — to generate live suggestions.",
     "consentInlineHint": "Until this is checked, captured audio is never sent for analysis.",
     "tabAudioTitle": "Before sharing, be sure to tick “Share tab audio”",
     "tabAudioStep1": "Choose “Chrome Tab” and pick the Meet tab (not a whole screen or window).",
     "tabAudioStep2": "Be sure to tick “Share tab audio” at the bottom-left.",
     "tabAudioStep3": "Click “Share” to start capturing the tab's audio.",
+    "tabAudioNote": "The tab's audio (the other side) and your microphone (you) are captured as two separate tracks, so the transcript shows who said what.",
     "zeroTrackRetry": "Retry — and remember to tick “Share tab audio”",
     "startListening": "🎧 Start listening",
     "optionNone": "None",
@@ -207,6 +209,8 @@
     "objectiveDrafting": "AI is drafting…",
     "railLive": "LIVE",
     "railIdle": "Not started",
+    "railEnded": "Ended",
+    "railEndFailed": "End unconfirmed",
     "vuLabel": "Live input level",
     "stopListening": "■ Stop listening",
     "handoffToPhone": "Send prompts to my phone",
@@ -218,6 +222,7 @@
     "restartListening": "Start listening again",
     "connFailed": "Connection failed.",
     "connRetry": "Retry connection",
+    "connTerminalHint": "This connection can't be retried (the meeting has ended, or there's a credential/account problem). Go back to the home page to start a new meeting.",
     "factsTitle": "This meeting",
     "factLink": "Capture link",
     "factRoles": "Connected devices",
@@ -238,7 +243,19 @@
     "viewSwitchLabel": "Switch view",
     "viewDesktop": "Desktop",
     "viewPhone": "Phone",
-    "close": "Close"
+    "close": "Close",
+    "endMeeting": "End this meeting",
+    "endMeetingConfirmTitle": "End this meeting?",
+    "endMeetingConfirmBody": "The meeting will be marked as completed and every connected device (including the phone HUD) will be disconnected. This cannot be undone.",
+    "endMeetingConfirmYes": "End meeting",
+    "endMeetingConfirmNo": "Cancel",
+    "endMeetingDone": "This meeting has ended.",
+    "endMeetingFailed": "Couldn't end the meeting. Please try again.",
+    "endMeetingGone": "This meeting has already ended.",
+    "endMeetingUncertain": "We couldn't confirm whether this meeting ended (it may already have). Try ending it again, or just leave the meeting.",
+    "endMeetingRetryAction": "Try ending it again",
+    "endMeetingLeave": "Leave this meeting",
+    "meetingEndedReturning": "Taking you back to the home page…"
   },
   "hud": {
     "desc": "Live suggestions, research cards, and transcript; accept/skip and deep research.",
@@ -251,6 +268,8 @@
     "connFailedTitle": "Couldn't connect to the meeting HUD",
     "connFailed": "Connection failed.",
     "connRetry": "Retry connection",
+    "connTerminalHint": "This connection can't be retried (the meeting has ended, or there's a credential/account problem).",
+    "endedDesc": "The presenter ended this meeting, so the HUD connection was closed too. To follow a new meeting, get a fresh link from the desktop copilot.",
     "retry": "Retry",
     "relink": "Paste the link again",
     "toastApplied": "Added as slide {page}",
@@ -498,6 +517,24 @@
       "google": "Google sign-in failed. Use email & password or try again later.",
       "generic": "Something went wrong. Please try again.",
       "network": "Connection failed. Please try again later."
+    }
+  },
+  "ws": {
+    "endedTitle": "This meeting has ended",
+    "status": {
+      "idle": "Not connected",
+      "connecting": "Connecting…",
+      "open": "Connected",
+      "reconnecting": "Reconnecting…",
+      "failed": "Connection failed"
+    },
+    "close": {
+      "authToken": "This connection credential is invalid or has expired. Get a fresh link from the meeting.",
+      "authHandshake": "The connection parameters are invalid. Get a fresh link from the meeting.",
+      "authAccount": "This account can't connect right now (suspended, or its status couldn't be confirmed). Contact your administrator.",
+      "ended": "This meeting has ended, so the live connection was closed.",
+      "dropped": "The connection to the server was lost.",
+      "unreachable": "Can't reach the realtime server. Check your network, or try again later."
     }
   },
   "org": {

@@ -4,15 +4,18 @@
  *
  * Owns: committedIndex mirror (I1 guard reads this), consent gate, the per-session ASR + AnalysisEngine
  * instances, the approval queue (Suggestion + TTL timers), and the research quota counter.
+ * ASR is 1 track for a mono capture and 2 for a stereo one (`asr` = mono/left/presenter, `asrRight` =
+ * right/client, lazily attached on the first stereo frame — see `attachRightAsr`); `dispose()` resets BOTH.
  *
  * Cleanup (v1 gap: sessions grew monotonically): `dispose()` clears every timer/buffer so a hub that reclaims
  * a session on end / disconnect-timeout leaves nothing behind (bounded teardown, L13).
  */
-import type { SignalItem, Suggestion, WsRole } from "@meetcopilot/shared";
+import type { AudioChannels, SignalItem, Suggestion, WsRole } from "@meetcopilot/shared";
 import type { SessionRuntime } from "./copilot.js";
 import type { AsrProvider } from "../asr/asr-provider.js";
 import type { AnalysisEngine } from "../analysis/analysis-engine.js";
 import { WINDOW_MAX_AGE_MS } from "../analysis/gemini-analysis.js";
+import { samplesToMs } from "./chunker.js";
 
 export type SuggestionStatus = "suggested" | "applied" | "discarded";
 
@@ -26,7 +29,7 @@ export type SuggestionStatus = "suggested" | "applied" | "discarded";
  * 回報該項，那就是來自**新的**對話內容＝真的講到了，此時應該放行。
  *
  * ⚠️ **單位是「音訊時鐘毫秒」，不是牆鐘毫秒**（§7.5 v1.2 更正）：窗的年齡是用音訊取樣時鐘算的
- * （`chunker.ts` 的 `consumedSamples / (SAMPLE_RATE/1000)`，**只在 PCM frame 進來時前進**），兩個時鐘只在
+ * （本檔的 `advanceAudioClock`，**只在 PCM frame 進來時前進**），兩個時鐘只在
  * 音訊持續流動時等價。撤回同意／capture 斷線期間音訊時鐘凍結、牆鐘照走 → 牆鐘版會提早放行，
  * 而那段害它被誤判的逐字稿**還在窗裡** → 恢復後第一輪分析就把同一項再劃掉（打地鼠原樣復活）。
  * 因此冷卻一律拿 `audioClockMs()` 的高水位相減。
@@ -75,6 +78,10 @@ export class LiveSessionRuntime implements SessionRuntime {
   consent = false;
   /** Ephemeral-by-default (M5 §A): only persist transcript segments to DB when this is true. */
   readonly persistTranscript: boolean;
+  /**
+   * 主 ASR 軌。mono 場次＝唯一一軌（混音）；stereo 場次＝**左聲道＝麥克風＝報告者**。
+   * 語意在兩種模式下都是「這條軌收到的永遠是 mono PCM」（stereo 在 `hub.pushAudio` 就拆乾淨了）。
+   */
   readonly asr: AsrProvider;
   readonly engine: AnalysisEngine;
 
@@ -111,6 +118,35 @@ export class LiveSessionRuntime implements SessionRuntime {
    */
   private readonly recentlyUnchecked = new Map<string, number | null>();
 
+  /**
+   * 右聲道（＝分頁音訊＝對方＝`"client"`）的 ASR 軌。
+   *
+   * **只有 stereo 場次才存在**，而且是 hub 收到本場**第一個 stereo frame 時才 lazily 建立**（`attachRightAsr`）——
+   * runtime 可能由先連上的 hud/present 連線 materialize，那時還不知道 capture 端會用幾聲道，
+   * 所以聲道數不能當成建構參數。mono 場次此欄恆 `undefined`＝**不會平白多建一個 provider 實例**。
+   */
+  private rightAsr?: AsrProvider;
+
+  /**
+   * **本場共用音訊時鐘**：已消費的 mono-equivalent 取樣數（16kHz）。由 `hub.pushAudio` 每個 frame 前進一次
+   *（stereo 的一個 frame ＝一組 sample-pair ＝**前進一次**，不是兩次），兩軌共用。
+   *
+   * 為什麼時鐘要在 session 層而不是各自的 `Chunker`：右軌是**會議中途**（第一個 stereo frame）才建立的，
+   * 讓它自己從 0 起算的話，左軌早已跑了整個 mono 時段 → 兩軌的 `TranscriptSegment.t` 相差那麼多，
+   * 而 `gemini-analysis.ts` 的 `trimWindow` 是拿「窗內最新一段的 t」去濾 90 秒以上的舊段——
+   * 任何一個左軌段最後進窗就會把所有右軌段濾光（**單向清空客戶那一路**，而 objection/budget/competitor
+   * 幾乎只來自客戶）。HUD 時間軸、DB `t`、`audioClockMs()`→uncheck 冷卻也全部跟著錯。
+   *
+   * 只在有音訊真的進來時前進（consent 未同意／capture 斷線期間凍結）——這正是 §7.5 v1.2 要的音訊時鐘語意。
+   */
+  private audioSamples = 0;
+
+  /**
+   * 目前處於中斷的 ASR 軌集合（fix 3：`asr_unavailable` 告警去重從 provider 層提升到 **session 層**）。
+   * provider 的 `unavailableSignaled` 只做單一軌的邊緣偵測；「HUD 每次 outage 只看到一個 toast」由這裡保證。
+   */
+  private readonly asrOutages = new Set<AsrProvider>();
+
   private research: number;
   private readonly queue = new Map<string, QueuedSuggestion>();
   private disposed = false;
@@ -132,6 +168,113 @@ export class LiveSessionRuntime implements SessionRuntime {
 
   connectedRoles(): WsRole[] {
     return this.deps.rolesProvider();
+  }
+
+  // ── 雙聲道 ASR（API_CONTRACT §6 `channels=2`）──────────────────────────
+  /** 右聲道 ASR 軌（＝客戶）；mono 場次為 `undefined`。**存在與否**＝右軌要不要建（見 hub `ensureRightAsr`）。 */
+  get asrRight(): AsrProvider | undefined {
+    return this.rightAsr;
+  }
+
+  /**
+   * **本場目前存在的所有 ASR 軌**（mono＝1 條，stereo＝2 條）。
+   *
+   * 「對每一軌做 X」一律走這個 getter，不要在呼叫端寫兩行具名欄位——`dispose()`（每軌都要 reset，
+   * 漏一軌＝consent 撤回後客戶那路仍在轉寫＝隱私破口）與 hub 的 `applyChannelMode`（每軌都要在切換點
+   * 強制切段）本來是同一件事寫了兩種寫法。收成 getter 之後，「未來加軌時漏掉一個」在結構上就不可能發生。
+   */
+  get asrTracks(): AsrProvider[] {
+    return this.rightAsr ? [this.asr, this.rightAsr] : [this.asr];
+  }
+
+  /**
+   * **目前**進站音訊的聲道數，由 `hub.pushAudio` 每個 frame 透過 `noteChannelMode` 更新
+   * （預設 1；沒有音訊進來過就維持 1）。唯讀對外，寫入只有 `noteChannelMode` 一個入口。
+   *
+   * 為什麼是「每 frame 更新的鏡像」而不是「一旦 stereo 就永遠 stereo」的黏著旗標：capture 可以在同一場
+   * runtime 的生命週期內換模式——例如使用者第一次給了麥克風授權（stereo），斷線重連時改成拒絕，
+   * 前端就會退回 mono 重連到**同一場 meeting**（斷線寬限期內 runtime 不會被回收）。黏著旗標會讓那之後
+   * 的混音段全部被貼上 `presenter`，而它其實是雙方混在一起的音訊。**收成唯讀不改變這個語意。**
+   *
+   * 用途：speaker 判定的 **fallback**——正式路徑讀的是 `AsrSegment.channels`（**擷取當下**的模式快照），
+   * 只有段落沒帶快照時（測試／精簡替身直接注入的兩欄位 segment）才退回這個「目前模式」鏡像。
+   * 「模式有沒有變」則由 `noteChannelMode` 的回傳值回答，呼叫端不必自己比。
+   *
+   * 右軌從頭到尾不看它——右軌收到的資料**依定義**只可能來自右聲道，就算模式已切回 mono、
+   * 它把先前緩衝的音訊 flush 出來，那仍然是客戶的聲音。
+   */
+  get audioChannels(): AudioChannels {
+    return this.channelMode;
+  }
+  private channelMode: AudioChannels = 1;
+
+  /**
+   * 記下這個 frame 的聲道模式。回傳 `true` ＝**模式真的改變了**，呼叫端此時（且只有此時）要先把兩軌
+   * chunker 裡屬於舊模式的殘料強制切出去（見 hub `applyChannelMode`）。
+   * 判斷與賦值合成一次呼叫，免得呼叫端各自寫一份「先比再指派」而漏掉其中一半。
+   */
+  noteChannelMode(channels: AudioChannels): boolean {
+    if (this.channelMode === channels) return false;
+    this.channelMode = channels;
+    return true;
+  }
+
+  /**
+   * 掛上右聲道 ASR 軌（hub 在本場第一個 stereo frame 抵達時呼叫；重複呼叫由 hub 端先查 `asrRight` 擋掉）。
+   * 回傳 `false`＝runtime 已 dispose（consent 撤回／會議結束後的遲到 frame）→ 呼叫端**必須自己把這個
+   * provider 收掉**，絕不可讓它留在外面繼續轉寫（那正是隱私破口）。
+   */
+  attachRightAsr(asr: AsrProvider): boolean {
+    if (this.disposed) return false;
+    this.rightAsr = asr;
+    return true;
+  }
+
+  /**
+   * 取得**這個 frame 起點**在共用音訊時鐘上的位置（ms），並把時鐘前進 `samples` 個取樣。
+   * 一個 stereo frame 只呼叫一次（左右兩軌共用回傳值），否則時鐘會跑兩倍快。
+   */
+  advanceAudioClock(samples: number): number {
+    const tMs = samplesToMs(this.audioSamples);
+    this.audioSamples += samples;
+    return tMs;
+  }
+
+  /**
+   * 目前已擷取的音訊總長（ms）——本場唯一「讀而不動時鐘」的存取器（`advanceAudioClock(0)` 逐字等價，
+   * 但那個寫法讀起來像會有副作用）。**測試／診斷用**：產線路徑一律走 `advanceAudioClock`，hub 不呼叫它。
+   *
+   * **與 `audioClockMs()` 不同**：這是「送進 ASR 的音訊有多長」（擷取端高水位），
+   * `audioClockMs()` 是「分析滾動窗內最新一段的 t」（下游高水位，會落後一整段的長度）。
+   * 冷卻判定一律用後者（§7.5 v1.2 的單一真相）。
+   */
+  capturedAudioMs(): number {
+    return samplesToMs(this.audioSamples);
+  }
+
+  // ── ASR 中斷告警的 session 層去重（契約 C3）──────────────────────────────
+  /**
+   * 某一軌進入中斷。回傳 `true` ＝本場**從「全部健康」轉為「有軌壞掉」**，呼叫端此時（且只有此時）廣播
+   * `asr_unavailable`。第二軌隨後也壞掉 → 回 `false` → HUD 不會疊出第二個一模一樣的 toast。
+   */
+  noteAsrUnavailable(track: AsrProvider): boolean {
+    if (this.disposed) return false;
+    const wasHealthy = this.asrOutages.size === 0;
+    this.asrOutages.add(track);
+    return wasHealthy;
+  }
+
+  /**
+   * 某一軌恢復。**全部軌都恢復**後（集合空）下一次中斷才會再次告警——所以「壞→好→又壞」照樣看得到提示，
+   * 不會變成一場會議只告警一次就永遠靜音。
+   */
+  noteAsrRecovered(track: AsrProvider): void {
+    this.asrOutages.delete(track);
+  }
+
+  /** 目前有幾條軌在中斷（測試／診斷用；0＝本場 ASR 全部健康）。 */
+  asrOutageCount(): number {
+    return this.asrOutages.size;
   }
 
   remainingResearchQuota(): number {
@@ -236,8 +379,12 @@ export class LiveSessionRuntime implements SessionRuntime {
     this.queue.clear();
     // 023 §7.5：冷卻紀錄與其他 per-session 狀態同生命週期（hub.disposeSession → runtime.dispose）。
     this.recentlyUnchecked.clear();
+    // ASR 中斷集合同理（L13 bounded teardown）：不留下指向已 reset provider 的參照。
+    this.asrOutages.clear();
     // Drop any buffered audio in the ASR chunker (never transcribe post-teardown).
-    const asr = this.asr as { reset?: () => void };
-    if (typeof asr.reset === "function") asr.reset();
+    // ⚠️ **每一軌都要 reset**：漏掉右軌＝consent 撤回／會議結束後，客戶那一路的緩衝音訊仍會被送去轉寫
+    //（隱私破口）。走 `asrTracks`（單一走訪點）而不是寫兩行，避免未來加軌時又漏一個。
+    // `reset` 不在凍結的 `AsrProvider` 接縫上（精簡替身可以沒有它）→ 這裡刻意 duck-typed 呼叫。
+    for (const track of this.asrTracks) (track as { reset?: () => void }).reset?.();
   }
 }

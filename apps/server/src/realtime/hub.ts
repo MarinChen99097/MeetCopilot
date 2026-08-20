@@ -6,7 +6,8 @@
  *  - role-filtered broadcast (BroadcastSink) that ENFORCES I3: HUD content (transcript/signals/info_card/
  *    suggestion/suggestion_result/research_status) is only ever delivered to 'hud'; 'deck_update' only to
  *    'present'; 'session_state' to all,
- *  - the ASR→speaker→transcript→analysis→signals→retrieval wiring per session,
+ *  - the ASR→speaker→transcript→analysis→signals→retrieval wiring per session (1 ASR track for a mono
+ *    capture, 2 for a stereo one — `pushAudio` de-interleaves so speaker comes from the channel, not an LLM),
  *  - bounded per-session cleanup (v1 gap): dispose on meeting-end AND on a disconnect-idle timeout, so runtimes
  *    never accumulate. dispose() clears every timer/buffer (L13).
  *
@@ -16,11 +17,13 @@
 import type { WebSocket } from "ws";
 import type { CrmCore } from "@meetcopilot/crm";
 import type {
+  AudioChannels,
   ChecklistCoverSource,
   ChecklistItem,
   ServerMessage,
   SignalItem,
   TranscriptSegment,
+  TranscriptSpeaker,
   WsRole,
 } from "@meetcopilot/shared";
 import { CHECKLIST_PROMPT_MAX_PENDING, SLIDE_DWELL_COVER_MS, compareChecklistOrder, redactPii } from "@meetcopilot/shared";
@@ -31,16 +34,18 @@ import type { Meter } from "../ops/meter.js";
 import { GeminiAsrProvider } from "../asr/gemini-asr.js";
 import { RollingWindowAnalysisEngine } from "../analysis/gemini-analysis.js";
 import type { AnalysisResult } from "../analysis/analysis-engine.js";
-import type { AsrSegment } from "../asr/asr-provider.js";
+import type { AsrFrameContext, AsrProvider, AsrSegment } from "../asr/asr-provider.js";
 import { LiveSessionRuntime } from "./session-runtime.js";
 import { CrmCopilotOrchestrator } from "./orchestrator.js";
 import { LivePatchService } from "./patch-service.js";
 import { MeetingStore } from "./meeting-store.js";
 import { routeTranscriptSegment } from "./transcript-privacy.js";
+import { deinterleaveStereo } from "./stereo.js";
+import { pcmSampleCount } from "./chunker.js";
 import { runWithMetering } from "../ops/metering-context.js";
 import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { gatherChecklistContext, generateChecklist } from "../generation/checklist-gen.js";
-import type { BroadcastSink, BroadcastTarget, ConnMeta } from "./types.js";
+import { WS_CLOSE_MEETING_ENDED, type BroadcastSink, type BroadcastTarget, type ConnMeta } from "./types.js";
 
 /** Binding captured at meeting creation, consumed when the runtime is first materialized. */
 export interface MeetingBinding {
@@ -243,7 +248,8 @@ export class RealtimeHub implements BroadcastSink {
     const set = this.rooms.get(meetingId);
     if (set) {
       for (const conn of set) {
-        if (conn.ws.readyState === conn.ws.OPEN) conn.ws.close(1000, "meeting ended");
+        // close code 與握手閘（會議已結束時拒絕新連線）共用同一個常數——兩者對 client 是同一件事。
+        if (conn.ws.readyState === conn.ws.OPEN) conn.ws.close(WS_CLOSE_MEETING_ENDED, "meeting ended");
       }
       this.rooms.delete(meetingId);
     }
@@ -351,19 +357,7 @@ export class RealtimeHub implements BroadcastSink {
     runtime.deckLength = Math.max(deckLength, runtime.deckLength);
 
     // ASR final → speaker inference → transcript (hud/I3) + persist + analysis feed.
-    // 019 安全網：包進計費脈絡，未經 wrapper 的 raw 會中 AI 呼叫也會被補記（歸屬 orgId＋meetingId＋presenter）。
-    asr.onFinal((seg) => this.runMeteredForMeeting(runtime, () => void this.onAsrFinal(runtime, seg)));
-    // Genuine ASR outage (transcribe threw/exhausted — NOT blank audio) → notify the presenter's HUD once
-    // per outage so they know live transcription/analysis is degraded (contract C3; dedup lives in the
-    // provider, cleared on the next successful transcribe). I3: hud only, and the payload carries no
-    // transcript content.
-    asr.onUnavailable(() =>
-      this.broadcast(
-        runtime.meetingId,
-        { type: "error", code: "asr_unavailable", message: "語音辨識暫時中斷，系統會自動嘗試恢復" },
-        "hud",
-      ),
-    );
+    this.wireAsr(runtime, asr, "left");
     // Analysis threshold met → signals (hud/I3) + persist + orchestrator retrieval.
     // 023：第二參數帶 coveredItemIds（對話勾稽，零額外 LLM 呼叫）。
     engine.onSignals((items, result) =>
@@ -374,6 +368,81 @@ export class RealtimeHub implements BroadcastSink {
     // 023：把本場 pending 待講項目注入分析引擎（重連也會重注；沒有清單＝注入空陣列＝prompt 不變）。
     void this.refreshPendingChecklist(runtime);
     return runtime;
+  }
+
+  /**
+   * 把一條 ASR 軌接上本場的下游（final→逐字稿/分析、outage→HUD 告警）。**左右兩軌共用這一個接線點**，
+   * 這樣「加了一軌卻只接了一半」在結構上就不可能發生（右軌漏接 onUnavailable ＝ 客戶那路壞掉沒人知道）。
+   *
+   * `side` 決定 speaker：stereo 時聲道本身就是確定答案（左＝報告者、右＝客戶），不必再叫 LLM 猜
+   *（見 `onAsrFinal` 的 `channelSpeaker`）。
+   *  - **右軌**：恆 `"client"`。它只可能收到右聲道資料，模式就算切回 mono 也不改變這件事。
+   *  - **左軌**：看**這一段音訊被擷取當下**的聲道模式（`seg.channels`，由 chunker 在切段起點快照），
+   *    **不是** final 抵達當下的 `runtime.audioChannels`。
+   *
+   *    為什麼非這樣不可：轉寫是非同步的（deadline 20 秒），而 chunker 最多會累積 4 秒才切段。
+   *    真實可達路徑——第一次按「開始聆聽」時麥克風權限泡泡沒回應 → 前端 10 秒後降級 mono 送音訊 →
+   *    停止 → 再按一次並給了授權 → 送 stereo（runtime 因 5 分鐘寬限期＋hud socket 而不會消失）。
+   *    切換那一刻左軌 chunker 裡還壓著最多 4 秒的 **mono 混音（含客戶的聲音）**，它會在切換之後才 flush；
+   *    讀「目前模式」就會把客戶講的話貼成 `presenter` 並**落庫**。段落自帶模式快照才不會錯位，
+   *    hub 另外在切換點強制切段（`applyChannelMode`），保證沒有任何一段橫跨兩種語意。
+   *
+   *    fallback 到 `runtime.audioChannels`：產線路徑的段落一定帶快照（`AsrFrameContext` 已是必填），
+   *    這條只服務**直接注入 `{t, text}` 兩欄位 segment** 的呼叫端（測試與精簡 ASR 替身），語意＝「用目前模式」。
+   */
+  private wireAsr(runtime: LiveSessionRuntime, asr: GeminiAsrProvider, side: "left" | "right"): void {
+    // 019 安全網：包進計費脈絡，未經 wrapper 的 raw 會中 AI 呼叫也會被補記（歸屬 orgId＋meetingId＋presenter）。
+    asr.onFinal((seg) =>
+      this.runMeteredForMeeting(runtime, () => {
+        const captured = seg.channels ?? runtime.audioChannels;
+        const channelSpeaker: TranscriptSpeaker | undefined =
+          side === "right" ? "client" : captured === 2 ? "presenter" : undefined;
+        void this.onAsrFinal(runtime, seg, channelSpeaker);
+      }),
+    );
+    // Genuine ASR outage (transcribe threw/exhausted — NOT blank audio) → notify the presenter's HUD once
+    // per outage so they know live transcription/analysis is degraded (contract C3). I3: hud only, and the
+    // payload carries no transcript content.
+    //
+    // 去重在 **session 層**（`runtime.noteAsrUnavailable`），不是 provider 層：provider 的
+    // `unavailableSignaled` 是 instance 欄位，其「每次 outage 只告警一次」的語意建立在「provider 與
+    // SessionRuntime 1:1」的舊假設上。雙軌之後一場會議有兩個 provider＝兩份旗標，API 額度用盡時兩路
+    // 都會 throw、各 signal 一次 → HUD/copilot 的 toast（以遞增 id append、不比對 message）疊出兩個
+    // 一模一樣的錯誤提示，每次「恢復又壞掉」再重複一次。改成兩軌共用一個判定：
+    // 「全好 → 有壞」才廣播；某軌恢復就從集合移除，全部恢復後下一次中斷可以再次告警。
+    asr.onUnavailable(() => {
+      if (!runtime.noteAsrUnavailable(asr)) return;
+      this.broadcast(
+        runtime.meetingId,
+        { type: "error", code: "asr_unavailable", message: "語音辨識暫時中斷，系統會自動嘗試恢復" },
+        "hud",
+      );
+    });
+    asr.onAvailable(() => runtime.noteAsrRecovered(asr));
+  }
+
+  /**
+   * 取得（必要時建立）本場的右聲道 ASR 軌。**lazily 建立**是刻意的：`ensureRuntime` 可能由先連上的
+   * hud/present 連線觸發，那時 capture 端還沒到、聲道數未知；等到第一個 stereo frame 進來才是最早
+   * 能確定的時點。mono 場次因此永遠不會多出一個 provider 實例。
+   *
+   * **時鐘不會因為晚建而錯位**：段落起點來自 `runtime.advanceAudioClock`（session 層共用時鐘），
+   * 不是各 provider 自己的取樣計數。右軌建立時直接接上同一條時間軸，第一段的 `t` 就是「本場已擷取多久」，
+   * 不是 0——否則左右兩軌的 `t` 會差整個 mono 時段，分析滾動窗會把客戶那一路整批濾光。
+   *
+   * runtime 已 dispose（consent 撤回／會議結束後的遲到 frame）→ `attachRightAsr` 回 false，
+   * 這裡**立刻把剛建好的 provider reset 掉並回 undefined**，不讓它留在外面持有音訊。
+   */
+  private ensureRightAsr(runtime: LiveSessionRuntime): AsrProvider | undefined {
+    const existing = runtime.asrRight;
+    if (existing) return existing;
+    const right = new GeminiAsrProvider(this.config.gemini, runtime.meetingId);
+    this.wireAsr(runtime, right, "right");
+    if (!runtime.attachRightAsr(right)) {
+      right.reset();
+      return undefined;
+    }
+    return right;
   }
 
   /**
@@ -399,7 +468,15 @@ export class RealtimeHub implements BroadcastSink {
     );
   }
 
-  private async onAsrFinal(runtime: LiveSessionRuntime, seg: AsrSegment): Promise<void> {
+  /**
+   * @param channelSpeaker stereo 時由**聲道**給定的說話者（左＝presenter／右＝client）；mono 時 undefined
+   *        → 走既有的 LLM `inferSpeaker` 推斷。
+   */
+  private async onAsrFinal(
+    runtime: LiveSessionRuntime,
+    seg: AsrSegment,
+    channelSpeaker?: TranscriptSpeaker,
+  ): Promise<void> {
     // Consent gate (M5 §A): no analysis, no persistence, no LLM egress before consent — drop the segment.
     if (!runtime.consent) return;
     // ASR 記帳（ADMIN_CONTRACT §3.1）：每個成功轉寫的 final 逐字段記一筆 asr（chunk 計費，無 token）。
@@ -417,7 +494,14 @@ export class RealtimeHub implements BroadcastSink {
     // Redact PII before ANY LLM egress; speaker inference is an LLM call, so it sees redacted text too.
     const redactedText = redactPii(seg.text);
     // speakerLabel (§4.2) is optional; when absent the segment carries only the frozen speaker enum (back-compat).
-    const { speaker, speakerLabel } = await this.orchestrator.inferSpeaker(runtime.meetingId, redactedText);
+    // stereo（channels=2）：說話者由聲道**確定**（左＝麥克風＝報告者、右＝分頁音訊＝客戶）→ 跳過
+    // `inferSpeaker`。那是一次 metered gemini_text 呼叫（每個 final 段一次，量最大），在已有確定答案時
+    // 既多餘又可能給出與聲道矛盾的結論。speakerLabel 維持 undefined（聲道只證明「哪一方」，不證明「哪一位」）。
+    // ⚠️ `inferSpeaker` 本身**必須保留**：使用者拒絕麥克風授權時前端會退回 mono，那條路仍然靠它。
+    const inferred = channelSpeaker
+      ? { speaker: channelSpeaker, speakerLabel: undefined }
+      : await this.orchestrator.inferSpeaker(runtime.meetingId, redactedText);
+    const { speaker, speakerLabel } = inferred;
     // Re-check: consent may have been revoked during the async speaker inference above.
     if (!runtime.consent) return;
     const ts: TranscriptSegment = { id: randomUUID(), t: seg.t, speaker, speakerLabel, text: seg.text, final: true };
@@ -436,7 +520,11 @@ export class RealtimeHub implements BroadcastSink {
     // 未同意持久化 → 恆 undefined → evidence 留 NULL（HUD 仍看得到「已講」，只是沒有引文）。
     runtime.lastEvidenceText = route.persist?.text;
     if (route.contextSegment) this.orchestrator.onTranscript(runtime.meetingId, route.contextSegment);
-    if (route.analysisText != null) runtime.engine.ingest(runtime.meetingId, { ...seg, text: route.analysisText });
+    // 分析窗帶上說話者（stereo 由聲道確定、mono 由 LLM 推斷、推不出來＝unknown）→ 模型看得出哪句是
+    // 報告者、哪句是客戶（prompt 前綴在 gemini-analysis.ts 組）。unknown 不加前綴。
+    if (route.analysisText != null) {
+      runtime.engine.ingest(runtime.meetingId, { ...seg, text: route.analysisText }, speaker);
+    }
   }
 
   private onSignals(runtime: LiveSessionRuntime, items: SignalItem[], result?: AnalysisResult): void {
@@ -664,10 +752,71 @@ export class RealtimeHub implements BroadcastSink {
   }
 
   // ── audio ingest (capture role, consent-gated) ──────────────────────────
+  /**
+   * 一個 capture binary frame 進站（API_CONTRACT §6）。
+   *
+   * mono（`channels` 缺席／1／任何解析不出 2 的值）＝**行為與雙聲道功能加入前逐位元相同**：原 Buffer 直接
+   * 交給唯一那條 ASR 軌。stereo（`channels=2`）＝先在**這一層**把交錯資料拆成兩條純 mono buffer，
+   * 再分別餵給左右兩條 ASR 軌。
+   *
+   * 拆分必須在這裡做完（不是在 Chunker/ASR 裡）：下游的 `Chunker` 假設收到的**永遠是純 mono**，
+   * 而全系統唯一的音訊時鐘 `runtime.advanceAudioClock`（→ `TranscriptSegment.t` → HUD 時間軸／DB `t`／
+   * 分析 90 秒滾動窗／uncheck 冷卻）是按「一個 frame 前進一次」計的，交錯資料流進去會讓每個取樣對被
+   * 當成兩個取樣、時鐘跑兩倍快。詳見 `stereo.ts`。
+   *
+   * consent gate 在**拆分之前**：未同意時兩路都不推，也不會因此建出右軌（M5 §A）。
+   *
+   * **音訊時鐘**：每個 frame 由 `runtime.advanceAudioClock` 取起點並前進一次（stereo 的左右兩軌共用同一份
+   * 脈絡，時鐘不會跑兩倍快）。這是全場唯一一條時間軸，所以中途才建立的右軌也和左軌可比。
+   */
   pushAudio(meta: ConnMeta, pcm: Buffer): void {
     const runtime = this.sessions.get(meta.meetingId);
     if (!runtime || !runtime.consent) return; // consent gate: no analysis until granted
-    runtime.asr.pushAudio(meta.meetingId, pcm);
+    // `meta.channels` 已經是 `ws-server.ts` 握手時用 `parseAudioChannels` 解析過的結果（fail-safe：
+    // 只有字面 `"2"` 是 stereo），所以這裡**不再重寫一次那條規則**——只補「握手沒帶這個 param」的預設。
+    // 原本寫 `meta.channels === 2 ? 2 : 1` 等於把同一條 fail-safe 抄第三遍（前兩份是 shared 的
+    // `parseAudioChannels` 與 `pcm-worklet.js` 的鏡射），而 `??` 已經精確表達了「只補缺席」。
+    const channels: AudioChannels = meta.channels ?? 1;
+
+    if (channels !== 2) {
+      // mono：原 Buffer 原樣交給唯一那條軌（逐位元與雙聲道功能加入前相同）。
+      // 取樣數由 `pcmSampleCount` 決定（規則擁有者＝chunker，尾端奇數 byte 不成一個 sample）；
+      // 0 取樣的空 frame 不算「模式切換」——那只是一個沒有音訊的封包，不該把整場的模式改掉、
+      // 更不該害兩軌被強制切段。
+      const samples = pcmSampleCount(pcm);
+      if (samples > 0) this.applyChannelMode(runtime, 1);
+      runtime.asr.pushAudio(meta.meetingId, pcm, { tMs: runtime.advanceAudioClock(samples), channels: 1 });
+      return;
+    }
+    const { left, right } = deinterleaveStereo(pcm);
+    // 連一組完整 sample-pair 都湊不出來的碎片 → 兩路都不推（也不要為它建出右軌、更不算模式切換）。
+    if (left.byteLength === 0) return;
+    this.applyChannelMode(runtime, 2);
+    const rightAsr = this.ensureRightAsr(runtime);
+    // 左右兩軌**共用同一份 frame 脈絡**：同一個起點時間、同一個模式標記。
+    const ctx: AsrFrameContext = { tMs: runtime.advanceAudioClock(pcmSampleCount(left)), channels: 2 };
+    runtime.asr.pushAudio(meta.meetingId, left, ctx);
+    rightAsr?.pushAudio(meta.meetingId, right, ctx);
+  }
+
+  /**
+   * 更新「目前聲道模式」鏡像，並在**模式真的改變時**先把兩軌 chunker 內屬於舊模式的殘料切出去送轉寫。
+   *
+   * 為什麼一定要在切換點強制切段（而不是只靠 `AsrSegment.channels` 快照）：
+   *  - **mono→stereo**：左軌壓著最多 4 秒的 mono 混音（**含客戶的聲音**）。不切的話它會和切換後的
+   *    「只有麥克風」音訊黏成同一段，而整段只能掛一個 speaker——不論掛哪一個都有一半是錯的。
+   *  - **stereo→mono**（前端因麥克風被拒／裝置消失而降級重連，runtime 在 5 分鐘寬限期內不會被回收）：
+   *    右軌壓著最多 4 秒的**客戶語音**。之後不會再有任何右聲道資料推進來，那段殘料要嘛永遠卡著、
+   *    要嘛等到下一次切回 stereo 時被黏在幾分鐘後的新音訊前面（起點時間也整個錯位）——兩種都是丟失
+   *    客戶那一路的逐字稿。在這裡切出去，它以 `channels=2`／右軌語意結算，speaker 仍是正確的 `"client"`。
+   *
+   * 殘料不足 1 秒 → `Chunker.flushPending` 直接丟棄（那本來就短到不會單獨成段，見該處註解）。
+   * 走 `runtime.asrTracks`（＝「對每一軌做 X」的單一走訪點，與 `dispose()` 同一個）而不是寫兩行具名欄位：
+   * 未來加軌時漏掉一軌就不再可能。右軌進入 stereo 時多半還不存在（不在集合裡）或必為空，呼叫無副作用。
+   */
+  private applyChannelMode(runtime: LiveSessionRuntime, channels: AudioChannels): void {
+    if (!runtime.noteChannelMode(channels)) return; // 模式沒變 → 什麼都不做
+    for (const track of runtime.asrTracks) track.flushPending?.();
   }
 
   // ── broadcast (I3 role targeting) ───────────────────────────────────────

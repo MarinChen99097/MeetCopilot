@@ -22,26 +22,21 @@ import type { UsageKind } from "@meetcopilot/shared";
 import { RealtimeHub } from "./hub.js";
 import { createMeetingsRouter } from "./meetings-routes.js";
 import { issueToken } from "../auth/jwt.js";
+import { TEST_JWT_SECRET as SECRET, testConfig as baseConfig } from "./test-support.js";
 import type { AppConfig } from "../config.js";
 import type { GeminiClient } from "../gemini.js";
 import type { Meter, MeterResult } from "../ops/meter.js";
 
-const SECRET = "test-secret-value-not-a-placeholder-1234567890";
 const DRAFTED = "讓對方同意進入 POC 並排定時程";
 
+/**
+ * 與 realtime 共用設定的差異只有 gemini 那一包：`apiKey` 非空 → `isConfigured()` 為 true（本檔要走真的
+ * 生成路徑），`extractModel` 具名以便斷言計費事件記的 model。其餘欄位逐字沿用 `test-support.testConfig()`。
+ */
 function testConfig(): AppConfig {
-  return {
-    port: 0,
-    jwtSecret: SECRET,
-    dbPath: ":memory:",
-    researchAutoLimitPerMeeting: 5,
-    supplementAutoLimitPerMeeting: 8,
-    googleClientId: "",
-    platformAdminEmails: [],
-    adminOrigin: "",
+  return baseConfig({
     gemini: { apiKey: "k", textModel: "t", extractModel: "extract-model", embedModel: "m", liveModel: "l" },
-    openai: { apiKey: "", imageModel: "i", imageSize: "1x1", imageQuality: "low" },
-  };
+  });
 }
 
 /** 假 GeminiClient：只有 generateJsonMetered 有內容（metered client 走的是這條），並回報 token 用量。 */

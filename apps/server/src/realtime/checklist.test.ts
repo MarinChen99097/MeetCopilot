@@ -25,49 +25,15 @@ import { UNCHECK_COOLDOWN_MS } from "./session-runtime.js";
 import { createGeminiClient } from "../gemini.js";
 import { RollingWindowAnalysisEngine, WINDOW_MAX_AGE_MS } from "../analysis/gemini-analysis.js";
 import type { AnalysisResult } from "../analysis/analysis-engine.js";
-import type { AppConfig } from "../config.js";
+import {
+  TEST_JWT_SECRET as SECRET,
+  fakeSocket,
+  passingHandshakeRow,
+  testConfig,
+  tick as sleep,
+} from "./test-support.js";
 import type { ConnMeta } from "./types.js";
 import type { GeminiClient } from "../gemini.js";
-
-const SECRET = "test-secret-value-not-a-placeholder-1234567890";
-
-function testConfig(): AppConfig {
-  return {
-    port: 0,
-    jwtSecret: SECRET,
-    dbPath: ":memory:",
-    researchAutoLimitPerMeeting: 5,
-    supplementAutoLimitPerMeeting: 8,
-    googleClientId: "",
-    platformAdminEmails: [],
-    adminOrigin: "",
-    gemini: { apiKey: "", textModel: "t", extractModel: "e", embedModel: "m", liveModel: "l" },
-    openai: { apiKey: "", imageModel: "i", imageSize: "1x1", imageQuality: "low" },
-  };
-}
-
-/** 最小 WebSocket 替身：記下每一則送出的 JSON（用來驗 I3 的投遞面）。 */
-function fakeSocket() {
-  const sent: Array<Record<string, unknown>> = [];
-  const s = {
-    OPEN: 1 as const,
-    readyState: 1,
-    sent,
-    send(data: unknown): void {
-      try {
-        sent.push(JSON.parse(String(data)) as Record<string, unknown>);
-      } catch {
-        /* ignore non-JSON */
-      }
-    },
-    close(): void {
-      s.readyState = 3;
-    },
-  };
-  return s;
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function items(...rows: Partial<NewChecklistItem>[]): NewChecklistItem[] {
   return rows.map((r, idx) => ({
@@ -359,9 +325,17 @@ describe("翻頁勾稽 + I3 投遞面（契約 §7.2／§7.4／§10 第 6 項）
 // ── §7.5 手動 uncheck 的冷卻期（打地鼠修正）──────────────────────────────
 describe("手動 uncheck 冷卻期（契約 §7.5）", () => {
   /**
-   * 攔下 hub 註冊到分析引擎上的 `onSignals` 回呼，讓測試能「假裝模型這一輪回報了 coveredItemIds」——
+   * 取出 hub 註冊到本場分析引擎上的 `onSignals` 回呼，讓測試能「假裝模型這一輪回報了 coveredItemIds」——
    * 走的是**真的** hub.onSignals → coverChecklist(..., 'transcript') 路徑（不是繞過去直接呼 repo）。
-   * 必須在 hub.attach（→ ensureRuntime → new RollingWindowAnalysisEngine → engine.onSignals(cb)）之前裝。
+   *
+   * ⚠️ 2026-08-19 改為 **attach 後直接讀 live engine 的 `signalsCb`**，取代原本「attach 前先 spy
+   * `RollingWindowAnalysisEngine.prototype.onSignals`」的作法。原因：Windows 上 vitest/vite 偶爾會把同一個
+   * 檔案以不同的磁碟機代號大小寫（`c:/…` vs `C:/…`）當成兩個模組各求值一次 → 本檔 import 到的 class 物件
+   * 與 `hub.ts` 實際 new 出來的**不是同一個**，prototype spy 就靜默不觸發，`emit` 永遠是 undefined
+   *（實測全 repo `npm test` 約 50% 機率出現 `TypeError: emit is not a function`，本區塊 6 個測試同時倒；
+   * 同一根因也讓 `packages/crm` 的 `to be an instance of I1ViolationError` 間歇性失敗）。
+   * 從**實例**上取值不經過 class 物件，因此免疫。時序上安全：`ensureRuntime` 是先 `engine.onSignals(cb)`
+   * 才 `sessions.set(...)`，所以只要 `getRuntime` 拿得到 runtime，回呼必已註冊。
    */
   async function harness() {
     const core: CrmCore = await createCrmCore(":memory:");
@@ -372,25 +346,23 @@ describe("手動 uncheck 冷卻期（契約 §7.5）", () => {
     const meeting = await hub.store.create(org.id, { title: "M", presenterUserId: "pres" });
     hub.registerMeeting(meeting.id, { orgId: org.id, presenterUserId: "pres", deckId: "deck1" });
 
-    let emit: ((items: SignalItem[], result: AnalysisResult) => void) | undefined;
-    const realOnSignals = RollingWindowAnalysisEngine.prototype.onSignals;
-    const spy = vi
-      .spyOn(RollingWindowAnalysisEngine.prototype, "onSignals")
-      .mockImplementation(function (this: RollingWindowAnalysisEngine, cb) {
-        emit = cb;
-        realOnSignals.call(this, cb);
-      });
-
     const hud = fakeSocket();
     const meta: ConnMeta = { userId: "pres", orgId: org.id, meetingId: meeting.id, role: "hud", isPresenter: true };
     hub.attach(hud as unknown as WebSocket, meta);
     await sleep(20);
     const runtime = hub.getRuntime(meeting.id)!;
+    /** hub 掛在本場 engine 上的 signals 回呼（見上方 doc：從實例取，不從 class prototype spy）。 */
+    const emit = (): ((items: SignalItem[], result: AnalysisResult) => void) => {
+      const cb = (runtime.engine as { signalsCb?: (items: SignalItem[], result: AnalysisResult) => void }).signalsCb;
+      if (typeof cb !== "function") throw new Error("hub did not register onSignals on this meeting's engine");
+      return cb;
+    };
     const status = async (id: string) => (await core.checklist.list(org.id, meeting.id)).find((i) => i.id === id)!;
 
     /**
      * 推進**音訊時鐘**（§7.5 v1.2 的計時基準）：往真的 engine 餵一段逐字段，走的正是產線路徑
-     * （`hub.onAsrFinal` → `engine.ingest`），`seg.t` 就是 chunker 的取樣時鐘（`consumedSamples/16`）。
+     * （`hub.onAsrFinal` → `engine.ingest`），`seg.t` 就是本場共用的取樣時鐘
+     * （`LiveSessionRuntime.advanceAudioClock`，16 取樣＝1ms）。
      * gemini 未設定（apiKey 空）→ `maybeAnalyze` 直接 return，不會打任何 LLM。
      * **刻意不碰 `Date.now()`**：牆鐘與音訊時鐘的分離正是本節要測的東西。
      */
@@ -412,9 +384,8 @@ describe("手動 uncheck 冷卻期（契約 §7.5）", () => {
       /** 目前音訊時鐘高水位（單一真相＝分析引擎窗內最新的 t）。 */
       audioClock: () => runtime.audioClockMs(),
       /** 模型這一輪回報「這些 id 已被涵蓋」（signals 為空也會走勾稽路徑）。 */
-      emitCovered: (ids: string[]) => emit!([], { signals: [], coveredItemIds: ids }),
+      emitCovered: (ids: string[]) => emit()([], { signals: [], coveredItemIds: ids }),
       dispose: () => {
-        spy.mockRestore();
         hub.disposeAll();
         core.close();
       },
@@ -657,8 +628,12 @@ const presenterToken = mintWsToken(SECRET, { meetingId: "m1", orgId: "org1", use
 const attackerToken = mintWsToken(SECRET, { meetingId: "m1", orgId: "org1", userId: "attacker", presenterUserId: "pres" });
 const crossOrgToken = mintWsToken(SECRET, { meetingId: "m1", orgId: "org2", userId: "outsider", presenterUserId: "pres" });
 
+// 握手閘（ws-handshake-gate.ts）同一次查詢也讀 meeting status：row 少一欄，這裡每條連線都會在握手就被
+// 1000 關掉（會議查不到＝視同已結束），I2 身分閘根本跑不到——**測試全綠卻什麼都沒驗**。
+// 故 row 形狀由 `test-support.ts` 的 `passingHandshakeRow()` 單一擁有，且以閘自己的 `WsHandshakeRow`
+// 為回傳型別：閘多讀一欄時該函式直接編譯失敗，不會靜默把這一整組測試掏空。
 const activeCore = {
-  db: { get: async () => ({ org_status: "active", user_status: "active" }) },
+  db: { get: async () => passingHandshakeRow() },
 } as unknown as CrmCore;
 
 function makeFakeHub() {

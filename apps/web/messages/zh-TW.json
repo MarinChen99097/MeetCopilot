@@ -144,6 +144,7 @@
     "connFailedTitle": "連線中斷",
     "connFailedDesc": "與會議的即時連線已中斷。請重新連線，或稍後再試。",
     "connRetry": "重新連線",
+    "endedDesc": "報告者已結束這場會議，簡報連線也一併關閉了。",
     "prevSlide": "上一頁",
     "nextSlide": "下一頁",
     "fsEnter": "全螢幕",
@@ -176,7 +177,7 @@
     "title": "MeetCopilot",
     "desc": "開始聆聽並擷取會議分頁音訊、送出即時分析。",
     "captureHeading": "MeetCopilot · 擷取端",
-    "captureLead": "擷取這個 Meet 分頁的聲音（所有人混音）用於即時副駕。此瀏覽器分頁永不被分享。",
+    "captureLead": "同時擷取這個 Meet 分頁的聲音（對方）與你的麥克風（你自己），用於即時副駕。此瀏覽器分頁永不被分享。",
     "capturePlatform": "限桌面版 Chrome / Edge。帳號 B 的 Meet 分頁與本分頁需在同一瀏覽器 profile。",
     "cockpitKicker": "會中 · 現場",
     "cockpitLead": "一邊擷取會議聲音，一邊看即時建議與補充資料——同一個視窗。",
@@ -189,12 +190,13 @@
     "secondDeviceCopied": "已複製",
     "secondDeviceLinkLabel": "HUD 連結",
     "secondDeviceEmpty": "開始 session 後，這裡會出現 HUD 連結。",
-    "consentInline": "我已取得與會者同意錄音與轉錄，用於產生即時建議。",
+    "consentInline": "我已取得與會者同意，錄下並轉錄這場會議的聲音（含我自己的麥克風與分頁裡對方的發言），用於產生即時建議。",
     "consentInlineHint": "未勾選前，擷取到的聲音不會送出分析。",
     "tabAudioTitle": "分享前，務必勾選「分享分頁音訊」",
     "tabAudioStep1": "選「Chrome 分頁」，挑那個 Meet 分頁（不是整個螢幕或視窗）。",
     "tabAudioStep2": "務必勾選左下角「分享分頁音訊 / Share tab audio」。",
     "tabAudioStep3": "按「分享」開始擷取這個分頁的聲音。",
+    "tabAudioNote": "這個分頁播出來的聲音（對方）與你的麥克風（你自己）會分成兩軌分別收錄，逐字稿會標明每句話是誰講的。",
     "zeroTrackRetry": "重試，並記得勾「分享分頁音訊」",
     "startListening": "🎧 開始聆聽",
     "optionNone": "不指定",
@@ -207,6 +209,8 @@
     "objectiveDrafting": "AI 草擬中…",
     "railLive": "LIVE",
     "railIdle": "未開始",
+    "railEnded": "已結束",
+    "railEndFailed": "結束未確認",
     "vuLabel": "即時音量表",
     "stopListening": "■ 停止聆聽",
     "handoffToPhone": "把提示傳到手機",
@@ -218,6 +222,7 @@
     "restartListening": "重新開始聆聽",
     "connFailed": "連線失敗。",
     "connRetry": "重試連線",
+    "connTerminalHint": "這條連線無法重試（會議已結束，或憑證／帳號有問題）。請回首頁重新開始一場會議。",
     "factsTitle": "這場會議",
     "factLink": "收音連線",
     "factRoles": "已連裝置",
@@ -238,7 +243,19 @@
     "viewSwitchLabel": "切換檢視",
     "viewDesktop": "電腦版",
     "viewPhone": "手機版",
-    "close": "關閉"
+    "close": "關閉",
+    "endMeeting": "結束這場會議",
+    "endMeetingConfirmTitle": "結束這場會議？",
+    "endMeetingConfirmBody": "會議會標記為已結束，所有已連線的裝置（含手機端 HUD）都會斷線。這個動作無法復原。",
+    "endMeetingConfirmYes": "結束會議",
+    "endMeetingConfirmNo": "取消",
+    "endMeetingDone": "這場會議已結束。",
+    "endMeetingFailed": "結束會議失敗，請再試一次。",
+    "endMeetingGone": "這場會議已經結束了。",
+    "endMeetingUncertain": "沒能確認這場會議是否已結束（可能已經結束了）。請再試一次結束，或直接離開這場會議。",
+    "endMeetingRetryAction": "再試一次結束",
+    "endMeetingLeave": "離開這場會議",
+    "meetingEndedReturning": "正在帶你回首頁…"
   },
   "hud": {
     "desc": "即時建議、研究卡與逐字稿；接受/略過與深查。",
@@ -251,6 +268,8 @@
     "connFailedTitle": "無法連上會議 HUD",
     "connFailed": "連線失敗。",
     "connRetry": "重試連線",
+    "connTerminalHint": "這條連線無法重試（會議已結束，或憑證／帳號有問題）。",
+    "endedDesc": "報告者已結束這場會議，HUD 連線也一併關閉了。要看新的一場，請從電腦端重新取得連結。",
     "retry": "重試",
     "relink": "重新貼連結",
     "toastApplied": "已加入第 {page} 頁",
@@ -498,6 +517,24 @@
       "google": "Google 登入失敗，請改用 Email 密碼或稍後再試。",
       "generic": "操作失敗，請稍後再試。",
       "network": "連線失敗，請稍後再試。"
+    }
+  },
+  "ws": {
+    "endedTitle": "這場會議已結束",
+    "status": {
+      "idle": "未連線",
+      "connecting": "連線中…",
+      "open": "已連線",
+      "reconnecting": "重新連線中…",
+      "failed": "連線失敗"
+    },
+    "close": {
+      "authToken": "連線憑證無效或已過期，請重新從會議取得連結。",
+      "authHandshake": "連線參數不正確，請重新從會議取得連結。",
+      "authAccount": "帳號目前無法連線（已停權或帳號狀態確認失敗），請聯絡你的系統管理員。",
+      "ended": "這場會議已結束，即時連線已關閉。",
+      "dropped": "與伺服器的連線中斷。",
+      "unreachable": "無法連上即時伺服器，請確認網路或稍後再試。"
     }
   },
   "org": {

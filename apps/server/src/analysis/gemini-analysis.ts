@@ -9,7 +9,13 @@
  */
 import { randomUUID } from "node:crypto";
 import { Type } from "@google/genai";
-import { CHECKLIST_PROMPT_MAX_PENDING, SIGNAL_KINDS, type SignalItem, type SignalKind } from "@meetcopilot/shared";
+import {
+  CHECKLIST_PROMPT_MAX_PENDING,
+  SIGNAL_KINDS,
+  type SignalItem,
+  type SignalKind,
+  type TranscriptSpeaker,
+} from "@meetcopilot/shared";
 import type { GeminiClient } from "../gemini.js";
 import type { AnalysisEngine, AnalysisResult, PendingChecklistHint } from "./analysis-engine.js";
 import type { AsrSegment } from "../asr/asr-provider.js";
@@ -17,7 +23,28 @@ import type { Meter } from "../ops/meter.js";
 import { meteredGeminiClient } from "../ops/metered-gemini.js";
 import { clamp01, withDeadline } from "../realtime/util.js";
 
-const WINDOW_MAX_SEGMENTS = 10;
+/**
+ * 滾動窗攜進 prompt 的**逐字稿字元**預算（`sum(text.length)`，不含說話者前綴與換行）。
+ *
+ * **為什麼是字元不是段數**：段數上限的唯一職責就是「限制 prompt 大小」——牆上時長已經由
+ * `WINDOW_MAX_AGE_MS`（90s）管住了。而「一段」在兩種擷取模式下不是同一個量：雙聲道（API_CONTRACT §6
+ * `channels=2`）時**兩條 ASR 軌各自產生 final 段**，同一段會議時間的 `ingest` 頻率直接翻倍，段數上限一半
+ * 就被右軌吃掉。先前為了補償 stereo 把段數上限從 10 翻倍成 20，但常數不分模式 → **mono 場次的 prompt
+ * 逐字稿也跟著翻倍**（≤40 秒→≤80 秒），而 mono 正是麥克風被拒時的 fallback 路徑（`audio-capture.ts` 註記
+ * 「denial is common — so this path carries the WHOLE meeting」），等於整場付雙倍 token。
+ * 改成字元預算之後，這個上限直接約束「prompt 到底多大」，**mono 與 stereo 收斂到同一個成本**，
+ * 不必也不能把聲道數傳進 engine（`ensureRuntime` 建構本 engine 時右軌還不存在，是中途才 lazily 建的）。
+ *
+ * **300 怎麼來的**：基準線取**改動前的 mono 行為**＝10 段 × 段長上限 4 秒 ＝ 最多 40 秒逐字稿。
+ * 繁中口語約 4–5 字/秒 → 40 秒 ≈ 160–200 字（這已是天花板：靜音切段規則讓實際段落多半不到 4 秒），
+ * 中英夾雜時字元密度更高，取 300 作為預算 → mono 在最壓迫的情況下仍不比舊行為少看到東西，
+ * 而繁中場次實際上仍由 `WINDOW_MAX_AGE_MS` 主宰（90 秒 ≈ 360–450 字 > 300 時才由字元預算封頂）。
+ * 相對「20 段」版本（繁中 ≈ 400 字）是實打實的降幅，且不再隨聲道數浮動。
+ *
+ * 副作用（刻意）：短段落現在能多留幾段——舊制 10 段可能只涵蓋 10 秒，字元預算讓窗涵蓋的對話量穩定得多，
+ * 而成本上限不變。
+ */
+const WINDOW_MAX_CHARS = 300;
 /**
  * 滾動窗裡一段逐字稿最久能存活的時間。**export 是刻意的單一真相**：023 §7.5 的「手動 uncheck 冷卻期」
  * 長度必須等於這個值（那正是「害某項被誤判的那段逐字稿」最久能留在窗裡的時間），
@@ -62,10 +89,22 @@ export interface RawSignals {
   coveredItemIds?: unknown;
 }
 
-/** A minimal timed segment for the rolling window (speaker is inferred elsewhere; analysis is speaker-agnostic). */
+/**
+ * A minimal timed segment for the rolling window. `speaker` is decided upstream (stereo：由聲道確定；
+ * mono：LLM 推斷，可能 `unknown`），這裡只負責把它渲染成 prompt 前綴——**沒有/unknown 就不加前綴**。
+ */
 interface WindowSeg {
   t: number;
   text: string;
+  speaker?: TranscriptSpeaker;
+}
+
+/** 逐字稿在 prompt 裡的說話者前綴（繁中，與本檔其餘 prompt 同語言）。unknown／缺席 → 不加前綴。 */
+function windowLine(s: WindowSeg): string {
+  if (s.speaker === "presenter") return `報告者：${s.text}`;
+  if (s.speaker === "client") return `客戶：${s.text}`;
+  // unknown：**刻意輸出裸文字**而不是「未知：」——後者會讓模型以為「未知」是第三個在場角色。
+  return s.text;
 }
 
 /**
@@ -119,8 +158,8 @@ export class RollingWindowAnalysisEngine implements AnalysisEngine {
       .slice(0, CHECKLIST_PROMPT_MAX_PENDING);
   }
 
-  ingest(_sessionId: string, seg: AsrSegment): void {
-    this.window.push({ t: seg.t, text: seg.text });
+  ingest(_sessionId: string, seg: AsrSegment, speaker?: TranscriptSpeaker): void {
+    this.window.push({ t: seg.t, text: seg.text, speaker });
     this.trimWindow();
     void this.maybeAnalyze();
   }
@@ -134,9 +173,28 @@ export class RollingWindowAnalysisEngine implements AnalysisEngine {
     return this.window[this.window.length - 1]?.t;
   }
 
+  /**
+   * 兩道同時生效的上限：**年齡**（`WINDOW_MAX_AGE_MS`，管牆上時長）與**字元預算**
+   * （`WINDOW_MAX_CHARS`，管 prompt 大小）。
+   *
+   * 年齡用 `filter` 而不是「從舊端 break」：段落是兩條 ASR 軌非同步轉寫完才 `ingest` 的，抵達順序
+   * **不保證** `t` 單調（左軌一段 4 秒、右軌一段 1 秒，完成時間可以交錯）。基準 `latestT` 沿用
+   * 「最後進窗那一段的 t」，與 `latestWindowT()` 同一取法（單一真相）。
+   *
+   * 字元預算從**最新往回收**，收到超出預算就停；**最新一段永遠留著**（單段就算自己超標也不能讓窗變空，
+   * 否則那一輪分析等於瞎了）。
+   */
   private trimWindow(): void {
     const latestT = this.window[this.window.length - 1]?.t ?? 0;
-    this.window = this.window.slice(-WINDOW_MAX_SEGMENTS).filter((s) => latestT - s.t <= WINDOW_MAX_AGE_MS);
+    const fresh = this.window.filter((s) => latestT - s.t <= WINDOW_MAX_AGE_MS);
+    let chars = 0;
+    let start = fresh.length - 1; // 起始值＝只留最新一段（fresh 為空時是 -1，下面的 slice 會退化成空陣列）
+    for (let i = fresh.length - 1; i >= 0; i--) {
+      chars += fresh[i]!.text.length;
+      if (chars > WINDOW_MAX_CHARS) break;
+      start = i;
+    }
+    this.window = fresh.slice(Math.max(0, start));
   }
 
   private async maybeAnalyze(): Promise<void> {
@@ -176,7 +234,7 @@ export class RollingWindowAnalysisEngine implements AnalysisEngine {
   }
 
   private async runAnalysis(): Promise<AnalysisResult> {
-    const transcript = this.window.map((s) => s.text).join("\n");
+    const transcript = this.window.map(windowLine).join("\n");
     if (!transcript.trim()) return { signals: [] };
     try {
       const raw = await withDeadline(
@@ -190,7 +248,9 @@ export class RollingWindowAnalysisEngine implements AnalysisEngine {
             "topic_shift（討論話題明顯轉換，label 放新話題的簡短描述）。" +
             "沒有明確訊號就回空陣列，不要硬湊。" +
             this.checklistPromptSection(),
-          prompt: `最近逐字稿（時間先後）：\n${transcript}\n請輸出符合 schema 的 JSON。`,
+          prompt:
+            "最近逐字稿（時間先後；行首「報告者：」＝銷售方、「客戶：」＝對方，" +
+            `沒有標註的行代表當下無法確定說話者）：\n${transcript}\n請輸出符合 schema 的 JSON。`,
           schema: SIGNALS_SCHEMA,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           attempts: 2,

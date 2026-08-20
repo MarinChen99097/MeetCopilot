@@ -6,9 +6,12 @@
  *  (d) 找不到成員 → MemberNotFoundError。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { makeTestCore } from "../src/test-helpers.js";
+import { makeTestCore, rejectionName } from "../src/test-helpers.js";
 import type { CrmCore } from "../src/ports.js";
-import { LastOwnerError, MemberNotFoundError } from "../src/repos-invites.js";
+
+// 錯誤型別一律用 `rejectionName(...)` + `toBe("XxxError")` 斷言，不用 `rejects.toBeInstanceOf(...)`：
+// 後者在 Windows 上會因為 vitest 偶發的模組重複求值而隨機判偽（理由詳見 test-helpers.ts 的 rejectionName）。
+// 判別力不變——name 由各 error class 的 constructor 寫死且唯一。
 
 let core: CrmCore;
 
@@ -68,7 +71,7 @@ describe("last-owner guard", () => {
     const org = await core.orgs.create({ name: "Solo" });
     const owner = await seedUser("solo@x.com");
     await core.memberships.addMembership(org.id, owner.id, "owner");
-    await expect(core.members.updateRole(org.id, owner.id, "member")).rejects.toBeInstanceOf(LastOwnerError);
+    expect(await rejectionName(core.members.updateRole(org.id, owner.id, "member"))).toBe("LastOwnerError");
     // role unchanged after the refused demotion
     expect(await core.memberships.roleOf(org.id, owner.id)).toBe("owner");
   });
@@ -77,7 +80,7 @@ describe("last-owner guard", () => {
     const org = await core.orgs.create({ name: "Solo" });
     const owner = await seedUser("solo@x.com");
     await core.memberships.addMembership(org.id, owner.id, "owner");
-    await expect(core.members.remove(org.id, owner.id)).rejects.toBeInstanceOf(LastOwnerError);
+    expect(await rejectionName(core.members.remove(org.id, owner.id))).toBe("LastOwnerError");
     expect(await core.memberships.roleOf(org.id, owner.id)).toBe("owner");
   });
 
@@ -91,13 +94,13 @@ describe("last-owner guard", () => {
     await core.members.updateRole(org.id, o1.id, "member");
     expect(await core.memberships.roleOf(org.id, o1.id)).toBe("member");
     // o2 is now the only owner → removing it must be refused
-    await expect(core.members.remove(org.id, o2.id)).rejects.toBeInstanceOf(LastOwnerError);
+    expect(await rejectionName(core.members.remove(org.id, o2.id))).toBe("LastOwnerError");
   });
 
   it("throws MemberNotFoundError for an unknown member", async () => {
     const org = await core.orgs.create({ name: "Acme" });
-    await expect(core.members.updateRole(org.id, "ghost", "member")).rejects.toBeInstanceOf(MemberNotFoundError);
-    await expect(core.members.remove(org.id, "ghost")).rejects.toBeInstanceOf(MemberNotFoundError);
+    expect(await rejectionName(core.members.updateRole(org.id, "ghost", "member"))).toBe("MemberNotFoundError");
+    expect(await rejectionName(core.members.remove(org.id, "ghost"))).toBe("MemberNotFoundError");
   });
 });
 
@@ -121,6 +124,6 @@ describe("cross-org isolation (attacker assertions)", () => {
     expect(stillThere[0]?.acceptedAt).toBeUndefined();
 
     // orgB cannot mutate orgA's owner membership
-    await expect(core.members.remove(orgB.id, a.id)).rejects.toBeInstanceOf(MemberNotFoundError);
+    expect(await rejectionName(core.members.remove(orgB.id, a.id))).toBe("MemberNotFoundError");
   });
 });

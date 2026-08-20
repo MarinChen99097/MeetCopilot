@@ -5,7 +5,7 @@
  *
  * ⚠️ 不變量 I3（HUD 絕不外流）：本檔**只**渲染投影片 + 頁碼 + 一個極不顯眼的連線圓點。
  * 嚴禁 import 任何副駕元素（transcript / suggestion / info_card / signals / hud / copilot）。
- * 允許 import：SlideRenderer（純渲染）、lib/api（getDeck / API_BASE）、lib/ws（connect）、@meetcopilot/shared 型別、
+ * 允許 import：SlideRenderer（純渲染）、lib/api（getDeck / API_BASE）、lib/ws（connect／describeWsClose）、@meetcopilot/shared 型別、
  *   next-intl（useTranslations，僅文案）、@/i18n/navigation（Link，僅 locale-aware 導覽——非 HUD、且只在「無投影片可播」的終態顯示）。
  *   → 這份 import 清單即 I3 的機械保證；擴充前務必確認新增 import 不含 HUD 詞彙（transcript/suggestion/signals/copilot…）。
  *   2026-07-28 加入的全螢幕與滑鼠翻頁**只用瀏覽器原生 API**（requestFullscreen/exitFullscreen、onClick），
@@ -26,7 +26,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import type { ServerMessage, SlideSpec } from "@meetcopilot/shared";
 import { API_BASE, getDeck } from "@/lib/api";
-import { connect, type WsConnection } from "@/lib/ws";
+import { connect, describeWsClose, type WsCloseKind, type WsConnection } from "@/lib/ws";
 import { Link } from "@/i18n/navigation";
 import { SlideRenderer } from "@/components/slide/SlideRenderer";
 
@@ -62,11 +62,20 @@ function fsActive(): boolean {
 
 export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
   const t = useTranslations("present");
+  // 「這場會議已結束」是 /present、/hud、/copilot 三個 surface 同時會顯示的同一句話（cockpit ＋ 投影機
+  // 常常就在同一個房間），故收在共用的 `ws` namespace（`lib/ws.ts` 的 close-code 表也在那裡取文案）。
+  // **I3 的 import 白名單零新增**：`useTranslations` 早就是白名單成員（「next-intl，僅文案」），
+  // 這裡只是多開一個 namespace，沒有帶進任何副駕元素。
+  const tw = useTranslations("ws");
   const [slides, setSlides] = useState<SlideSpec[]>([]);
   const [index, setIndex] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [link, setLink] = useState<LinkState>("off");
+  // 為什麼失敗（只在 link === "failed" 有值）：`"retryable"`＝重連預算耗盡（給重試鈕）；
+  // `"ended"`／`"auth"`＝終態，**不給**重試鈕——再連一次只會被 server 用同一個 close code 拒掉
+  //（"ended" 是 `ws-handshake-gate.ts` 的 1000）。這是 UX 判斷，防線在 server 那道閘。
+  const [linkKind, setLinkKind] = useState<WsCloseKind>("retryable");
   const [reloadKey, setReloadKey] = useState(0); // 重試：bump 後重跑 deck 載入 effect。
   const [wsNonce, setWsNonce] = useState(0); // 連線重試：bump 後重跑 WS effect（重置重連預算）。
   const [hasOriginals, setHasOriginals] = useState(false); // deck 有原始頁（簽章 URL）→ 啟用週期性續簽。
@@ -310,6 +319,7 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       if (closed.current || retry.current !== null) return;
       if (attempts >= MAX_RECONNECT_ATTEMPTS) {
         // 自動重連預算耗盡 → 進終態「連線失敗」，等待面板給使用者「重新連線」按鈕（不無限靜默重連）。
+        setLinkKind("retryable");
         setLink("failed");
         return;
       }
@@ -335,9 +345,13 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
         onClose: (ev) => {
           if (closed.current || conn.current !== c) return;
           conn.current = null;
-          // 憑證無效 / 握手錯誤（4001/4000）＝重試也不會成功 → 立即終態，別耗盡重連預算。
-          const code = ev?.code ?? 1006;
-          if (code === 4001 || code === 4000) {
+          // close code 的判定吃 `lib/ws` 的**單一真相**（與 useRealtime 同一張表）。本檔曾自帶一份
+          // `4001 || 4000` 的複本，1000 落在可重連分支 → 報告者結束會議後這個分頁照樣自動重連
+          //（當時 server 握手也還沒查 meeting status，那條路因此真的重建了 runtime）。
+          // **永遠不要在這裡再抄一份表**——抄第二份正是那個 bug 的成因。
+          const { terminal, kind } = describeWsClose(ev?.code ?? 1006);
+          if (terminal) {
+            setLinkKind(kind);
             setLink("failed");
             return;
           }
@@ -364,11 +378,14 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
     };
   }, [meetingId, token, deckId, onMessage, wsNonce]);
 
-  // 連線重試（終態「連線失敗」後）：重置重連預算並重跑 WS effect。
+  // 連線重試（自動重連預算耗盡後）：重置重連預算並重跑 WS effect。
+  // **終態不重連**：會議已結束（1000）會被 server 的握手閘再拒一次；憑證／帳號問題（4000/4001/4003）
+  // 拿同一組憑證再連幾次都一樣。兩者都是保證失敗的動作，UI 在那兩種 kind 下不渲染這顆鈕，這裡是最後一道 UX 閘。
   const retryWs = useCallback(() => {
+    if (linkKind !== "retryable") return;
     setLink("connecting");
     setWsNonce((n) => n + 1);
-  }, []);
+  }, [linkKind]);
 
   // ── render：極簡舞台（僅投影片 + 頁碼 + 連線圓點）──────────
   // 載入中（deck 抓取進行中；已有 LOAD_TIMEOUT_MS 上限，不會無限轉）。
@@ -410,18 +427,28 @@ export function PresentStage({ deckId, meetingId, token }: PresentStageProps) {
       );
     }
     if (isLive) {
-      // 連線終態失敗：中性「連線中斷 + 重新連線」（I3：純連線狀態，無任何副駕元素）。
+      // 連線失敗：中性狀態畫面（I3：純連線狀態，無任何副駕元素）。三種 kind 給三種出口——
+      //  - "ended"：會議已在 server 端結束 → 只給「回到 App」。**不給重新連線**（握手閘會再拒一次）。
+      //  - "auth"：憑證／帳號問題 → 重連拿同一組憑證必再失敗，同樣只給出口。
+      //  - "retryable"：自動重連預算耗盡 → 這才是「重新連線」真的有用的唯一情況。
       if (link === "failed") {
+        const ended = linkKind === "ended";
         return (
           <main className="mc-stage3">
             <div className="mc-stage3__stage">
               <div className="mc-stage3__notice" role="alert">
-                <p className="mc-stage3__notice-title">{t("connFailedTitle")}</p>
-                <p className="mc-stage3__notice-desc">{t("connFailedDesc")}</p>
+                <p className="mc-stage3__notice-title">{ended ? tw("endedTitle") : t("connFailedTitle")}</p>
+                <p className="mc-stage3__notice-desc">{t(ended ? "endedDesc" : "connFailedDesc")}</p>
                 <div className="mc-stage3__notice-actions">
-                  <button type="button" className="mc-btn mc-btn--primary" onClick={retryWs}>
-                    {t("connRetry")}
-                  </button>
+                  {linkKind === "retryable" ? (
+                    <button type="button" className="mc-btn mc-btn--primary" onClick={retryWs}>
+                      {t("connRetry")}
+                    </button>
+                  ) : (
+                    <Link href="/" className="mc-btn mc-btn--primary">
+                      {t("backHome")}
+                    </Link>
+                  )}
                 </div>
               </div>
             </div>

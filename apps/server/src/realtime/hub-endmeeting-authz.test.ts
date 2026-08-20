@@ -13,44 +13,8 @@ import { createCrmCore } from "@meetcopilot/crm";
 import type { CrmCore } from "@meetcopilot/crm";
 import { RealtimeHub } from "./hub.js";
 import { createGeminiClient } from "../gemini.js";
-import type { AppConfig } from "../config.js";
+import { fakeSocket, testConfig, tick as flush } from "./test-support.js";
 import type { ConnMeta } from "./types.js";
-
-function testConfig(): AppConfig {
-  return {
-    port: 0,
-    jwtSecret: "test-secret-value-not-a-placeholder-1234567890",
-    dbPath: ":memory:",
-    researchAutoLimitPerMeeting: 5,
-    supplementAutoLimitPerMeeting: 8,
-    googleClientId: "",
-    platformAdminEmails: [],
-    adminOrigin: "",
-    gemini: { apiKey: "", textModel: "t", extractModel: "e", embedModel: "m", liveModel: "l" },
-    openai: { apiKey: "", imageModel: "i", imageSize: "1x1", imageQuality: "low" },
-  };
-}
-
-/** Minimal WebSocket stand-in exercising only what the hub touches (readyState / OPEN / send / close). */
-function fakeSocket() {
-  const s = {
-    OPEN: 1 as const,
-    readyState: 1,
-    closed: false,
-    closeCode: undefined as number | undefined,
-    send(_data: unknown): void {
-      /* swallow session_state frames */
-    },
-    close(code?: number): void {
-      s.closed = true;
-      s.closeCode = code;
-      s.readyState = 3;
-    },
-  };
-  return s;
-}
-
-const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("RealtimeHub.endMeeting cross-tenant authz (F1)", () => {
   it("an org-B caller cannot end/tear down org-A's live meeting", async () => {

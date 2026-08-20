@@ -1830,6 +1830,18 @@ kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-ra
 .mc-rail__fact { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; }
 .mc-rail__fact > span { color: var(--mc-text-2); }
 .mc-rail__fact > strong { font-weight: 500; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+/* 「這場會議已結束」——meeting-ended 那一瞬取代主按鈕區的靜態狀態行（不是 alert，不給框）。 */
+.mc-rail__ended { margin: 0; font-size: 13px; line-height: 1.5; color: var(--mc-text-2); }
+/* 破壞性動作區（結束這場會議）：刻意與上方拉開——`.mc-rail` 自帶 13px gap 再加 5px margin ＝ 與
+   `__facts` 相距 18px，並比照 `__facts` 用 `--mc-border` 起一條分隔線。按鈕吃共用的 `.mc-btn--ghost`
+   次級樣式，本區不另造色票。 */
+.mc-rail__danger {
+  display: flex;
+  flex-direction: column;
+  margin-top: 5px;
+  padding-top: 14px;
+  border-top: 1px solid var(--mc-border);
+}
 .mc-rail__platform { margin: auto 0 0; font-size: 11px; line-height: 1.55; color: var(--mc-text-muted); }
 .mc-rail__alert {
   display: flex;
@@ -1847,6 +1859,8 @@ kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-ra
 .mc-rail__tutorial { border: 1px solid var(--mc-border); border-radius: var(--mc-radius); background: var(--mc-card); padding: 9px 11px; }
 .mc-rail__tutorial > summary { cursor: pointer; font-size: 12.5px; font-weight: 600; }
 .mc-rail__tutorial ol { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; line-height: 1.5; color: var(--mc-text-2); }
+/* rail 版教學的補充說明：與同區的 ol 同字級／同色，只是不縮排（它是說明，不是第 4 步）。 */
+.mc-rail__tutorial .mc-tut3__note { margin: 8px 0 0; font-size: 12px; line-height: 1.5; }
 
 /* VU 表（22 根柱；顏色一律吃 token，雙主題自動正確） */
 .mc-vu3 {
@@ -1894,6 +1908,8 @@ kbd { background: var(--mc-field); border: 1px solid var(--mc-border); border-ra
 .mc-zero3.is-compact .mc-zero3__title { font-size: 14px; }
 .mc-tut3 { display: flex; flex-direction: column; gap: 8px; }
 .mc-tut3__steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; line-height: 1.55; }
+/* 步驟清單之後的補充說明（「錄不到自己的聲音」）——`.mc-tut3` 自帶 8px gap，故 margin 歸零。 */
+.mc-tut3__note { margin: 0; font-size: 13px; line-height: 1.55; color: var(--mc-text-2); }
 
 /* standalone 擷取端（/copilot 舊 wrapper） */
 .mc-cap3 { max-width: 720px; margin: 0 auto; padding: 28px 20px 56px; display: flex; flex-direction: column; gap: 18px; }
@@ -2088,7 +2104,9 @@ section.mc-hudm {
 .mc-hudm__page { margin-left: auto; font-size: 11px; color: var(--mc-text-muted); }
 .mc-hudm__banner { padding: 8px 10px; border-radius: var(--mc-r-sm); background: var(--mc-warn-soft); color: var(--mc-warn); font-size: 13px; font-weight: 600; text-align: center; }
 .mc-hudm__banner.is-fail { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; background: color-mix(in srgb, var(--mc-live) 12%, transparent); color: var(--mc-live); }
-.mc-hudm__banneracts { display: inline-flex; gap: 8px; }
+.mc-hudm__banneracts { display: inline-flex; gap: 8px; align-items: center; }
+/* 終態（會議已結束／憑證問題）時取代「重試」鈕的說明文字：同一列、但不是動作 → 卸掉粗體、降一級字。 */
+.mc-hudm__bannerhint { font-size: 12.5px; font-weight: 400; color: var(--mc-text-2); }
 .mc-hudm__next { margin: -4px 0 0; font-size: 13px; color: var(--mc-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-hudm__section { display: flex; flex-direction: column; gap: 9px; }
 .mc-hudm__section > .mc-tabs3 { padding: 0; }
@@ -2258,6 +2276,9 @@ section.mc-hudm {
 .mc-stage3__dot--open { background: #7fc49b; }
 .mc-stage3__dot--connecting { background: #d9a661; }
 .mc-stage3__dot--reconnecting { background: #e5716b; animation: mc-pulse 1.1s ease-in-out infinite; }
+/* 終態（會議已結束／憑證問題／重連預算耗盡）：不再重連 → 靜止的紅點，與 reconnecting 的脈動區分。
+   2026-08-19 前這個 modifier 不存在，`failed` 會靜默掉回中性灰底色；1000 判 terminal 後它變成常見狀態。 */
+.mc-stage3__dot--failed { background: #e5716b; }
 @media (hover: none) {
   .mc-stage3__controls { opacity: 0.55; }
 }

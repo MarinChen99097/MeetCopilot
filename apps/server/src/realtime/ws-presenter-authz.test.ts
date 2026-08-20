@@ -17,13 +17,15 @@ import { WS_PATH } from "@meetcopilot/shared";
 import type { CrmCore } from "@meetcopilot/crm";
 import { attachRealtimeWs } from "./ws-server.js";
 import { mintWsToken } from "./ws-token.js";
+import { TEST_JWT_SECRET as SECRET, passingHandshakeRow } from "./test-support.js";
 import type { RealtimeHub } from "./hub.js";
 
-const SECRET = "test-secret-value-not-a-placeholder-1234567890";
-
-// Account gate always passes (org & user active) — isolates the presenter-identity gate as the sole variable.
+// Handshake gate always passes (org & user active, meeting still live) — isolates the presenter-identity gate as
+// the sole variable. The row shape lives in test-support.ts (`passingHandshakeRow`), typed against the gate's own
+// `WsHandshakeRow`: when the gate reads one more column, that helper stops compiling instead of silently closing
+// every socket here at handshake with 1000 — which would leave these I2 tests green while asserting nothing.
 const activeCore = {
-  db: { get: async () => ({ org_status: "active", user_status: "active" }) },
+  db: { get: async () => passingHandshakeRow() },
 } as unknown as CrmCore;
 
 // Tokens (all validly signed; only the identity relationship varies).

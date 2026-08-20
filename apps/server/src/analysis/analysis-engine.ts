@@ -10,7 +10,7 @@
  * 相容性：`onSignals` 的第一參數（SignalItem[]）不變，第二參數為新增；`setPendingChecklist` 刻意設為
  * **optional**，讓既有/測試用的精簡 engine 實作無需改動即仍滿足本介面。
  */
-import type { SignalItem } from "@meetcopilot/shared";
+import type { SignalItem, TranscriptSpeaker } from "@meetcopilot/shared";
 import type { AsrSegment } from "../asr/asr-provider.js";
 
 /** 餵進分析 prompt 的 pending 待講項目最小形狀（契約 §7.1 逐字）。 */
@@ -28,11 +28,19 @@ export interface AnalysisResult {
 }
 
 export interface AnalysisEngine {
-  /** Feed a finalized segment into the session's rolling window. */
-  ingest(sessionId: string, seg: AsrSegment): void;
+  /**
+   * Feed a finalized segment into the session's rolling window.
+   *
+   * `speaker`（選填）＝該段的說話者：stereo 擷取（API_CONTRACT §6 `channels=2`）時由**聲道**確定
+   *（左＝presenter、右＝client）、mono 時由 LLM 推斷（可能 `unknown`）。實作端據此在 prompt 行首加
+   * 說話者前綴，讓模型分得出哪句是報告者、哪句是客戶。
+   * **刻意 optional**（參數與實作皆是）：既有/測試用的兩參數精簡 engine 無需改動即仍滿足本介面。
+   */
+  ingest(sessionId: string, seg: AsrSegment, speaker?: TranscriptSpeaker): void;
   /**
    * 023 §7.5（v1.2）：**唯讀**存取器——回傳「目前滾動窗內最新一段的 `t`」，即本場**音訊取樣時鐘**的高水位
-   * （ms；來源＝`realtime/chunker.ts` 的 `consumedSamples / (SAMPLE_RATE/1000)`，**只在 PCM frame 進來時前進**）。
+   * （ms；來源＝`realtime/session-runtime.ts` 的 `LiveSessionRuntime.advanceAudioClock`，
+   * **只在 PCM frame 進來時前進**）。
    *
    * 為什麼需要它：滾動窗的年齡是用這個時鐘算的（`latestT - s.t <= WINDOW_MAX_AGE_MS`），所以任何要「對齊窗輪替」
    * 的冷卻計時**必須同域**。撤回同意／capture 斷線期間音訊時鐘凍結，牆鐘卻繼續走——用 `Date.now()` 會提早放行，

@@ -1,6 +1,11 @@
 /**
  * M3 realtime WebSocket server (API_CONTRACT §6). One ws.Server per process at WS_PATH; connections are
- * `/ws?token=<wsToken>&meetingId=&role=` (role = capture|hud|present).
+ * `/ws?token=<wsToken>&meetingId=&role=[&channels=1|2]` (role = capture|hud|present).
+ *
+ * `channels` is the audio-format negotiation only (1 = mono mix, 2 = interleaved L/R = presenter/client);
+ * it is NOT part of the trust boundary below — see `ConnMeta.channels` / shared's `parseAudioChannels`
+ * (absent ⇒ mono). Close codes and the `channels` rule are shared wire constants (@meetcopilot/shared),
+ * so the web client's `describeWsClose` / URL builder read the exact same values.
  *
  * Auth & trust boundary (I2):
  *  - The wsToken is verified server-side (signature/exp/typ + meetingId match). Identity (userId/orgId) and the
@@ -11,16 +16,27 @@
  *    valid-but-non-presenter token, or a normal app JWT replayed as a wsToken, or any forged token, is rejected
  *    — an attacker cannot commit pages or approve slides. The per-message gate here plus patch-service's
  *    presenterAuth re-check apply defense in depth.
+ *  - Handshake gate (`ws-handshake-gate.ts`, ONE db.get): account suspension **and** meeting liveness. A meeting
+ *    that is already `completed` — or that this token's org cannot see at all — is refused before hub.attach, so
+ *    an F5 on a `/hud` / `/present` tab (creds live in the URL) can never resurrect a finished meeting's runtime.
  *
  * I3: audio frames are only meaningful from 'capture'; all HUD-bound content is routed by the hub to 'hud' only.
  */
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import type { Server } from "node:http";
 import type { ClientMessage, SlideSpec } from "@meetcopilot/shared";
-import { WS_PATH } from "@meetcopilot/shared";
+import {
+  WS_CLOSE_ACCOUNT_BLOCKED,
+  WS_CLOSE_BAD_HANDSHAKE,
+  WS_CLOSE_MEETING_ENDED,
+  WS_CLOSE_UNAUTHORIZED,
+  WS_PARAM_CHANNELS,
+  WS_PATH,
+  parseAudioChannels,
+} from "@meetcopilot/shared";
 import type { CrmCore } from "@meetcopilot/crm";
 import { verifyWsToken } from "./ws-token.js";
-import { isAccountActive } from "../auth/active-account.js";
+import { checkWsHandshake } from "./ws-handshake-gate.js";
 import type { RealtimeHub } from "./hub.js";
 import type { ConnMeta } from "./types.js";
 
@@ -68,10 +84,13 @@ export function attachRealtimeWs(server: Server, hub: RealtimeHub, jwtSecret: st
     const token = query.get("token");
     const meetingId = query.get("meetingId");
     const role = parseRole(query.get("role"));
+    // 音訊格式協商（非安全邊界，故與 token 驗證分開、也不參與下面的 bad_handshake 判定）。
+    // param 名與 fail-safe 判定都在 shared，與 web 組 URL 處吃同一份（見 `parseAudioChannels`）。
+    const channels = parseAudioChannels(query.get(WS_PARAM_CHANNELS));
 
     if (!token || !meetingId || !role) {
       ws.send(JSON.stringify({ type: "error", code: "bad_handshake", message: "token, meetingId, role required" }));
-      ws.close(4000, "bad handshake");
+      ws.close(WS_CLOSE_BAD_HANDSHAKE, "bad handshake");
       return;
     }
 
@@ -80,12 +99,12 @@ export function attachRealtimeWs(server: Server, hub: RealtimeHub, jwtSecret: st
       claims = verifyWsToken(jwtSecret, token);
     } catch {
       ws.send(JSON.stringify({ type: "error", code: "unauthorized", message: "invalid ws token" }));
-      ws.close(4001, "unauthorized");
+      ws.close(WS_CLOSE_UNAUTHORIZED, "unauthorized");
       return;
     }
     if (claims.meetingId !== meetingId) {
       ws.send(JSON.stringify({ type: "error", code: "unauthorized", message: "token/meeting mismatch" }));
-      ws.close(4001, "unauthorized");
+      ws.close(WS_CLOSE_UNAUTHORIZED, "unauthorized");
       return;
     }
 
@@ -101,17 +120,30 @@ export function attachRealtimeWs(server: Server, hub: RealtimeHub, jwtSecret: st
       // role-slice). Identity is still doubly enforced (token possession + userId===presenterUserId; the
       // patch-service presenterAuth check re-verifies before any deck mutation).
       isPresenter: claims.userId === claims.presenterUserId,
+      // 唯一一個**不是**來自已驗證 token 的欄位（`ConnMeta.channels` 有完整信任分析）：只描述 client
+      // 送上來的 PCM frame 是 mono 還是交錯 stereo，謊報純自傷。
+      channels,
     };
 
-    // Account-suspension gate (ADMIN_CONTRACT §2): a suspended org/user is denied at the WS upgrade too, the
-    // same as the HTTP activeAccountRequired middleware. Async (two tiny indexed lookups); fail-closed on error.
-    // Attach the hub + message/close listeners ONLY after the check passes, so a suspended socket never joins a
-    // room. Mirrors this file's send-error-then-close rejection style.
-    isAccountActive(core, meta.orgId, meta.userId)
-      .then((active) => {
-        if (!active) {
+    // 單一握手閘（`ws-handshake-gate.ts`）：**一次 db.get** 同時判帳號停權（ADMIN_CONTRACT §2，與 HTTP 的
+    // activeAccountRequired 同語意）與**這場會議還在不在**（org-scoped）。後者是殭屍會議的根因修補——
+    // 前端那些 close-code 終態判定只擋得住重連，`/hud`、`/present` 的憑證就在網址列，會議結束後按一次 F5
+    // 就是全新連線、全部繞過；沒有這一關，`hub.ensureRuntime` 會替 completed meeting 重建 runtime＋ASR。
+    // 全程 async；fail-closed on error。hub 與 message/close listener **只在通過後才掛**，被拒的 socket
+    // 永遠不會進房。沿用本檔既有的「先送 error 再 close」拒絕風格。
+    checkWsHandshake(core, meta.orgId, meta.userId, meta.meetingId)
+      .then((denial) => {
+        if (denial === "account") {
           ws.send(JSON.stringify({ type: "error", code: "account_suspended", message: "帳號已停權，無法連線" }));
-          ws.close(4003, "account suspended");
+          ws.close(WS_CLOSE_ACCOUNT_BLOCKED, "account suspended");
+          return;
+        }
+        if (denial === "meeting") {
+          // 已 completed、或本 org 查不到這場（含跨 org 探測）——**兩者送出逐位元相同的回應**，
+          // 攻擊者無法從這裡分辨「別的 org 有沒有這場會議」（gate 的 org-scoped 說明見該檔）。
+          // close code 1000＝前端 `describeWsClose` 的 `kind:"ended"`（terminal、不重連、顯示「會議已結束」）。
+          ws.send(JSON.stringify({ type: "error", code: "meeting_ended", message: "這場會議已結束，無法連線" }));
+          ws.close(WS_CLOSE_MEETING_ENDED, "meeting ended");
           return;
         }
 
@@ -137,9 +169,11 @@ export function attachRealtimeWs(server: Server, hub: RealtimeHub, jwtSecret: st
         });
       })
       .catch((err) => {
-        console.error("[realtime] active-account check failed:", err);
+        // fail-closed：閘跑不起來（DB 掛掉）一律拒，且沿用**修補前既有的 4003**——對 client 而言這是
+        // 「狀態確認失敗」而不是「會議已結束」，不可誤報成 1000（那會讓前端清掉憑證、當成會議真的結束了）。
+        console.error("[realtime] handshake gate failed:", err);
         sendError(ws, "account_suspended", "帳號狀態檢查失敗");
-        if (ws.readyState === ws.OPEN) ws.close(4003, "account check failed");
+        if (ws.readyState === ws.OPEN) ws.close(WS_CLOSE_ACCOUNT_BLOCKED, "account check failed");
       });
   });
 

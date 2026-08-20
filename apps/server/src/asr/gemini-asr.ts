@@ -11,8 +11,9 @@
  * call without editing shared gemini.ts (which M2 generation touches in parallel).
  */
 import { GoogleGenAI } from "@google/genai";
+import type { AudioChannels } from "@meetcopilot/shared";
 import type { GeminiConfig } from "../config.js";
-import type { AsrProvider, AsrSegment } from "./asr-provider.js";
+import type { AsrFrameContext, AsrProvider, AsrSegment } from "./asr-provider.js";
 import { Chunker, pcmBufferToInt16 } from "../realtime/chunker.js";
 
 const TRANSCRIBE_DEADLINE_MS = 20_000;
@@ -38,12 +39,21 @@ export class GeminiAsrProvider implements AsrProvider {
   private finalCb: ((seg: AsrSegment) => void) | null = null;
   /**
    * Optional outage callback (contract C3). Beyond the frozen AsrProvider seam — the hub wires it after
-   * construction (like onFinal) to broadcast an `asr_unavailable` error to the presenter's HUD. Fired ONCE
-   * per outage: `unavailableSignaled` dedups, and clears on the next successful transcribe (incl. blank).
-   * Because this provider is instance-per-session (1:1 with a LiveSessionRuntime), that flag is effectively
-   * the per-SessionRuntime dedup flag C3 calls for.
+   * construction (like onFinal). Fired ONCE per outage **of this track**: `unavailableSignaled` dedups, and
+   * clears on the next successful transcribe (incl. blank).
+   *
+   * ⚠️ **這個旗標只負責「單一軌的邊緣偵測」，不再是使用者可見告警的去重點**。雙聲道之後一場會議有
+   * 兩個 provider（左＝報告者、右＝客戶）＝兩份旗標，API 額度用盡時兩路各 signal 一次 → HUD 疊出兩個
+   * 一模一樣的 toast。C3 要求的「每次 outage 只告警一次」因此上移到 **session 層**
+   *（`LiveSessionRuntime.noteAsrUnavailable` 兩軌共用一個判定，見 `realtime/hub.ts` 的 `wireAsr`）。
+   * 本層維持 per-track 邊緣（進入中斷 → `unavailableCb`；恢復 → `availableCb`），session 層才決定要不要廣播。
    */
   private unavailableCb: (() => void) | null = null;
+  /**
+   * 這一軌從中斷恢復（signaled → 下一次成功轉寫）時觸發，好讓 session 層把本軌從「壞掉的軌」集合移除；
+   * 全部軌都恢復後，下一次中斷才能再次告警（否則一場會議只會告警一次就永遠靜音）。
+   */
+  private availableCb: (() => void) | null = null;
   private unavailableSignaled = false;
   private client: GoogleGenAI | null = null;
   private inFlight = 0;
@@ -69,14 +79,28 @@ export class GeminiAsrProvider implements AsrProvider {
     this.unavailableCb = cb;
   }
 
+  /** Register the recovery callback (see `availableCb`). Not part of the frozen AsrProvider seam. */
+  onAvailable(cb: () => void): void {
+    this.availableCb = cb;
+  }
+
   /** Accumulate a raw PCM16LE frame; on a segment boundary, transcribe and emit onFinal. */
-  pushAudio(_sessionId: string, pcm: Buffer): void {
+  pushAudio(_sessionId: string, pcm: Buffer, ctx: AsrFrameContext): void {
     const samples = pcmBufferToInt16(pcm);
-    const chunk = this.chunker.push(samples);
+    const chunk = this.chunker.push(samples, ctx);
     if (!chunk) return;
     // Fire-and-forget: transcription is async but ordering within a session is preserved well enough for
     // rolling analysis; any failure degrades to a dropped segment (logged), never a thrown/hung pipeline.
-    void this.transcribe(chunk.wav, chunk.tMs);
+    void this.transcribe(chunk.wav, chunk.tMs, chunk.channels);
+  }
+
+  /**
+   * 強制切段送轉寫（hub 在**聲道模式切換**時呼叫，見 `realtime/hub.ts` 的 `applyChannelMode`）。
+   * 殘料不足一段／整段靜音 → chunker 直接丟棄並回 null（見 `Chunker.flushPending`／`Chunker.flush`）。
+   */
+  flushPending(): void {
+    const chunk = this.chunker.flushPending();
+    if (chunk) void this.transcribe(chunk.wav, chunk.tMs, chunk.channels);
   }
 
   /** Drop buffered audio (consent revoke). Never stored, never transcribed. */
@@ -90,7 +114,7 @@ export class GeminiAsrProvider implements AsrProvider {
     return this.client;
   }
 
-  private async transcribe(wav: Buffer, tMs: number): Promise<void> {
+  private async transcribe(wav: Buffer, tMs: number, channels: AudioChannels): Promise<void> {
     if (!this.finalCb) return;
     const seq = ++this.dispatchSeq;
     this.inFlight++;
@@ -112,12 +136,22 @@ export class GeminiAsrProvider implements AsrProvider {
         "asr.transcribe",
       );
       // A successful transcribe (the upstream call resolved — even if the result is blank/quiet audio) means
-      // ASR is healthy again → allow the next genuine outage to re-signal.
-      this.unavailableSignaled = false;
+      // ASR is healthy again → allow the next genuine outage to re-signal, and tell the session layer this
+      // track is back (only then can the session's shared "already warned" gate re-arm).
+      if (this.unavailableSignaled) {
+        this.unavailableSignaled = false;
+        try {
+          this.availableCb?.();
+        } catch (cbErr) {
+          console.warn(`[asr] onAvailable callback threw (session=${this.sessionId}): ${(cbErr as Error).message}`);
+        }
+      }
       this.lastSuccessSeq = Math.max(this.lastSuccessSeq, seq);
       const text = (response.text ?? "").trim();
       if (text.length === 0) return; // blank/noise: emit nothing (unchanged silence semantics)
-      this.finalCb({ t: tMs, text });
+      // `channels` 是**擷取當下**的模式快照（切段起點），不是現在的模式——轉寫最長 20 秒，這段飛行期間
+      // capture 可能已經換過模式；下游 speaker 判定必須用它（見 hub `wireAsr`）。
+      this.finalCb({ t: tMs, text, channels });
     } catch (err) {
       console.warn(`[asr] transcribe failed (session=${this.sessionId} t=${tMs}): ${(err as Error).message}`);
       // Genuine transcribe failure (upstream throw / deadline / exhausted) — distinct from the blank-audio

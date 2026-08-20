@@ -18,7 +18,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientMessage, CompanySummary, DeckSummary, ServerMessage, SlideSpec } from "@meetcopilot/shared";
 import { API_BASE, createMeeting, getDeck, importDeck, listCompanies, listDecks } from "@/lib/api";
-import { useRealtime, wsStatusLabel } from "@/lib/useRealtime";
+import { useTranslations } from "next-intl";
+import { useRealtime, wsStatusKey } from "@/lib/useRealtime";
 import {
   buildHudUrl,
   buildPresentUrl,
@@ -331,6 +332,9 @@ let pendingSpeed = 1;
 /* ─────────────────────────── RUNNING ─────────────────────────── */
 
 function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: string; onStop: () => void }) {
+  // 本頁其餘文案是測試工具，刻意留繁中硬編；但連線狀態的標籤來自**共用**的 `wsStatusKey`
+  // （/copilot、/hud 同一份），它回的是 `ws` namespace 的 key，必須走 t() 才有字。
+  const tw = useTranslations("ws");
   const [slides, setSlides] = useState<SlideSpec[]>([]);
   // 本次會議開始時的 deck 頁數；之後 append 進來的都是「本次新增」補充頁（對任何 deck 型別都正確，
   // 不依賴 originalCount——native/generated deck 的 originalCount=0 會把全部頁誤標成補充）。
@@ -474,8 +478,8 @@ function RunningPanel({ creds, deckId, onStop }: { creds: MeetingCreds; deckId: 
         <span style={pill}>
           共 {slides.length} 頁（原始 {seedLen} ＋ <b style={{ color: "#7ee0a3" }}>本次 AI 補充 {supplementCount}</b>）
         </span>
-        <span style={pill}>capture：{wsStatusLabel(capture.status)}</span>
-        <span style={pill}>present：{wsStatusLabel(present.status)}</span>
+        <span style={pill}>capture：{tw(wsStatusKey(capture.status))}</span>
+        <span style={pill}>present：{tw(wsStatusKey(present.status))}</span>
         <span style={{ flex: 1 }} />
         <a className="mc-btn mc-btn--ghost mc-btn--sm" href={buildPresentUrl(deckId, creds)} target="_blank" rel="noopener">
           ↗ 另開 present

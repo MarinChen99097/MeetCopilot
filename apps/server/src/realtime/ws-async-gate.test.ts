@@ -20,40 +20,14 @@ import { RealtimeHub } from "./hub.js";
 import { attachRealtimeWs } from "./ws-server.js";
 import { createGeminiClient } from "../gemini.js";
 import { mintWsToken } from "./ws-token.js";
-import type { AppConfig } from "../config.js";
+import {
+  TEST_JWT_SECRET as SECRET,
+  fakeSocket,
+  passingHandshakeRow,
+  testConfig,
+  tick,
+} from "./test-support.js";
 import type { ConnMeta } from "./types.js";
-
-const SECRET = "test-secret-value-not-a-placeholder-1234567890";
-
-function testConfig(): AppConfig {
-  return {
-    port: 0,
-    jwtSecret: SECRET,
-    dbPath: ":memory:",
-    researchAutoLimitPerMeeting: 5,
-    supplementAutoLimitPerMeeting: 8,
-    googleClientId: "",
-    platformAdminEmails: [],
-    adminOrigin: "",
-    gemini: { apiKey: "", textModel: "t", extractModel: "e", embedModel: "m", liveModel: "l" },
-    openai: { apiKey: "", imageModel: "i", imageSize: "1x1", imageQuality: "low" },
-  };
-}
-
-/** Minimal WebSocket stand-in exercising only what the hub touches (OPEN / readyState / send / close). */
-function fakeSocket() {
-  const s = {
-    OPEN: 1 as const,
-    readyState: 1,
-    send(_data: unknown): void {},
-    close(): void {
-      s.readyState = 3;
-    },
-  };
-  return s;
-}
-
-const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
 describe("RealtimeHub.attach guards a closed socket (WS async-gate leak)", () => {
   it("does NOT enroll a socket that already closed; still enrolls an open one", async () => {
@@ -97,7 +71,11 @@ describe("attachRealtimeWs binds error/close synchronously before the account ch
       detach: (ws: ServerWs) => detached.push(ws),
     } as unknown as RealtimeHub;
 
-    // Slow fake core: isAccountActive awaits this gate, keeping the account check open until we release it.
+    // Slow fake core: checkWsHandshake awaits this gate, keeping the handshake check open until we release it.
+    // The row must satisfy BOTH halves of the gate (account active + meeting live) — otherwise the .then()
+    // rejects the socket and hub.attach is never reached, which would make this test vacuous. That is not a
+    // hypothetical: this file shipped a `{status:"active"}` row earlier in this batch and did exactly that.
+    // `passingHandshakeRow()` is the single owner of the shape (typed against the gate's own row type).
     let releaseGate!: () => void;
     const gate = new Promise<void>((r) => {
       releaseGate = r;
@@ -106,7 +84,7 @@ describe("attachRealtimeWs binds error/close synchronously before the account ch
       db: {
         get: async () => {
           await gate;
-          return { status: "active" };
+          return passingHandshakeRow();
         },
       },
     } as unknown as CrmCore;

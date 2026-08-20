@@ -2,8 +2,8 @@
  * DeckRepository 驗收（vitest, in-memory DB）：007_decks.sql DDL + CRUD + I1（append-only）守門 + image_jobs。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { makeTestCore } from "../src/test-helpers.js";
-import { I1ViolationError, DECK_IMPORT_INTERRUPTED_ERROR } from "../src/repos-decks.js";
+import { makeTestCore, rejectionName } from "../src/test-helpers.js";
+import { DECK_IMPORT_INTERRUPTED_ERROR } from "../src/repos-decks.js";
 import type { CrmCore } from "../src/ports.js";
 import type { SlideSpec } from "@meetcopilot/shared";
 
@@ -62,8 +62,10 @@ describe("DeckRepository", () => {
       slides: [slide("a"), slide("b"), slide("c")],
     });
     await core.decks.setCommittedIndex(ORG, deck.id, 1); // committed up to idx 1
-    await expect(core.decks.updateSlide(ORG, deck.id, 1, slide("x"))).rejects.toBeInstanceOf(I1ViolationError);
-    await expect(core.decks.updateSlide(ORG, deck.id, 0, slide("x"))).rejects.toBeInstanceOf(I1ViolationError);
+    // I1 是產品不變量，斷言不可放寬——改用 name 判別只是為了避開 Windows 上 vitest 模組重複求值
+    // 造成的隨機 instanceof 判偽（理由詳見 test-helpers.ts 的 rejectionName），判別力與 instanceof 相同。
+    expect(await rejectionName(core.decks.updateSlide(ORG, deck.id, 1, slide("x")))).toBe("I1ViolationError");
+    expect(await rejectionName(core.decks.updateSlide(ORG, deck.id, 0, slide("x")))).toBe("I1ViolationError");
     // idx 2 is still pending → allowed
     await expect(core.decks.updateSlide(ORG, deck.id, 2, slide("ok"))).resolves.toBeTruthy();
   });

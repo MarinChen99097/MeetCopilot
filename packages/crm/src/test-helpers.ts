@@ -16,6 +16,27 @@ import type { CrmCore } from "./ports.js";
 
 let counter = 0;
 
+/**
+ * rejectionName — 等一個必定 reject 的 promise，回傳它那個錯誤的 `name`，供 `toBe("XxxError")` 斷言。
+ *
+ * 用途：取代 `await expect(p).rejects.toBeInstanceOf(XxxError)`。**不是為了放寬斷言，是為了讓斷言穩定**——
+ * Windows 上 vitest/vite 偶爾把同一個檔案以不同磁碟機代號大小寫（同一份失敗 log 內同時出現 `c:\…` 與
+ * `C:\…`）視為兩個模組各求值一次，於是「測試檔 import 進來的 class 物件」與「產線程式碼實際 new 出來的」
+ * 不是同一個，`instanceof` 就隨機判偽。`name` 由各 error class 的 constructor 寫死且彼此唯一，判別力與
+ * `instanceof` 相同，卻完全不依賴模組身分。
+ *
+ * 嚴格度保留：promise 若 resolve、或 reject 的東西不是 Error，都會回傳一個**不可能與任何 error name 相等**
+ * 的哨兵字串，斷言照樣失敗，且訊息直接說明是哪一種情況。刻意不 import vitest（本檔會被編進 dist）。
+ */
+export async function rejectionName(p: Promise<unknown>): Promise<string> {
+  try {
+    await p;
+    return "<resolved: expected a rejection>";
+  } catch (e) {
+    return e instanceof Error ? e.name : `<non-Error rejection: ${typeof e}>`;
+  }
+}
+
 /** 建一個測試用 CrmCore（尚未 migrate；呼叫端負責 await core.migrate()，與既有測試相同）。 */
 export async function makeTestCore(): Promise<CrmCore> {
   const driver = process.env.TEST_DB_DRIVER ?? "sqlite";

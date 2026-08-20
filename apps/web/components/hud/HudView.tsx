@@ -12,7 +12,7 @@ import type {
   TranscriptSegment,
 } from "@meetcopilot/shared";
 import { API_BASE } from "@/lib/api";
-import { useRealtime, wsStatusLabel, type WsStatus } from "@/lib/useRealtime";
+import { useRealtime, wsStatusKey, type WsReasonKey, type WsStatus } from "@/lib/useRealtime";
 import {
   readMeetingCreds,
   saveMeetingCreds,
@@ -69,6 +69,12 @@ export function HudInner({
 } = {}) {
   const toast = useToast();
   const t = useTranslations("hud");
+  // WS 連線狀態／斷線原因的共用文案（判定函式回 key，因為它跑在 React 之外的 socket callback，
+  // 見 lib/ws.ts 的 `WsReasonKey`）。與 /copilot、/sim 共用同一個 namespace。
+  // 「這場會議已結束」（`ws.endedTitle`）也在這裡：/hud 與 /present 顯示的是**同一個終態**，
+  // 而使用者最可能同時看到那兩個畫面（手機 HUD ＋ 投影機）——分兩個 namespace 各存一份，
+  // 改措辭時漏一個就會出現兩塊螢幕講不同的話。
+  const tw = useTranslations("ws");
   const Root = rootTag;
   const [creds, setCreds] = useState<MeetingCreds | null>(embedded ? credsProp ?? null : null);
   const [resolved, setResolved] = useState(false);
@@ -197,6 +203,24 @@ export function HudInner({
   }, []);
 
   /**
+   * 會議已結束的終態（close 1000 → `failureKind === "ended"`）。**兩條路都會走到這裡**：
+   *  - 會中被結束：server 主動關掉這條 socket；
+   *  - 會議結束後在 /hud 按 F5：那是全新連線，改由 server 的**握手閘**（`ws-handshake-gate.ts`）以 1000 拒絕
+   *    ——修補這一關之前，F5 會直接繞過所有前端閘、讓 server 替 completed meeting 重建 runtime。
+   *
+   * 行為與 capture 端（CopilotView 的 failureKind effect）對齊：**清掉本地 creds**。
+   * 不清的話 sessionStorage 裡那組憑證會指向一場已結束的會議，下次進 /hud 又拿它連一次。
+   * 只清 storage、**不動 `creds` state**：畫面要留在原地讓使用者看到「這場會議已結束」，
+   * 出口是既有的「重新貼連結」（清 state → 回貼連結面板）。
+   * embedded（cockpit 內嵌）時 creds 由 parent 擁有、CopilotView 已負責清同一把 key → 這裡不重複動作。
+   */
+  const meetingEnded = realtime.failureKind === "ended";
+  useEffect(() => {
+    if (!meetingEnded || embedded) return;
+    clearMeetingCreds();
+  }, [meetingEnded, embedded]);
+
+  /**
    * I2 批准動作。**不樂觀更新**：只送 wire 訊息並把 id 標成 in-flight；卡片與 deck 的真相
    * 一律等 server 的 `suggestion_result`。授權（presenter 身分）在 server 判定，前端不代為判斷。
    */
@@ -270,7 +294,9 @@ export function HudInner({
     const connecting = (
       <ConnectingState
         status={realtime.status}
-        reason={realtime.failureReason}
+        reasonKey={realtime.failureReasonKey}
+        ended={meetingEnded}
+        canRetry={realtime.canRetry}
         onRetry={realtime.retry}
         onRelink={relink}
         showRelink={!embedded}
@@ -284,11 +310,25 @@ export function HudInner({
     realtime.status !== "open" ? (
       realtime.status === "failed" ? (
         <div className="mc-hudm__banner is-fail" role="alert">
-          <span>{realtime.failureReason ?? t("connFailed")}</span>
+          {/* 「會議已結束」是正常的終點，不是連線出錯：明確講這件事，不再顯示通用的斷線原因
+              （F5 之後 server 的握手閘也會走到這個終態，見上方 meetingEnded 的 effect）。 */}
+          <span>
+            {meetingEnded
+              ? tw("endedTitle")
+              : realtime.failureReasonKey
+                ? tw(realtime.failureReasonKey)
+                : t("connFailed")}
+          </span>
           <span className="mc-hudm__banneracts">
-            <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={realtime.retry}>
-              {t("retry")}
-            </button>
+            {/* 終態（會議已結束／憑證或帳號問題）不給重試鈕：按了只會用同一組憑證再連一次、再被同一個
+                close code 關掉（會議已結束時是握手閘的 1000）。「重新貼連結」仍留著（換一組憑證是有意義的動作）。 */}
+            {realtime.canRetry ? (
+              <button type="button" className="mc-btn mc-btn--primary mc-btn--sm" onClick={realtime.retry}>
+                {t("retry")}
+              </button>
+            ) : (
+              <span className="mc-hudm__bannerhint">{meetingEnded ? t("endedDesc") : t("connTerminalHint")}</span>
+            )}
             {embedded ? null : (
               <button type="button" className="mc-btn mc-btn--ghost mc-btn--sm" onClick={relink}>
                 {t("relink")}
@@ -298,7 +338,7 @@ export function HudInner({
         </div>
       ) : (
         <div className="mc-hudm__banner" role="status">
-          {wsStatusLabel(realtime.status)}
+          {tw(wsStatusKey(realtime.status))}
         </div>
       )
     ) : null;
@@ -342,7 +382,7 @@ export function HudInner({
       <>
         <section className="mc-desk__main">
           <div className="mc-desk__topbar">
-            <span className="mc-desk__connpill mc-mono">{wsStatusLabel(realtime.status)}</span>
+            <span className="mc-desk__connpill mc-mono">{tw(wsStatusKey(realtime.status))}</span>
             {clock ? <span className="mc-desk__clock mc-mono">{clock}</span> : null}
             {topbarExtra}
           </div>
@@ -411,32 +451,60 @@ export function HudInner({
   );
 }
 
-/** Pre-first-connect state: honest connecting/failed UI (no fake "聆聽中…" stream panels). */
+/**
+ * Pre-first-connect state: honest connecting/failed UI (no fake "聆聽中…" stream panels).
+ *
+ * `ended`＝會議已結束的終態，**必須與一般連線失敗分開講**。這是 /hud 在會議結束後按 F5 的落點：
+ * 憑證還在網址列 → 開一條全新連線 → server 的握手閘以 close 1000 拒絕 → 這裡。
+ * 顯示「連線失敗，請確認網路」在那個情境是錯的（連線好得很，是會議沒了），
+ * 故改成「這場會議已結束」＋一個明確的出口（重新貼連結）。
+ */
 function ConnectingState({
   status,
-  reason,
+  reasonKey,
+  ended,
+  canRetry,
   onRetry,
   onRelink,
   showRelink = true,
 }: {
   status: WsStatus;
-  reason: string | null;
+  /** 斷線原因的 `ws` namespace key（見 lib/ws.ts 的 `WsReasonKey`）；未失敗時為 null。 */
+  reasonKey: WsReasonKey | null;
+  /** 會議已在 server 端結束（close 1000）——與其他失敗態不同的一組文案。 */
+  ended: boolean;
+  /** false＝終態（會議已結束／憑證或帳號問題）→ 不渲染重試鈕（見 useRealtime.canRetry）。 */
+  canRetry: boolean;
   onRetry: () => void;
   onRelink: () => void;
   showRelink?: boolean;
 }) {
   const t = useTranslations("hud");
+  const tw = useTranslations("ws");
   const failed = status === "failed";
+  const title = failed ? (ended ? tw("endedTitle") : t("connFailedTitle")) : tw(wsStatusKey(status));
+  const desc = failed
+    ? ended
+      ? t("endedDesc")
+      : reasonKey
+        ? tw(reasonKey)
+        : t("connFailed")
+    : t("connecting");
   return (
     <div className={`mc-hudm__note${failed ? " is-failed" : ""}`} role={failed ? "alert" : "status"}>
       {!failed ? <span className="mc-hudm__spinner" aria-hidden="true" /> : null}
-      <p className="mc-hudm__notetitle">{failed ? t("connFailedTitle") : wsStatusLabel(status)}</p>
-      <p className="mc-hudm__notedesc">{failed ? (reason ?? t("connFailed")) : t("connecting")}</p>
-      {failed ? (
+      <p className="mc-hudm__notetitle">{title}</p>
+      <p className="mc-hudm__notedesc">{desc}</p>
+      {/* 已結束時 `endedDesc` 已把「這條線不會再通、去哪拿新連結」講完了 → 不再疊 connTerminalHint。 */}
+      {failed && !canRetry && !ended ? <p className="mc-hudm__notedesc">{t("connTerminalHint")}</p> : null}
+      {/* 終態＋不給「重新貼連結」（cockpit 內嵌）時整個動作列都不渲染，不留空的 flex 容器。 */}
+      {failed && (canRetry || showRelink) ? (
         <div className="mc-hudm__noteacts">
-          <button type="button" className="mc-btn mc-btn--primary" onClick={onRetry}>
-            {t("connRetry")}
-          </button>
+          {canRetry ? (
+            <button type="button" className="mc-btn mc-btn--primary" onClick={onRetry}>
+              {t("connRetry")}
+            </button>
+          ) : null}
           {showRelink ? (
             <button type="button" className="mc-btn mc-btn--ghost" onClick={onRelink}>
               {t("relink")}

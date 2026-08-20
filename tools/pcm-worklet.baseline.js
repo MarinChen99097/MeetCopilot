@@ -1,4 +1,27 @@
 /*
+ * ══ FROZEN GOLDEN BASELINE — DO NOT EDIT, DO NOT LOAD IN THE APP ═══════════════════════════════
+ *
+ * This is a byte copy of apps/web/public/pcm-worklet.js taken at the moment the stereo (dual-channel
+ * capture) implementation was finished and verified, on 2026-08-19, and BEFORE the /simplify cleanup
+ * that extracted `joinCarry()` and renamed `step = this.channels` to `step = stereo ? 2 : 1`.
+ * The two sources therefore differ TEXTUALLY but must produce byte-identical audio — that equality is
+ * exactly what `tools/worklet-diff.mjs` asserts.
+ *
+ * WHY IT IS A FILE AND NOT `git show <sha>:apps/web/public/pcm-worklet.js`:
+ *   1. It is not in any commit. It is a mid-session working-tree state; the last commit that touched
+ *      the worklet (e1f7ffd, HEAD 5bab897 at the time of writing) predates stereo entirely and
+ *      emits the old 8000-byte mono-only frames, so diffing against it would go red for the wrong
+ *      reason and tell you nothing.
+ *   2. Even if it were committable, a git-relative baseline is a MOVING target: the harness would go
+ *      green the instant a broken change was committed — i.e. it would stop guarding precisely when
+ *      it matters. A frozen file pins the golden to a state that was actually audited.
+ *
+ * This file is never fetched by the browser (only /public is served). It exists solely as the
+ * reference input of tools/worklet-diff.mjs and tools/worklet-diff-mutation.mjs.
+ * Re-baselining rules: see the header of tools/worklet-diff.mjs.
+ */
+
+/*
  * pcm-downsampler — AudioWorkletProcessor for the /copilot capture pipeline.
  *
  * Resamples its input to 16 kHz and emits **raw 16-bit little-endian PCM, headerless** frames
@@ -24,17 +47,14 @@
  *
  * ── L/R ALIGNMENT is the load-bearing invariant ──────────────────────────────────────────────────
  * A single-sample slip would swap two people's words for the rest of the meeting. Therefore:
- *   - both channels are driven by ONE shared fractional read cursor (`readPos`), ONE shared
- *     `consumed` count and ONE shared `joinCarry()` splice, so `carryL`/`carryR` are always the same
- *     length and stay index-aligned — the invariant lives in shared code, not in a convention that
- *     two mirrored branches must be edited together;
+ *   - both channels are driven by ONE shared fractional read cursor (`readPos`) and ONE shared
+ *     `consumed` count, so `carryL`/`carryR` are always the same length and stay index-aligned;
  *   - `bufLen` counts sample-FRAMES and is advanced only after BOTH slots of a pair are written, so a
  *     frame boundary can never land between an L and its R;
  *   - if a render quantum ever delivers fewer than 2 channels (node not yet settled, or a source that
  *     is momentarily mono) the right channel is replaced by SILENCE of the exact same length — never
  *     a copy of left (that would put the presenter's voice on the other side's track) and never a
  *     differently-sized buffer (that would desync the cursor and swap the channels from then on).
- * BEFORE AND AFTER touching this file run `node tools/worklet-check.mjs` + `worklet-diff.mjs` + `worklet-diff-mutation.mjs` (see tools/README.md) — an L/R slip fails SILENTLY.
  *
  * Plain JS on purpose: this file is served statically and loaded via `audioWorklet.addModule('/pcm-worklet.js')`;
  * it is NOT bundled/typechecked by Next. Keep it dependency-free and ES2017-safe.
@@ -54,21 +74,6 @@ function toPcm16(sample) {
   if (s > 1) s = 1;
   else if (s < -1) s = -1;
   return s < 0 ? (s * 0x8000) | 0 : (s * 0x7fff) | 0;
-}
-
-/**
- * Splice a carried tail in front of this quantum's samples (empty carry ⇒ the input array itself,
- * no copy). **Both channels go through this ONE function** — see the alignment note above: making
- * L and R take two symmetric-but-separate code paths would leave `carryL.length === carryR.length`
- * resting on a hand-maintained convention, and the failure mode of breaking it is silent (every
- * later sample pairs the presenter's voice with the wrong instant of the other side's).
- */
-function joinCarry(carry, chan) {
-  if (carry.length === 0) return chan;
-  const out = new Float32Array(carry.length + chan.length);
-  out.set(carry, 0);
-  out.set(chan, carry.length);
-  return out;
 }
 
 class PcmDownsampler extends AudioWorkletProcessor {
@@ -113,12 +118,24 @@ class PcmDownsampler extends AudioWorkletProcessor {
     }
 
     // Prepend any carried tail so resampling is continuous across quantum boundaries. carryL/carryR
-    // have equal length, so dataL[i] and dataR[i] always describe the SAME instant — enforced by
-    // running BOTH through the same `joinCarry` (one splice rule, not two copies of one).
-    const dataL = joinCarry(this.carryL, chanL);
-    const dataR = stereo ? joinCarry(this.carryR, chanR) : null;
+    // have equal length, so dataL[i] and dataR[i] always describe the SAME instant.
+    let dataL;
+    let dataR = null;
+    if (this.carryL.length) {
+      dataL = new Float32Array(this.carryL.length + chanL.length);
+      dataL.set(this.carryL, 0);
+      dataL.set(chanL, this.carryL.length);
+      if (stereo) {
+        dataR = new Float32Array(this.carryR.length + chanR.length);
+        dataR.set(this.carryR, 0);
+        dataR.set(chanR, this.carryR.length);
+      }
+    } else {
+      dataL = chanL;
+      dataR = chanR;
+    }
 
-    const step = stereo ? 2 : 1; // Int16 slots written per output sample-frame (1 mono / 2 stereo)
+    const step = this.channels; // Int16 slots written per output sample-frame (1 mono / 2 stereo)
     let pos = this.readPos;
     const n = dataL.length;
     while (pos + 1 < n) {
